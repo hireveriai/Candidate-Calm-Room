@@ -4,46 +4,30 @@ import { motion } from "framer-motion";
 
 type Props = {
   state: "idle" | "listening" | "thinking" | "speaking";
+  audioLevel?: number; // 0 → 1
 };
 
-export default function VerisOrb({ state }: Props) {
+export default function VerisOrb({ state, audioLevel = 0 }: Props) {
+  const isSpeaking = state === "speaking";
+  const isListening = state === "listening";
+
+  // 🎧 audio impact (stronger when speaking)
+  const dynamicScale = 1 + audioLevel * (isSpeaking ? 0.6 : 0.3);
+
   return (
-    <div className="flex flex-col items-center justify-center mt-6 gap-3">
-      
-      {/* ORB */}
+    <div className="flex items-center justify-center mt-6">
+
       <motion.div
-        className="relative w-20 h-20 md:w-24 md:h-24 rounded-full border border-cyan-400/30 bg-gradient-to-br from-cyan-500/20 to-purple-500/20"
+        className="relative w-28 h-28 md:w-32 md:h-32 rounded-full flex items-center justify-center"
         animate={{
-          scale:
-            state === "speaking"
-              ? [1, 1.1, 1]
-              : state === "listening"
-              ? [1, 1.05, 1]
-              : 1,
+          scale: dynamicScale,
         }}
         transition={{
-          duration: 1.5,
-          repeat: Infinity,
-          ease: "easeInOut",
+          duration: 0.2,
         }}
       >
-        {/* INNER CORE (alive effect) */}
-        <div className="absolute inset-0 flex items-center justify-center">
-          <motion.div
-            className="w-3 h-3 rounded-full bg-cyan-400 blur-sm"
-            animate={{
-              scale: state === "speaking" ? [1, 1.6, 1] : [1, 1.2, 1],
-              opacity: [0.5, 1, 0.5],
-            }}
-            transition={{
-              duration: 1.2,
-              repeat: Infinity,
-              ease: "easeInOut",
-            }}
-          />
-        </div>
 
-        {/* OUTER GLOW */}
+        {/* OUTER FIELD */}
         <motion.div
           className="absolute inset-0 rounded-full border border-cyan-400/20"
           animate={{
@@ -55,8 +39,25 @@ export default function VerisOrb({ state }: Props) {
             repeat: Infinity,
           }}
         />
-      </motion.div>
 
+        {/* CORE */}
+        <motion.div
+          className="relative w-16 h-16 rounded-full"
+          style={{
+            background:
+              "radial-gradient(circle at 30% 30%, rgba(34,211,238,0.9), rgba(139,92,246,0.6))",
+            boxShadow:
+              "0 0 30px rgba(34,211,238,0.5), inset 0 0 20px rgba(255,255,255,0.1)",
+          }}
+          animate={{
+            scale: dynamicScale,
+          }}
+          transition={{
+            duration: 0.2,
+          }}
+        />
+
+      </motion.div>
     </div>
   );
 }

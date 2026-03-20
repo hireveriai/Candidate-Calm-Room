@@ -3,13 +3,13 @@
 import { useEffect, useRef, useState } from "react";
 
 import CalmLayout from "@/app/components/calm/core/CalmLayout";
+import CalmHeader from "@/app/components/calm/core/CalmHeader";
 import VideoPanel from "@/app/components/calm/core/VideoPanel";
 import VerisOrb from "@/app/components/calm/core/VerisOrb";
 import TranscriptStream from "@/app/components/calm/core/TranscriptStream";
 import SystemIndicators from "@/app/components/calm/core/SystemIndicators";
 import InterviewControls from "@/app/components/calm/core/InterviewControls";
-import QuestionTimer from "@/app/components/calm/core/QuestionTimer";
-import CalmHeader from "@/app/components/calm/core/CalmHeader";
+
 import PrecheckScreen from "@/app/components/calm/flow/PrecheckScreen";
 import ExitModal from "@/app/components/calm/flow/ExitModal";
 
@@ -18,6 +18,8 @@ import {
   startRecognition,
   stopRecognition,
 } from "@/app/services/verisVoice";
+
+import useFaceDetection from "@/app/hooks/useFaceDetection";
 
 type VerisState = "idle" | "listening" | "thinking" | "speaking";
 
@@ -31,9 +33,20 @@ export default function Page() {
   const [questionIndex, setQuestionIndex] = useState(0);
   const [timeLeft, setTimeLeft] = useState(30);
 
+  const [audioLevel, setAudioLevel] = useState(0);
+
   const recognitionRef = useRef<any>(null);
   const silenceTimer = useRef<any>(null);
   const timerRef = useRef<any>(null);
+
+  const audioContextRef = useRef<any>(null);
+  const analyserRef = useRef<any>(null);
+
+  // 🎥 VIDEO REF FOR FACE DETECTION
+  const videoRef = useRef<any>(null);
+
+  // 👤 FACE DETECTION HOOK
+const { faceDetected, attention } = useFaceDetection(videoRef);
 
   const questions = [
     "Tell me something about yourself.",
@@ -43,6 +56,7 @@ export default function Page() {
 
   const currentQuestion = questions[questionIndex];
 
+  // 🔲 ENTER FULLSCREEN
   const enterFullscreen = async () => {
     await document.documentElement.requestFullscreen();
     setStarted(true);
@@ -57,17 +71,15 @@ export default function Page() {
   // 🧠 MAIN FLOW
   useEffect(() => {
     if (!started) return;
-
     runQuestion();
   }, [started, questionIndex]);
 
   const runQuestion = async () => {
-    stopRecognition(recognitionRef.current);
-    clearInterval(timerRef.current);
+    stopAll();
 
     setTimeLeft(30);
-    setVerisState("thinking");
     setTranscript("");
+    setVerisState("thinking");
 
     await new Promise((r) => setTimeout(r, 800));
 
@@ -77,22 +89,10 @@ export default function Page() {
     await speak(currentQuestion);
 
     setVerisState("listening");
+
     startListening();
     startTimer();
-  };
-
-  // ⏱️ TIMER
-  const startTimer = () => {
-    timerRef.current = setInterval(() => {
-      setTimeLeft((prev) => {
-        if (prev <= 1) {
-          clearInterval(timerRef.current);
-          handleAutoNext();
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
+    startAudioAnalysis();
   };
 
   // 🎤 LISTENING
@@ -111,11 +111,61 @@ export default function Page() {
     );
   };
 
+  // 🛑 STOP EVERYTHING
   const stopAll = () => {
     stopRecognition(recognitionRef.current);
     recognitionRef.current = null;
+
     clearInterval(timerRef.current);
     clearTimeout(silenceTimer.current);
+  };
+
+  // ⏱️ TIMER
+  const startTimer = () => {
+    timerRef.current = setInterval(() => {
+      setTimeLeft((prev) => {
+        if (prev <= 1) {
+          clearInterval(timerRef.current);
+          handleAutoNext();
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+  };
+
+  // 🔊 AUDIO ANALYSIS (ORB REACTION)
+  const startAudioAnalysis = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+      const audioContext = new AudioContext();
+      const source = audioContext.createMediaStreamSource(stream);
+      const analyser = audioContext.createAnalyser();
+
+      analyser.fftSize = 256;
+      source.connect(analyser);
+
+      audioContextRef.current = audioContext;
+      analyserRef.current = analyser;
+
+      const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+      const update = () => {
+        analyser.getByteFrequencyData(dataArray);
+
+        const avg =
+          dataArray.reduce((a, b) => a + b, 0) / dataArray.length;
+
+        setAudioLevel(avg / 255);
+
+        requestAnimationFrame(update);
+      };
+
+      update();
+    } catch (err) {
+      console.error("Audio analysis error:", err);
+    }
   };
 
   // 🔄 AUTO NEXT
@@ -132,52 +182,54 @@ export default function Page() {
   const handleNext = () => handleAutoNext();
   const handleSkip = () => handleAutoNext();
 
+  // 🎬 PRECHECK
   if (!started) {
     return <PrecheckScreen onStart={enterFullscreen} />;
   }
 
   return (
     <>
-     <CalmLayout>
+      <CalmLayout>
 
-  {/* HEADER */}
-  <CalmHeader />
+        {/* HEADER */}
+        <CalmHeader />
 
-  {/* TIMER */}
-  <QuestionTimer timeLeft={timeLeft} />
+        {/* VIDEO + TIMER + FACE REF */}
+        <VideoPanel
+          timeLeft={timeLeft}
+          onVideoReady={(ref) => (videoRef.current = ref.current)}
+        />
 
-  {/* VIDEO */}
-  <VideoPanel />
+        {/* SYSTEM INDICATORS */}
+        <SystemIndicators
+        faceDetected={faceDetected}
+        micActive={verisState === "listening"}
+        attention={attention}
+        secure={true}
+        verisState={verisState}
+      />
 
-  {/* INDICATORS */}
-  <SystemIndicators
-    faceDetected={true}
-    micActive={verisState === "listening"}
-    attention={true}
-    secure={true}
-    verisState={verisState}
-  />
+        {/* ORB */}
+        <VerisOrb state={verisState} audioLevel={audioLevel} />
 
-  {/* ORB */}
-  <div className="mt-6">
-    <VerisOrb state={verisState} />
-  </div>
+        {/* TRANSCRIPT */}
+        <TranscriptStream text={transcript} />
 
-  {/* TRANSCRIPT */}
-  <TranscriptStream text={transcript} />
+        {/* CONTROLS */}
+        <InterviewControls
+          onNext={handleNext}
+          onSkip={handleSkip}
+        />
 
-  {/* CONTROLS */}
-  <InterviewControls onNext={handleNext} onSkip={handleSkip} />
+        {/* EXIT */}
+        <button
+          onClick={() => setShowExit(true)}
+          className="absolute top-4 right-6 text-sm text-red-400 border border-red-400/30 px-3 py-1 rounded-full"
+        >
+          Exit
+        </button>
 
-  {/* EXIT */}
-  <button
-    onClick={() => setShowExit(true)}
-    className="absolute top-4 right-6 text-sm text-red-400 border border-red-400/30 px-3 py-1 rounded-full"
-  >
-    Exit
-  </button>
-
-</CalmLayout>
+      </CalmLayout>
 
       {showExit && (
         <ExitModal
