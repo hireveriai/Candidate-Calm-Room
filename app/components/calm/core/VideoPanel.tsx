@@ -22,13 +22,17 @@ export default function VideoPanel({ timeLeft, onVideoReady }: Props) {
           videoRef.current.srcObject = stream;
           videoRef.current.style.filter = "brightness(0.85) contrast(1.1)";
 
-          // 🔗 expose video ref
-          if (onVideoReady) {
-            onVideoReady(videoRef);
-          }
+          // ✅ WAIT until video is ready
+          videoRef.current.onloadedmetadata = () => {
+            console.log("🎥 Video ready");
+
+            if (onVideoReady) {
+              onVideoReady(videoRef);
+            }
+          };
         }
       } catch (err) {
-        console.error(err);
+        console.error("Camera error:", err);
       }
     }
 
@@ -47,7 +51,7 @@ export default function VideoPanel({ timeLeft, onVideoReady }: Props) {
           className="w-full h-full object-cover"
         />
 
-        {/* TIMER */}
+        {/* ⏱️ TIMER */}
         <div className="absolute top-2 left-3 text-xs text-white/70">
           {timeLeft}s
         </div>
