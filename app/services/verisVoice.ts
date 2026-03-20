@@ -1,25 +1,77 @@
-export function speak(text: string) {
-  if (!window.speechSynthesis) return
+let isSpeaking = false;
 
-  const utter = new SpeechSynthesisUtterance(text)
-  utter.rate = 0.92
-  utter.pitch = 0.85
-  utter.volume = 0.9
-  utter.lang = "en-US"
+// 🔊 TEXT TO SPEECH
+export function speak(text: string): Promise<void> {
+  return new Promise((resolve) => {
+    if (isSpeaking) {
+      window.speechSynthesis.cancel();
+    }
 
-  const voices = window.speechSynthesis.getVoices()
+    const utterance = new SpeechSynthesisUtterance(text);
 
-  const male = voices.find(v =>
-    v.lang === "en-US" &&
-    (
-      v.name.toLowerCase().includes("male") ||
-      v.name.toLowerCase().includes("david") ||   // Windows male
-      v.name.toLowerCase().includes("mark") ||    // Mac male
-      v.name.toLowerCase().includes("alex")       // Fallback
-    )
-  )
+    utterance.rate = 0.95;
+    utterance.pitch = 1;
 
-  if (male) utter.voice = male
+    utterance.onstart = () => {
+      isSpeaking = true;
+    };
 
-  window.speechSynthesis.speak(utter)
+    utterance.onend = () => {
+      isSpeaking = false;
+      resolve();
+    };
+
+    utterance.onerror = () => {
+      isSpeaking = false;
+      resolve();
+    };
+
+    window.speechSynthesis.speak(utterance);
+  });
+}
+
+// 🎤 SPEECH TO TEXT (LIVE)
+export function startRecognition(
+  onResult: (text: string) => void,
+  onEnd: () => void
+) {
+  const SpeechRecognition =
+    (window as any).SpeechRecognition ||
+    (window as any).webkitSpeechRecognition;
+
+  if (!SpeechRecognition) {
+    alert("Speech recognition not supported in this browser");
+    return null;
+  }
+
+  const recognition = new SpeechRecognition();
+
+  recognition.continuous = true;
+  recognition.interimResults = true;
+  recognition.lang = "en-US";
+
+  recognition.onresult = (event: any) => {
+    let transcript = "";
+
+    for (let i = 0; i < event.results.length; i++) {
+      transcript += event.results[i][0].transcript;
+    }
+
+    onResult(transcript);
+  };
+
+  recognition.onend = () => {
+    onEnd();
+  };
+
+  recognition.start();
+
+  return recognition;
+}
+
+// 🛑 STOP MIC
+export function stopRecognition(recognition: any) {
+  if (recognition) {
+    recognition.stop();
+  }
 }
