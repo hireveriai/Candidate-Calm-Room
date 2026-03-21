@@ -7,32 +7,30 @@ type Props = {
 };
 
 export default function TranscriptStream({ text }: Props) {
-  const [visibleWords, setVisibleWords] = useState<string[]>([]);
+  const [displayText, setDisplayText] = useState("");
   const [isVisible, setIsVisible] = useState(true);
 
   useEffect(() => {
-    if (!text) return;
+    if (!text) {
+      setIsVisible(false);
+      return;
+    }
 
-    const words = text.split(" ");
-    let index = 0;
+    setIsVisible(false);
 
-    setVisibleWords([]);
-    setIsVisible(true);
+    const showTimeout = setTimeout(() => {
+      setDisplayText(text);
+      setIsVisible(true);
+    }, 120);
 
-    const interval = setInterval(() => {
-      index++;
-      setVisibleWords(words.slice(0, index));
+    const hideTimeout = setTimeout(() => {
+      setIsVisible(false);
+    }, 20000);
 
-      if (index >= words.length) {
-        clearInterval(interval);
-
-        setTimeout(() => {
-          setIsVisible(false);
-        }, 20000);
-      }
-    }, 200);
-
-    return () => clearInterval(interval);
+    return () => {
+      clearTimeout(showTimeout);
+      clearTimeout(hideTimeout);
+    };
   }, [text]);
 
   return (
@@ -42,7 +40,7 @@ export default function TranscriptStream({ text }: Props) {
           isVisible ? "opacity-100" : "opacity-0"
         }`}
       >
-        {visibleWords.join(" ")}
+        {displayText}
       </div>
     </div>
   );

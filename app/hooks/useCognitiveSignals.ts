@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import * as faceapi from "face-api.js";
 
 type Props = {
@@ -15,33 +15,51 @@ export default function useCognitiveSignals({ videoRef }: Props) {
   const [tabActive, setTabActive] = useState(true);
   const [audioAnomaly, setAudioAnomaly] = useState(false);
 
-  const analyserRef = useRef<AnalyserNode | null>(null);
-  const dataArrayRef = useRef<Uint8Array | null>(null);
-
-  // 🎥 FACE DETECTION LOOP
   useEffect(() => {
     let interval: any;
 
-    const runDetection = async () => {
+    const loadModels = async () => {
+      console.log("🔄 Loading models...");
+      await faceapi.nets.tinyFaceDetector.loadFromUri("/models");
+      await faceapi.nets.faceLandmark68Net.loadFromUri("/models");
+      console.log("✅ Models loaded");
+    };
+
+    const detect = async () => {
       if (!videoRef.current) return;
 
-      interval = setInterval(async () => {
+      const video = videoRef.current;
+
+      // ✅ EXACT SAME CHECK AS YOUR WORKING VERSION
+      if (video.readyState !== 4) {
+        console.log("⛔ Video not ready");
+        return;
+      }
+
+      try {
+        // 🔥 USE detectAllFaces BUT WITH CONFIG (IMPORTANT)
         const detections = await faceapi
           .detectAllFaces(
-            videoRef.current!,
-            new faceapi.TinyFaceDetectorOptions()
+            video,
+            new faceapi.TinyFaceDetectorOptions({
+              inputSize: 416,       // 👈 KEY FIX
+              scoreThreshold: 0.3,  // 👈 MORE LENIENT
+            })
           )
           .withFaceLandmarks();
 
         const count = detections.length;
 
+        console.log("👀 Face count:", count);
+
         setFaceCount(count);
         setFaceDetected(count >= 1);
         setMultiFace(count > 1);
 
-        // 👁️ ATTENTION CHECK (simple deviation)
+        // 👁️ ATTENTION (ONLY IF 1 FACE)
         if (count === 1) {
           const landmarks = detections[0].landmarks;
+
           const nose = landmarks.getNose()[3];
           const leftEye = landmarks.getLeftEye()[0];
           const rightEye = landmarks.getRightEye()[3];
@@ -49,72 +67,73 @@ export default function useCognitiveSignals({ videoRef }: Props) {
           const eyeCenterX = (leftEye.x + rightEye.x) / 2;
           const deviation = Math.abs(nose.x - eyeCenterX);
 
-          setAttention(deviation < 25);
+          setAttention(deviation < 30);
         } else {
           setAttention(true);
         }
-      }, 500);
+
+      } catch (err) {
+        console.error("❌ Detection error:", err);
+      }
     };
 
-    runDetection();
+    const start = async () => {
+      await loadModels();
+
+      // ⏱️ SAME INTERVAL AS BEFORE (STABLE)
+      interval = setInterval(detect, 1000);
+    };
+
+    start();
 
     return () => clearInterval(interval);
   }, [videoRef]);
 
-  // 🪟 TAB VISIBILITY
+  // 🪟 TAB DETECTION
   useEffect(() => {
-    const handleVisibility = () => {
+    const handle = () => {
       setTabActive(document.visibilityState === "visible");
     };
 
-    document.addEventListener("visibilitychange", handleVisibility);
-
-    return () =>
-      document.removeEventListener("visibilitychange", handleVisibility);
+    document.addEventListener("visibilitychange", handle);
+    return () => document.removeEventListener("visibilitychange", handle);
   }, []);
 
-  // 🔊 AUDIO ANALYSER
+  // 🔊 AUDIO ANOMALY (UNCHANGED)
   useEffect(() => {
-    let animationFrame: number;
+    let frame: number;
 
-    const setupAudio = async () => {
+    const setup = async () => {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          audio: true,
-        });
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-        const audioContext = new AudioContext();
-        const source = audioContext.createMediaStreamSource(stream);
-        const analyser = audioContext.createAnalyser();
+        const ctx = new AudioContext();
+        const src = ctx.createMediaStreamSource(stream);
+        const analyser = ctx.createAnalyser();
 
         analyser.fftSize = 256;
-        source.connect(analyser);
+        src.connect(analyser);
 
-        const dataArray = new Uint8Array(analyser.frequencyBinCount);
+        const data = new Uint8Array(analyser.frequencyBinCount);
 
-        analyserRef.current = analyser;
-        dataArrayRef.current = dataArray;
+        const loop = () => {
+          analyser.getByteFrequencyData(data);
+          const avg = data.reduce((a, b) => a + b, 0) / data.length;
 
-        const detect = () => {
-          analyser.getByteFrequencyData(dataArray);
+          setAudioAnomaly(avg > 180);
 
-          const avg =
-            dataArray.reduce((a, b) => a + b, 0) / dataArray.length;
-
-          setAudioAnomaly(avg > 180); // simple threshold
-
-          animationFrame = requestAnimationFrame(detect);
+          frame = requestAnimationFrame(loop);
         };
 
-        detect();
-      } catch (err) {
-        console.error("Audio init error:", err);
+        loop();
+      } catch (e) {
+        console.error(e);
       }
     };
 
-    setupAudio();
+    setup();
 
-    return () => cancelAnimationFrame(animationFrame);
+    return () => cancelAnimationFrame(frame);
   }, []);
 
   return {

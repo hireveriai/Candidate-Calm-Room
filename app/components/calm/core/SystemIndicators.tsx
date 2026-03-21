@@ -1,100 +1,76 @@
 "use client";
 
-import clsx from "clsx";
-import { Mic, Eye, Shield, User, Volume2 } from "lucide-react";
+type VerisState = "idle" | "listening" | "thinking" | "speaking";
 
 type Props = {
-  faceDetected: boolean;
+  faceCount: number;
   micActive: boolean;
   attention: boolean;
   secure: boolean;
-  verisState: "idle" | "listening" | "thinking" | "speaking";
+  verisState: VerisState;
 };
 
-function Pill({
-  active,
-  label,
-  icon,
-  color,
-}: {
-  active: boolean;
-  label: string;
-  icon: React.ReactNode;
-  color: string;
-}) {
-  return (
-    <div
-      className={clsx(
-        "flex items-center gap-2 px-3 py-1.5 rounded-full text-xs transition-all",
-        "border backdrop-blur-sm",
-        active
-          ? `${color} border-transparent shadow-md`
-          : "bg-white/5 text-gray-400 border-white/10"
-      )}
-    >
-      {icon}
-      {label}
-    </div>
-  );
-}
-
 export default function SystemIndicators({
-  faceDetected,
+  faceCount,
   micActive,
   attention,
   secure,
   verisState,
 }: Props) {
   return (
-    <div className="flex flex-wrap items-center justify-center gap-2 mt-4">
+    <div className="w-full flex items-center justify-center gap-6 mt-4 text-xs text-white/70">
 
-      {/* 🟢 Face */}
-      <Pill
-        active={faceDetected}
-        label="Face Detected"
-        icon={<User size={14} />}
-        color="bg-green-500/20 text-green-300"
-      />
+      {/* 👤 FACE STATUS */}
+      <div className="flex items-center gap-1">
+        {faceCount === 1 && (
+          <span className="text-white/80">👤 Face Detected</span>
+        )}
+        {faceCount === 0 && (
+          <span className="text-yellow-400">⚠️ No Face Detected</span>
+        )}
+        {faceCount > 1 && (
+          <span className="text-red-400">🚨 Multiple Faces</span>
+        )}
+      </div>
 
-      {/* 🎤 Mic */}
-      <Pill
-        active={micActive}
-        label="Microphone Active"
-        icon={<Mic size={14} />}
-        color="bg-cyan-500/20 text-cyan-300"
-      />
+      {/* 🎤 MIC */}
+      <div className="flex items-center gap-1">
+        {micActive ? (
+          <span className="text-green-400">🎤 Mic Active</span>
+        ) : (
+          <span className="text-white/40">🎤 Mic Off</span>
+        )}
+      </div>
 
-      {/* 👁️ Attention */}
-      <Pill
-        active={attention}
-        label="Attention Tracking"
-        icon={<Eye size={14} />}
-        color="bg-purple-500/20 text-purple-300"
-      />
+      {/* 👁️ ATTENTION */}
+      <div className="flex items-center gap-1">
+        {attention ? (
+          <span className="text-white/80">👁️ Focused</span>
+        ) : (
+          <span className="text-yellow-400">⚠️ Looking Away</span>
+        )}
+      </div>
 
-      {/* 🔒 Secure */}
-      <Pill
-        active={secure}
-        label="Secure Mode"
-        icon={<Shield size={14} />}
-        color="bg-white/20 text-white"
-      />
+      {/* 🔒 SECURE MODE */}
+      <div className="flex items-center gap-1">
+        {secure && (
+          <span className="text-white/60">🔒 Secure</span>
+        )}
+      </div>
 
-      {/* 🎧 Veris Listening */}
-      <Pill
-        active={verisState === "listening"}
-        label="Veris Listening"
-        icon={<Mic size={14} />}
-        color="bg-blue-500/20 text-blue-300"
-      />
+      {/* 🤖 VERIS STATE */}
+      <div className="flex items-center gap-1">
+        {verisState === "speaking" && (
+          <span className="text-blue-400">🗣️ Veris Speaking</span>
+        )}
+        {verisState === "listening" && (
+          <span className="text-green-400">🎧 Veris Listening</span>
+        )}
+        {verisState === "thinking" && (
+          <span className="text-white/50">💭 Thinking</span>
+        )}
+      </div>
 
-      {/* 🗣️ Veris Speaking */}
-      <Pill
-        active={verisState === "speaking"}
-        label="Veris Speaking"
-        icon={<Volume2 size={14} />}
-        color="bg-violet-500/20 text-violet-300"
-      />
     </div>
   );
 }

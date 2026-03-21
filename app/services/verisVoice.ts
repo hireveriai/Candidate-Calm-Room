@@ -1,50 +1,40 @@
-let isSpeaking = false;
+let recognition: any = null;
 
-// 🔊 TEXT TO SPEECH
 export function speak(text: string): Promise<void> {
   return new Promise((resolve) => {
-    if (isSpeaking) {
-      window.speechSynthesis.cancel();
+    if (!window.speechSynthesis) {
+      console.warn("TTS not supported");
+      resolve();
+      return;
     }
 
     const utterance = new SpeechSynthesisUtterance(text);
 
-    utterance.rate = 0.95;
+    utterance.rate = 1;
     utterance.pitch = 1;
+    utterance.volume = 1;
 
-    utterance.onstart = () => {
-      isSpeaking = true;
-    };
+    utterance.onend = () => resolve();
 
-    utterance.onend = () => {
-      isSpeaking = false;
-      resolve();
-    };
-
-    utterance.onerror = () => {
-      isSpeaking = false;
-      resolve();
-    };
-
+    window.speechSynthesis.cancel(); // prevent overlap
     window.speechSynthesis.speak(utterance);
   });
 }
 
-// 🎤 SPEECH TO TEXT (LIVE)
 export function startRecognition(
   onResult: (text: string) => void,
-  onEnd: () => void
+  onEnd?: () => void
 ) {
   const SpeechRecognition =
-    (window as any).SpeechRecognition ||
-    (window as any).webkitSpeechRecognition;
+    (window as any).webkitSpeechRecognition ||
+    (window as any).SpeechRecognition;
 
   if (!SpeechRecognition) {
-    alert("Speech recognition not supported in this browser");
+    console.warn("STT not supported");
     return null;
   }
 
-  const recognition = new SpeechRecognition();
+  recognition = new SpeechRecognition();
 
   recognition.continuous = true;
   recognition.interimResults = true;
@@ -53,7 +43,7 @@ export function startRecognition(
   recognition.onresult = (event: any) => {
     let transcript = "";
 
-    for (let i = 0; i < event.results.length; i++) {
+    for (let i = event.resultIndex; i < event.results.length; i++) {
       transcript += event.results[i][0].transcript;
     }
 
@@ -61,7 +51,7 @@ export function startRecognition(
   };
 
   recognition.onend = () => {
-    onEnd();
+    if (onEnd) onEnd();
   };
 
   recognition.start();
@@ -69,9 +59,10 @@ export function startRecognition(
   return recognition;
 }
 
-// 🛑 STOP MIC
-export function stopRecognition(recognition: any) {
-  if (recognition) {
-    recognition.stop();
+export function stopRecognition(instance: any) {
+  try {
+    instance?.stop();
+  } catch (e) {
+    console.warn("Error stopping recognition", e);
   }
 }
