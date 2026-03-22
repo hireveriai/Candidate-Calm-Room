@@ -1,0 +1,967 @@
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["partialIndexes"]
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model ai_audit_logs {
+  audit_id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  entity_type      String?
+  entity_id        String?   @db.Uuid
+  ai_provider      String?
+  request_payload  Json?
+  response_payload Json?
+  created_at       DateTime? @default(now()) @db.Timestamptz(6)
+}
+
+model ai_signed_decisions {
+  decision_id      String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  attempt_id       String    @db.Uuid
+  decision_type    String
+  decision_value   String
+  ai_model         String
+  ai_model_version String
+  confidence       Float
+  signed_hash      String
+  signed_at        DateTime? @default(now()) @db.Timestamptz(6)
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model answer_evaluations {
+  evaluation_id     String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  answer_id         String?            @db.Uuid
+  skill_id          String?            @db.Uuid
+  raw_score         Decimal?           @db.Decimal(5, 2)
+  rubric_reason     String?
+  evaluated_by      String?            @default("AI")
+  evaluated_at      DateTime?          @default(now()) @db.Timestamptz(6)
+  interview_answers interview_answers? @relation(fields: [answer_id], references: [answer_id], onDelete: NoAction, onUpdate: NoAction)
+  skill_master      skill_master?      @relation(fields: [skill_id], references: [skill_id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([answer_id], map: "idx_eval_answer")
+}
+
+model attempt_question_map {
+  attempt_id         String             @db.Uuid
+  question_id        String             @db.Uuid
+  interview_attempts interview_attempts @relation(fields: [attempt_id], references: [attempt_id], onDelete: NoAction, onUpdate: NoAction)
+  questions          questions          @relation(fields: [question_id], references: [question_id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([attempt_id, question_id])
+}
+
+model attempt_skill_scores {
+  attempt_id         String             @db.Uuid
+  skill_id           String             @db.Uuid
+  normalized_score   Decimal?           @db.Decimal(5, 2)
+  interview_attempts interview_attempts @relation(fields: [attempt_id], references: [attempt_id], onDelete: NoAction, onUpdate: NoAction)
+  skill_master       skill_master       @relation(fields: [skill_id], references: [skill_id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([attempt_id, skill_id])
+  @@index([attempt_id], map: "idx_attempt_skill_attempt")
+}
+
+model audit_logs {
+  log_id     String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id    String?   @db.Uuid
+  action     String?
+  metadata   Json?
+  created_at DateTime? @default(now()) @db.Timestamptz(6)
+}
+
+model auth_intent_pool {
+  auth_intent_id Int       @id @db.SmallInt
+  code           String    @unique
+  description    String?
+  created_at     DateTime? @default(now()) @db.Timestamptz(6)
+}
+
+model auth_sessions {
+  session_id          String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  identity_id         String?         @unique(map: "ux_signup_session_per_identity", where: raw("((auth_intent_id = 2) AND (is_active = true))")) @db.Uuid
+  issued_at           DateTime?       @default(now()) @db.Timestamptz(6)
+  expires_at          DateTime        @db.Timestamptz(6)
+  ip_address          String?
+  user_agent          String?
+  is_active           Boolean?        @default(true)
+  signup_user_type_id Int?            @db.SmallInt
+  auth_intent_id      Int             @default(1) @db.SmallInt
+  identity_users      identity_users? @relation(fields: [identity_id], references: [identity_id], onDelete: Cascade, onUpdate: NoAction)
+  user_type_pool      user_type_pool? @relation(fields: [signup_user_type_id], references: [user_type_id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([session_id], map: "idx_auth_sessions_active", where: raw("(is_active = true)"))
+  @@index([session_id], map: "idx_auth_sessions_signup_valid", where: raw("((auth_intent_id = 2) AND (signup_user_type_id IS NOT NULL) AND (is_active = true))"))
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model candidate_hire_prediction {
+  candidate_id      String    @db.Uuid
+  interview_id      String    @db.Uuid
+  prediction_score  Decimal?  @db.Decimal(5, 2)
+  confidence_level  String?
+  prediction_reason Json?
+  created_at        DateTime? @default(now()) @db.Timestamptz(6)
+
+  @@id([candidate_id, interview_id])
+}
+
+model candidate_profiles {
+  candidate_id          String                 @id @db.Uuid
+  career_track_id       Int                    @db.SmallInt
+  experience_level_id   Int?                   @db.SmallInt
+  created_at            DateTime?              @default(now()) @db.Timestamptz(6)
+  users                 users                  @relation(fields: [candidate_id], references: [user_id], onDelete: Cascade, onUpdate: NoAction)
+  career_track_pool     career_track_pool      @relation(fields: [career_track_id], references: [career_track_id], onDelete: NoAction, onUpdate: NoAction)
+  experience_level_pool experience_level_pool? @relation(fields: [experience_level_id], references: [experience_level_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model candidate_resume_ai {
+  resume_ai_id             String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  interview_id             String?             @db.Uuid
+  attempt_id               String?             @db.Uuid
+  raw_resume               String?
+  extracted_skills         String[]
+  claimed_experience_years Int?
+  extracted_claims         Json?
+  created_at               DateTime?           @default(now()) @db.Timestamptz(6)
+  interview_attempts       interview_attempts? @relation(fields: [attempt_id], references: [attempt_id], onDelete: NoAction, onUpdate: NoAction)
+  interviews               interviews?         @relation(fields: [interview_id], references: [interview_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model candidate_skill_profile {
+  candidate_id  String   @db.Uuid
+  skill_id      String   @db.Uuid
+  avg_score     Decimal? @db.Decimal(5, 2)
+  attempt_count Int?
+
+  @@id([candidate_id, skill_id])
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model candidates {
+  candidate_id    String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id String        @db.Uuid
+  full_name       String
+  email           String
+  phone           String?
+  created_at      DateTime      @default(now()) @db.Timestamptz(6)
+  organizations   organizations @relation(fields: [organization_id], references: [organization_id], onDelete: NoAction, onUpdate: NoAction)
+  interviews      interviews[]
+
+  @@unique([organization_id, email], map: "uq_candidates_org_email")
+}
+
+model career_track_pool {
+  career_track_id    Int                  @id @db.SmallInt
+  code               String               @unique
+  description        String?
+  is_active          Boolean?             @default(true)
+  created_at         DateTime?            @default(now()) @db.Timestamptz(6)
+  candidate_profiles candidate_profiles[]
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model company_skill_baseline {
+  organization_id String @db.Uuid
+  job_id          String @db.Uuid
+  skill_domain    String
+  expected_level  Int?
+
+  @@id([organization_id, job_id, skill_domain])
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model company_skill_gap_reports {
+  report_id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id  String?   @db.Uuid
+  job_id           String?   @db.Uuid
+  skill_domain     String?
+  avg_actual_score Decimal?  @db.Decimal(5, 2)
+  expected_level   Int?
+  gap_score        Decimal?  @db.Decimal(5, 2)
+  severity         String?
+  generated_at     DateTime? @default(now()) @db.Timestamptz(6)
+}
+
+model compliance_access_logs {
+  log_id      String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  api_key     String
+  role        String
+  endpoint    String
+  accessed_at DateTime? @default(now()) @db.Timestamptz(6)
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model compliance_api_keys {
+  key_id    String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  api_key   String    @unique
+  role      String
+  is_active Boolean?  @default(true)
+  issued_at DateTime? @default(now()) @db.Timestamptz(6)
+}
+
+model compliance_vault {
+  vault_id                String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  attempt_id              String                  @db.Uuid
+  evidence_pack_id        String                  @db.Uuid
+  retention_years         Int?                    @default(7)
+  hold_reason             String?
+  sealed                  Boolean?                @default(true)
+  sealed_at               DateTime?               @default(now()) @db.Timestamptz(6)
+  forensic_evidence_packs forensic_evidence_packs @relation(fields: [evidence_pack_id], references: [pack_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model control_center_access_logs {
+  log_id      String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  api_key     String
+  role        String
+  endpoint    String
+  accessed_at DateTime? @default(now()) @db.Timestamptz(6)
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model control_center_api_keys {
+  key_id    String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  api_key   String    @unique
+  role      String
+  is_active Boolean?  @default(true)
+  issued_at DateTime? @default(now()) @db.Timestamptz(6)
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model experience_level_pool {
+  experience_level_id Int                  @id @db.SmallInt
+  code                String               @unique
+  label               String
+  min_years           Decimal?             @db.Decimal
+  max_years           Decimal?             @db.Decimal
+  description         String?
+  is_active           Boolean?             @default(true)
+  created_at          DateTime?            @default(now()) @db.Timestamptz(6)
+  candidate_profiles  candidate_profiles[]
+  users               users[]
+}
+
+model forensic_evidence_packs {
+  pack_id          String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  attempt_id       String             @db.Uuid
+  pack_hash        String
+  generated_at     DateTime?          @default(now()) @db.Timestamptz(6)
+  generated_by     String?            @default("system")
+  sealed           Boolean?           @default(true)
+  compliance_vault compliance_vault[]
+}
+
+model forensic_neural_ledger {
+  ledger_id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  attempt_id       String   @db.Uuid
+  event_type       String
+  stream           String
+  value_numeric    Float?
+  value_text       String?
+  created_at       DateTime @default(now()) @db.Timestamptz(6)
+  prev_hash        String?
+  current_hash     String
+  ai_model_version String?
+  source_ui        String?
+}
+
+model forensic_transcripts {
+  transcript_id  String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  attempt_id     String   @db.Uuid
+  segment_index  Int
+  start_ms       Int
+  end_ms         Int
+  transcript     String
+  confidence     Float?
+  stress         Float?
+  hesitation     Float?
+  cognitive_flag String?
+  sealed         Boolean? @default(false)
+}
+
+model fraud_risk_scores {
+  attempt_id        String    @id @db.Uuid
+  fraud_probability Int?
+  risk_type         String?
+  notes             String?
+  created_at        DateTime? @default(now()) @db.Timestamptz(6)
+  signals           Json?
+  confidence_level  String?
+}
+
+model fraud_signals {
+  fraud_id    String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  attempt_id  String    @db.Uuid
+  signal_type String
+  severity    Float
+  description String?
+  detected_at DateTime? @default(now()) @db.Timestamptz(6)
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model global_deep_expert_pool {
+  deep_id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  role_template     String
+  domain            String
+  challenge_type    String?
+  challenge_prompt  String
+  expected_concepts String[]
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model global_followup_pool {
+  followup_id       String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  role_template     String
+  parent_skill      String
+  trigger_level     String?
+  followup_question String
+  expected_concepts String[]
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model global_question_pool {
+  question_pool_id     String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  role_template        String
+  skill_tag            String
+  difficulty           String?                @default("MEDIUM")
+  question_text        String
+  expected_concepts    String[]
+  created_at           DateTime?              @default(now()) @db.Timestamptz(6)
+  tenant_question_pool tenant_question_pool[]
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model global_role_pool {
+  role_pool_id       String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  canonical_name     String   @unique
+  default_skills     String[]
+  default_difficulty String?  @default("MID")
+  is_active          Boolean? @default(true)
+  users              users[]
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model global_skill_pool {
+  skill_id            String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  canonical_name      String                @unique
+  category            String?
+  is_active           Boolean               @default(true)
+  created_at          DateTime              @default(now()) @db.Timestamptz(6)
+  difficulty          String?
+  user_primary_skills user_primary_skills[]
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model hire_outcomes {
+  candidate_id       String    @db.Uuid
+  interview_id       String    @db.Uuid
+  was_hired          Boolean?
+  job_success_rating Int?
+  recorded_at        DateTime? @default(now()) @db.Timestamptz(6)
+
+  @@id([candidate_id, interview_id])
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model identity_users {
+  identity_id    String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email          String?        @unique(map: "identity_users_email_unique")
+  phone          String?
+  intent         String?
+  created_at     DateTime?      @default(now()) @db.Timestamptz(6)
+  otp            String?
+  otp_expires_at DateTime?      @db.Timestamptz(6)
+  primary_email  String?
+  primary_phone  String?
+  is_verified    Boolean?       @default(false)
+  auth_sessions  auth_sessions?
+  users          users?
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model identity_verification_assets {
+  id            String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id       String?     @db.Uuid
+  interview_id  String?     @db.Uuid
+  asset_type    String?
+  id_proof_type String?
+  file_url      String
+  captured_at   DateTime?   @default(now()) @db.Timestamptz(6)
+  interviews    interviews? @relation(fields: [interview_id], references: [interview_id], onDelete: NoAction, onUpdate: NoAction)
+  users         users?      @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model improvement_actions {
+  action_id   String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  target_type String?
+  target_id   String?   @db.Uuid
+  action_type String?
+  reason      String?
+  created_at  DateTime? @default(now()) @db.Timestamptz(6)
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model interview_answer_evaluations {
+  evaluation_id     String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  answer_id         String            @db.Uuid
+  evaluator_type    String
+  evaluator_id      String?           @db.Uuid
+  score             Decimal?          @db.Decimal(5, 2)
+  feedback          String?
+  evaluated_at      DateTime          @default(now()) @db.Timestamptz(6)
+  interview_answers interview_answers @relation(fields: [answer_id], references: [answer_id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model interview_answers {
+  answer_id                    String                         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  attempt_id                   String                         @db.Uuid
+  question_id                  String?                        @db.Uuid
+  answer_text                  String?
+  answer_payload               Json?
+  answered_at                  DateTime                       @default(now()) @db.Timestamptz(6)
+  session_question_id          String?                        @db.Uuid
+  answer_evaluations           answer_evaluations[]
+  interview_answer_evaluations interview_answer_evaluations[]
+  interview_attempts           interview_attempts             @relation(fields: [attempt_id], references: [attempt_id], onDelete: Cascade, onUpdate: NoAction)
+  questions                    questions?                     @relation(fields: [question_id], references: [question_id], onDelete: NoAction, onUpdate: NoAction)
+  session_questions            session_questions?             @relation(fields: [session_question_id], references: [session_question_id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([attempt_id, question_id], map: "uq_attempt_question")
+  @@unique([attempt_id, question_id], map: "uq_attempt_question_answer")
+  @@unique([attempt_id, question_id], map: "uq_interview_answers_attempt_question")
+  @@index([attempt_id], map: "idx_answers_attempt")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model interview_attempt_scores {
+  attempt_score_id    String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  attempt_id          String             @unique(map: "uq_attempt_scores_attempt") @db.Uuid
+  total_questions     Int
+  evaluated_questions Int
+  raw_score           Decimal?           @db.Decimal(6, 2)
+  normalized_score    Decimal?           @db.Decimal(5, 2)
+  evaluated_by        String
+  evaluated_at        DateTime           @default(now()) @db.Timestamptz(6)
+  interview_id        String?            @db.Uuid
+  interview_attempts  interview_attempts @relation(fields: [attempt_id], references: [attempt_id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model interview_attempts {
+  attempt_id                  String                       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  interview_id                String                       @db.Uuid
+  attempt_number              Int
+  started_at                  DateTime                     @default(now()) @db.Timestamptz(6)
+  ended_at                    DateTime?                    @db.Timestamptz(6)
+  status                      String                       @default("STARTED")
+  candidate_experience        String?
+  mission_snapshot_id         String?                      @db.Uuid
+  attempt_question_map        attempt_question_map[]
+  attempt_skill_scores        attempt_skill_scores[]
+  candidate_resume_ai         candidate_resume_ai[]
+  interview_answers           interview_answers[]
+  interview_attempt_scores    interview_attempt_scores?
+  interviews                  interviews                   @relation(fields: [interview_id], references: [interview_id], onDelete: Cascade, onUpdate: NoAction)
+  interview_mission_snapshots interview_mission_snapshots? @relation(fields: [mission_snapshot_id], references: [snapshot_id], onDelete: NoAction, onUpdate: NoAction)
+  interview_evaluations       interview_evaluations?
+  interview_results           interview_results[]
+  resume_reality_gap          resume_reality_gap[]
+  session_questions           session_questions[]
+
+  @@unique([interview_id, attempt_number], map: "uq_interview_attempt")
+  @@unique([interview_id, attempt_number], map: "uq_interview_attempts_interview_attempt")
+  @@index([interview_id, status], map: "idx_attempt_interview_status")
+}
+
+model interview_blueprints {
+  blueprint_id    String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  role_name       String?
+  skill_domain    String?
+  skill_level     String?
+  experience_band String?
+  question_count  Int?
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model interview_evaluations {
+  evaluation_id      String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  attempt_id         String?             @unique @db.Uuid
+  final_score        Decimal?            @db.Decimal(5, 2)
+  decision           String?
+  ai_summary         String?
+  created_at         DateTime?           @default(now()) @db.Timestamptz(6)
+  is_locked          Boolean?            @default(true)
+  interview_attempts interview_attempts? @relation(fields: [attempt_id], references: [attempt_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model interview_invites {
+  invite_id     String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  interview_id  String     @db.Uuid
+  token         String     @unique
+  used_at       DateTime?  @db.Timestamptz(6)
+  created_at    DateTime   @default(now()) @db.Timestamptz(6)
+  expires_at    DateTime?  @db.Timestamptz(6)
+  max_attempts  Int?       @default(1)
+  attempts_used Int?       @default(0)
+  status        String?    @default("ACTIVE")
+  issued_by     String?    @db.Uuid
+  interviews    interviews @relation(fields: [interview_id], references: [interview_id], onDelete: Cascade, onUpdate: NoAction)
+  users         users?     @relation(fields: [issued_by], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([token], map: "idx_interview_invites_token")
+  @@index([token], map: "idx_invite_token")
+}
+
+model interview_mission_snapshots {
+  snapshot_id        String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  interview_id       String?              @db.Uuid
+  config             Json
+  created_at         DateTime?            @default(now()) @db.Timestamptz(6)
+  interview_attempts interview_attempts[]
+  interviews         interviews?          @relation(fields: [interview_id], references: [interview_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model interview_quality_metrics {
+  interview_id         String   @id @db.Uuid
+  avg_final_score      Decimal? @db.Decimal(5, 2)
+  hire_conversion_rate Decimal? @db.Decimal(5, 2)
+  completion_rate      Decimal? @db.Decimal(5, 2)
+  avg_duration_minutes Int?
+}
+
+model interview_question_map {
+  interview_id String     @db.Uuid
+  question_id  String     @db.Uuid
+  interviews   interviews @relation(fields: [interview_id], references: [interview_id], onDelete: Cascade, onUpdate: NoAction)
+  questions    questions  @relation(fields: [question_id], references: [question_id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([interview_id, question_id])
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model interview_questions {
+  interview_question_id String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  interview_id          String     @db.Uuid
+  question_id           String     @db.Uuid
+  question_order        Int
+  is_mandatory          Boolean    @default(true)
+  created_at            DateTime   @default(now()) @db.Timestamptz(6)
+  interviews            interviews @relation(fields: [interview_id], references: [interview_id], onDelete: Cascade, onUpdate: NoAction)
+  questions             questions  @relation(fields: [question_id], references: [question_id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([interview_id, question_id], map: "uq_interview_questions_interview_question")
+}
+
+model interview_recordings {
+  recording_id   String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  attempt_id     String?   @db.Uuid
+  audio_url      String?
+  transcript     String?
+  retention_days Int?      @default(30)
+  expires_at     DateTime? @db.Timestamptz(6)
+  created_at     DateTime? @default(now()) @db.Timestamptz(6)
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model interview_results {
+  interview_result_id String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  interview_id        String              @unique(map: "uq_interview_results_interview") @db.Uuid
+  best_attempt_id     String?             @db.Uuid
+  final_score         Decimal?            @db.Decimal(5, 2)
+  result_status       String
+  decided_by          String?             @db.Uuid
+  decided_at          DateTime            @default(now()) @db.Timestamptz(6)
+  interview_attempts  interview_attempts? @relation(fields: [best_attempt_id], references: [attempt_id], onDelete: NoAction, onUpdate: NoAction)
+  interviews          interviews          @relation(fields: [interview_id], references: [interview_id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+model interview_scores {
+  score_id   String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  attempt_id String?   @db.Uuid
+  skill      String?
+  score      Int?
+  confidence Int?
+  honesty    Int?
+  depth      Int?
+  created_at DateTime? @default(now()) @db.Timestamptz(6)
+}
+
+model interview_skill_map {
+  map_id          String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  interview_id    String?       @db.Uuid
+  skill_id        String?       @db.Uuid
+  weight_override Decimal?      @db.Decimal(5, 2)
+  interviews      interviews?   @relation(fields: [interview_id], references: [interview_id], onDelete: NoAction, onUpdate: NoAction)
+  skill_master    skill_master? @relation(fields: [skill_id], references: [skill_id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([interview_id, skill_id])
+}
+
+model interview_summaries {
+  attempt_id          String    @id @db.Uuid
+  overall_score       Int?
+  risk_level          String?
+  strengths           String?
+  weaknesses          String?
+  hire_recommendation String?
+  created_at          DateTime? @default(now()) @db.Timestamptz(6)
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model interviews {
+  interview_id                 String                         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id              String                         @db.Uuid
+  job_id                       String                         @db.Uuid
+  candidate_id                 String                         @db.Uuid
+  interview_type               String
+  created_by                   String?                        @db.Uuid
+  is_active                    Boolean                        @default(true)
+  created_at                   DateTime                       @default(now()) @db.Timestamptz(6)
+  duration_minutes             Int?                           @default(30)
+  question_count               Int?                           @default(10)
+  ai_strictness                String?                        @default("MEDIUM")
+  resume_ai_enabled            Boolean?                       @default(true)
+  max_attempts                 Int?                           @default(1)
+  proctoring_enabled           Boolean?                       @default(true)
+  candidate_resume_ai          candidate_resume_ai[]
+  identity_verification_assets identity_verification_assets[]
+  interview_attempts           interview_attempts[]
+  interview_invites            interview_invites[]
+  interview_mission_snapshots  interview_mission_snapshots[]
+  interview_question_map       interview_question_map[]
+  interview_questions          interview_questions[]
+  interview_results            interview_results?
+  interview_skill_map          interview_skill_map[]
+  candidates                   candidates                     @relation(fields: [candidate_id], references: [candidate_id], onDelete: NoAction, onUpdate: NoAction)
+  users                        users?                         @relation(fields: [created_by], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  job_positions                job_positions                  @relation(fields: [job_id], references: [job_id], onDelete: NoAction, onUpdate: NoAction)
+  organizations                organizations                  @relation(fields: [organization_id], references: [organization_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model job_positions {
+  job_id             String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id    String        @db.Uuid
+  job_title          String
+  job_description    String?
+  is_active          Boolean       @default(true)
+  created_at         DateTime      @default(now()) @db.Timestamptz(6)
+  experience_level   String?
+  core_skills        String[]
+  difficulty_profile String?       @default("MID")
+  interviews         interviews[]
+  organizations      organizations @relation(fields: [organization_id], references: [organization_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model neural_mri_timeline {
+  mri_id       String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  attempt_id   String   @db.Uuid
+  ts           DateTime @default(now()) @db.Timestamptz(6)
+  confidence   Int?
+  stress       Int?
+  thinking     Boolean?
+  voice_energy Int?
+  fraud_flag   Boolean? @default(false)
+  ai_note      String?
+  audit_hash   String?
+}
+
+model neural_signal_ledger {
+  ledger_id   String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  attempt_id  String?  @db.Uuid
+  stream      String
+  value       String
+  source      String
+  recorded_at DateTime @default(now()) @db.Timestamptz(6)
+}
+
+model neural_verdicts {
+  verdict_id String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  attempt_id String    @db.Uuid
+  verdict    String?
+  risk_level String?
+  reasons    String?
+  created_at DateTime? @default(now()) @db.Timestamptz(6)
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model organizations {
+  organization_id      String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_name    String                 @unique(map: "uniq_practice_org", where: raw("(organization_name = 'Practice'::text)"))
+  is_active            Boolean                @default(true)
+  created_at           DateTime               @default(now()) @db.Timestamptz(6)
+  candidates           candidates[]
+  interviews           interviews[]
+  job_positions        job_positions[]
+  questions            questions[]
+  recruiter_profiles   recruiter_profiles[]
+  tenant_question_pool tenant_question_pool[]
+  users                users[]
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model question_blueprints {
+  blueprint_id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  career_track_id     Int?      @db.SmallInt
+  experience_level_id Int?      @db.SmallInt
+  skill_code          String?
+  difficulty_level    Int?      @db.SmallInt
+  question_prompt     String?
+  source              String?
+  status              String?
+  created_at          DateTime? @default(now()) @db.Timestamptz(6)
+}
+
+model question_performance_stats {
+  question_id          String    @id @db.Uuid
+  times_asked          Int?      @default(0)
+  avg_score            Decimal?  @db.Decimal(5, 2)
+  pass_rate            Decimal?  @db.Decimal(5, 2)
+  discrimination_index Decimal?  @db.Decimal(5, 2)
+  last_updated         DateTime? @default(now()) @db.Timestamptz(6)
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model question_replacement_queue {
+  action_id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  question_id          String?   @db.Uuid
+  action_type          String?
+  reason               String?
+  performance_snapshot Json?
+  created_at           DateTime? @default(now()) @db.Timestamptz(6)
+  processed            Boolean?  @default(false)
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model question_skill_map {
+  map_id       String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  question_id  String?       @db.Uuid
+  skill_id     String?       @db.Uuid
+  contribution Decimal?      @db.Decimal(5, 2)
+  questions    questions?    @relation(fields: [question_id], references: [question_id], onDelete: NoAction, onUpdate: NoAction)
+  skill_master skill_master? @relation(fields: [skill_id], references: [skill_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model questions {
+  question_id            String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id        String                   @db.Uuid
+  question_text          String
+  question_type          String
+  is_active              Boolean                  @default(true)
+  created_at             DateTime                 @default(now()) @db.Timestamptz(6)
+  skill_domain           String?
+  skill_level            String?
+  difficulty_level       Int?                     @default(3)
+  attempt_question_map   attempt_question_map[]
+  interview_answers      interview_answers[]
+  interview_question_map interview_question_map[]
+  interview_questions    interview_questions[]
+  question_skill_map     question_skill_map[]
+  organizations          organizations            @relation(fields: [organization_id], references: [organization_id], onDelete: NoAction, onUpdate: NoAction)
+  session_questions      session_questions[]
+}
+
+model recruiter_profiles {
+  recruiter_id        String               @id @db.Uuid
+  company_name        String
+  recruiter_role_id   Int?                 @db.SmallInt
+  created_at          DateTime?            @default(now()) @db.Timestamptz(6)
+  organization_id     String?              @db.Uuid
+  organizations       organizations?       @relation(fields: [organization_id], references: [organization_id], onDelete: NoAction, onUpdate: NoAction)
+  users               users                @relation(fields: [recruiter_id], references: [user_id], onDelete: Cascade, onUpdate: NoAction)
+  recruiter_role_pool recruiter_role_pool? @relation(fields: [recruiter_role_id], references: [recruiter_role_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model recruiter_role_pool {
+  recruiter_role_id  Int                  @id @db.SmallInt
+  code               String               @unique
+  description        String?
+  created_at         DateTime?            @default(now()) @db.Timestamptz(6)
+  recruiter_profiles recruiter_profiles[]
+}
+
+model resume_reality_gap {
+  gap_id             String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  attempt_id         String?             @db.Uuid
+  resume_skill       String?
+  claimed_level      Int?
+  actual_score       Int?
+  gap_score          Int?
+  flagged            Boolean?            @default(false)
+  interview_attempts interview_attempts? @relation(fields: [attempt_id], references: [attempt_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model role_permissions {
+  role       String
+  permission String
+
+  @@id([role, permission])
+}
+
+model roles {
+  role_id    String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  role_code  String?      @unique
+  role_name  String?
+  user_roles user_roles[]
+}
+
+model session_questions {
+  session_question_id String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  attempt_id          String              @db.Uuid
+  question_id         String?             @db.Uuid
+  content             String
+  source              String
+  asked_at            DateTime?           @default(now()) @db.Timestamptz(6)
+  interview_answers   interview_answers[]
+  interview_attempts  interview_attempts  @relation(fields: [attempt_id], references: [attempt_id], onDelete: NoAction, onUpdate: NoAction)
+  questions           questions?          @relation(fields: [question_id], references: [question_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model skill_master {
+  skill_id             String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  skill_code           String?                @unique
+  skill_name           String
+  weight               Decimal                @db.Decimal(5, 2)
+  is_active            Boolean?               @default(true)
+  answer_evaluations   answer_evaluations[]
+  attempt_skill_scores attempt_skill_scores[]
+  interview_skill_map  interview_skill_map[]
+  question_skill_map   question_skill_map[]
+}
+
+model tenant_question_pool {
+  tenant_question_id   String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id      String?               @db.Uuid
+  role_template        String?
+  skill_tag            String?
+  difficulty           String?
+  question_text        String?
+  expected_concepts    String[]
+  global_ref_id        String?               @db.Uuid
+  global_question_pool global_question_pool? @relation(fields: [global_ref_id], references: [question_pool_id], onDelete: NoAction, onUpdate: NoAction)
+  organizations        organizations?        @relation(fields: [organization_id], references: [organization_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model user_devices {
+  device_id     String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id       String          @db.Uuid
+  fingerprint   String
+  user_agent    String?
+  ip_address    String?
+  first_seen_at DateTime?       @default(now()) @db.Timestamptz(6)
+  last_seen_at  DateTime?       @default(now()) @db.Timestamptz(6)
+  is_trusted    Boolean?        @default(false)
+  users         users           @relation(fields: [user_id], references: [user_id], onDelete: Cascade, onUpdate: NoAction)
+  user_sessions user_sessions[]
+
+  @@unique([user_id, fingerprint], map: "ux_user_devices_fingerprint")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model user_otps {
+  otp_id      String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  otp_code    String?
+  purpose     String?
+  expires_at  DateTime? @db.Timestamptz(6)
+  used_at     DateTime? @db.Timestamptz(6)
+  intent      String?
+  identity_id String?   @db.Uuid
+}
+
+model user_primary_skills {
+  user_id           String            @db.Uuid
+  skill_id          String            @db.Uuid
+  confidence_score  Int?
+  global_skill_pool global_skill_pool @relation(fields: [skill_id], references: [skill_id], onDelete: NoAction, onUpdate: NoAction)
+  users             users             @relation(fields: [user_id], references: [user_id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([user_id, skill_id])
+}
+
+model user_roles {
+  user_id String @db.Uuid
+  role_id String @db.Uuid
+  roles   roles  @relation(fields: [role_id], references: [role_id], onDelete: NoAction, onUpdate: NoAction)
+  users   users  @relation(fields: [user_id], references: [user_id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([user_id, role_id])
+}
+
+model user_sessions {
+  session_id   String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id      String?       @db.Uuid
+  access_token String?       @unique
+  expires_at   DateTime?     @db.Timestamptz(6)
+  last_seen    DateTime?     @default(now()) @db.Timestamptz(6)
+  is_revoked   Boolean?      @default(false)
+  device_id    String?       @db.Uuid
+  user_devices user_devices? @relation(fields: [device_id], references: [device_id], onDelete: NoAction, onUpdate: NoAction)
+  users        users?        @relation(fields: [user_id], references: [user_id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+model user_type_pool {
+  user_type_id  Int             @id @db.SmallInt
+  code          String          @unique
+  description   String?
+  is_active     Boolean?        @default(true)
+  created_at    DateTime?       @default(now()) @db.Timestamptz(6)
+  auth_sessions auth_sessions[]
+  users         users[]
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model users {
+  user_id                      String                         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id              String                         @db.Uuid
+  full_name                    String?
+  email                        String                         @unique(map: "users_email_unique")
+  role                         String
+  is_active                    Boolean                        @default(true)
+  created_at                   DateTime                       @default(now()) @db.Timestamptz(6)
+  phone                        String?
+  password_hash                String?
+  is_email_verified            Boolean?                       @default(false)
+  is_phone_verified            Boolean?                       @default(false)
+  last_login_at                DateTime?                      @db.Timestamptz(6)
+  user_type_id                 Int?                           @db.SmallInt
+  first_name                   String?
+  last_name                    String?
+  primary_role_id              String?                        @db.Uuid
+  experience_level_code        String?
+  identity_id                  String?                        @unique @db.Uuid
+  candidate_profiles           candidate_profiles?
+  identity_verification_assets identity_verification_assets[]
+  interview_invites            interview_invites[]
+  interviews                   interviews[]
+  recruiter_profiles           recruiter_profiles?
+  user_devices                 user_devices[]
+  user_primary_skills          user_primary_skills[]
+  user_roles                   user_roles[]
+  user_sessions                user_sessions[]
+  experience_level_pool        experience_level_pool?         @relation(fields: [experience_level_code], references: [code], onDelete: NoAction, onUpdate: NoAction, map: "fk_users_experience_level")
+  identity_users               identity_users?                @relation(fields: [identity_id], references: [identity_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_users_identity")
+  global_role_pool             global_role_pool?              @relation(fields: [primary_role_id], references: [role_pool_id], onDelete: NoAction, onUpdate: NoAction, map: "fk_users_primary_role")
+  organizations                organizations                  @relation(fields: [organization_id], references: [organization_id], onDelete: NoAction, onUpdate: NoAction)
+  user_type_pool               user_type_pool?                @relation(fields: [user_type_id], references: [user_type_id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([organization_id, email], map: "uq_users_org_email")
+  @@index([user_type_id], map: "idx_users_user_type")
+}

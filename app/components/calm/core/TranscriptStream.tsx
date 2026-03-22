@@ -12,25 +12,13 @@ export default function TranscriptStream({ text }: Props) {
 
   useEffect(() => {
     if (!text) {
+      setDisplayText("");
       setIsVisible(false);
       return;
     }
 
-    setIsVisible(false);
-
-    const showTimeout = setTimeout(() => {
-      setDisplayText(text);
-      setIsVisible(true);
-    }, 120);
-
-    const hideTimeout = setTimeout(() => {
-      setIsVisible(false);
-    }, 20000);
-
-    return () => {
-      clearTimeout(showTimeout);
-      clearTimeout(hideTimeout);
-    };
+    setDisplayText(text);
+    setIsVisible(true);
   }, [text]);
 
   return (

@@ -1,4 +1,9 @@
 let recognition: any = null;
+let stopRequested = false;
+
+function normalizeChunk(text: string) {
+  return text.replace(/\s+/g, " ").trim();
+}
 
 export function speak(text: string): Promise<void> {
   return new Promise((resolve) => {
@@ -35,23 +40,39 @@ export function startRecognition(
   }
 
   recognition = new SpeechRecognition();
+  stopRequested = false;
+  let finalizedChunks: string[] = [];
 
   recognition.continuous = true;
   recognition.interimResults = true;
   recognition.lang = "en-US";
 
   recognition.onresult = (event: any) => {
-    let transcript = "";
+    let interimChunks: string[] = [];
 
     for (let i = event.resultIndex; i < event.results.length; i++) {
-      transcript += event.results[i][0].transcript;
+      const chunk = normalizeChunk(event.results[i][0].transcript || "");
+
+      if (!chunk) {
+        continue;
+      }
+
+      if (event.results[i].isFinal) {
+        const lastChunk = finalizedChunks[finalizedChunks.length - 1];
+
+        if (lastChunk !== chunk) {
+          finalizedChunks = [...finalizedChunks, chunk];
+        }
+      } else {
+        interimChunks = [...interimChunks, chunk];
+      }
     }
 
-    onResult(transcript);
+    onResult([...finalizedChunks, ...interimChunks].join(" ").trim());
   };
 
   recognition.onend = () => {
-    if (onEnd) onEnd();
+    if (!stopRequested && onEnd) onEnd();
   };
 
   recognition.start();
@@ -61,6 +82,7 @@ export function startRecognition(
 
 export function stopRecognition(instance: any) {
   try {
+    stopRequested = true;
     instance?.stop();
   } catch (e) {
     console.warn("Error stopping recognition", e);

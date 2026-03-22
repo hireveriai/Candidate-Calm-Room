@@ -36,24 +36,72 @@ type Question = {
   question: string;
 };
 
-const QUESTION_DURATION_SECONDS = 30;
+const QUESTION_DURATION_SECONDS = 90;
+const attemptId = "66666666-0000-0000-0000-000000000006";
+
+function cleanTranscript(text: string) {
+  const collapsed = text
+    .replace(/\s+/g, " ")
+    .replace(/\b(um|uh|erm|hmm)\b/gi, "")
+    .replace(/\s+,/g, ",")
+    .replace(/\s+\./g, ".")
+    .trim();
+
+  const repeatedSentence = /(.{15,}?[.!?])(?:\s+\1)+/gi;
+  const withoutRepeatedSentences = collapsed.replace(repeatedSentence, "$1");
+
+  const repeatedPhrase = /\b([\w']+(?:\s+[\w']+){2,6})\s+\1\b/gi;
+  const withoutRepeatedPhrases = withoutRepeatedSentences.replace(
+    repeatedPhrase,
+    "$1"
+  );
+
+  const sentenceCased =
+    withoutRepeatedPhrases.charAt(0).toUpperCase() +
+    withoutRepeatedPhrases.slice(1);
+
+  if (!sentenceCased) {
+    return "";
+  }
+
+  return /[.!?]$/.test(sentenceCased) ? sentenceCased : `${sentenceCased}.`;
+}
+
+function roundMetric(value: number, digits = 2) {
+  return Number(value.toFixed(digits));
+}
 
 export default function Page() {
   const [started, setStarted] = useState(false);
   const [showExit, setShowExit] = useState(false);
 
   const [verisState, setVerisState] = useState<VerisState>("idle");
+  const [currentQuestion, setCurrentQuestion] = useState("");
+  const [sessionQuestionId, setSessionQuestionId] = useState("");
   const [transcript, setTranscript] = useState("");
-
-  const [questionIndex, setQuestionIndex] = useState(0);
   const [timeLeft, setTimeLeft] = useState(0);
+  const [isTransitioning, setIsTransitioning] = useState(false);
 
   const [audioLevel, setAudioLevel] = useState(0);
 
   const recognitionRef = useRef<any>(null);
   const silenceTimer = useRef<any>(null);
   const timerRef = useRef<any>(null);
+  const questionTimeoutRef = useRef<any>(null);
+  const interviewStartTimeRef = useRef<number | null>(null);
+  const questionStartTimeRef = useRef<number | null>(null);
+  const focusTimeMsRef = useRef(0);
+  const focusTotalMsRef = useRef(0);
+  const focusSampleAtRef = useRef<number | null>(null);
+  const isLookingRef = useRef(true);
+  const lookAwayStartRef = useRef<number | null>(null);
+  const lookAwayEventsRef = useRef(0);
+  const maxLookAwayMsRef = useRef(0);
   const exitIntentRef = useRef(false);
+  const transcriptRef = useRef("");
+  const isAdvancingRef = useRef(false);
+  const lastSignalSentRef = useRef<Record<string, number>>({});
+  const lastSignalPayloadRef = useRef<Record<string, string>>({});
 
   const videoRef = useRef<any>(null);
 
@@ -74,13 +122,130 @@ export default function Page() {
   const [tabViolations, setTabViolations] = useState(0);
   const [showCoding, setShowCoding] = useState(false);
 
-  const questions: Question[] = [
-    { type: "text", question: "Tell me something about yourself." },
-    { type: "coding", question: "Write a function to reverse a string." },
-    { type: "text", question: "Why should we hire you?" },
-  ];
+  const postJson = async <T,>(path: string, body: unknown): Promise<T> => {
+    const url =
+      typeof window === "undefined"
+        ? path
+        : new URL(path, window.location.origin).toString();
 
-  const currentQuestion = questions[questionIndex];
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const response = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(body),
+        });
+
+        const contentType = response.headers.get("content-type") || "";
+        const payload = contentType.includes("application/json")
+          ? await response.json()
+          : { error: await response.text() };
+
+        if (!response.ok) {
+          throw new Error(payload.error || "Request failed");
+        }
+
+        return payload as T;
+      } catch (error) {
+        if (attempt === 1) {
+          throw error;
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 750));
+      }
+    }
+
+    throw new Error("Request failed");
+  };
+
+  const sendSignal = async (type: string, value: unknown) => {
+    if (!sessionQuestionId || isAdvancingRef.current) {
+      return;
+    }
+
+    const payload = JSON.stringify(value);
+    const now = Date.now();
+    const lastSentAt = lastSignalSentRef.current[type] ?? 0;
+    const lastPayload = lastSignalPayloadRef.current[type];
+    const hasChanged = lastPayload !== payload;
+
+    if (!hasChanged && now - lastSentAt < 3000) {
+      return;
+    }
+
+    lastSignalSentRef.current[type] = now;
+    lastSignalPayloadRef.current[type] = payload;
+
+    try {
+      await postJson("/api/session/signal", {
+          attemptId,
+          type,
+          value,
+      });
+    } catch {
+      lastSignalSentRef.current[type] = 0;
+    }
+  };
+
+  const resetFocusMetrics = () => {
+    const now = Date.now();
+
+    focusTimeMsRef.current = 0;
+    focusTotalMsRef.current = 0;
+    focusSampleAtRef.current = now;
+    isLookingRef.current = faceDetected && attention;
+    lookAwayStartRef.current = isLookingRef.current ? null : now;
+    lookAwayEventsRef.current = 0;
+    maxLookAwayMsRef.current = 0;
+  };
+
+  const finalizeFocusMetrics = () => {
+    const now = Date.now();
+
+    if (focusSampleAtRef.current !== null) {
+      const delta = Math.max(0, now - focusSampleAtRef.current);
+      focusTotalMsRef.current += delta;
+
+      if (isLookingRef.current) {
+        focusTimeMsRef.current += delta;
+      }
+    }
+
+    if (!isLookingRef.current && lookAwayStartRef.current !== null) {
+      const lookAwayDuration = now - lookAwayStartRef.current;
+      maxLookAwayMsRef.current = Math.max(
+        maxLookAwayMsRef.current,
+        lookAwayDuration
+      );
+
+      if (lookAwayDuration >= 3000) {
+        lookAwayEventsRef.current += 1;
+      }
+    }
+
+    const totalAnswerMs =
+      focusTotalMsRef.current ||
+      (questionStartTimeRef.current ? now - questionStartTimeRef.current : 0);
+    const focusRatio =
+      totalAnswerMs > 0 ? focusTimeMsRef.current / totalAnswerMs : 1;
+
+    return {
+      focusRatio: roundMetric(focusRatio, 3),
+      lookAwayEvents: lookAwayEventsRef.current,
+      maxLookAwayDuration: roundMetric(maxLookAwayMsRef.current / 1000, 1),
+      totalAnswerTime: roundMetric(totalAnswerMs / 1000, 1),
+      assessment:
+        focusRatio < 0.4 || maxLookAwayMsRef.current >= 8000
+          ? "high_risk"
+          : focusRatio < 0.6
+            ? "suspicious"
+            : focusRatio < 0.8
+              ? "normal"
+              : "excellent",
+    };
+  };
 
   const enterFullscreen = async () => {
     await document.documentElement.requestFullscreen();
@@ -99,6 +264,10 @@ export default function Page() {
 
     stopAll();
     stopAudioAnalysis();
+    clearInterval(timerRef.current);
+    interviewStartTimeRef.current = null;
+    questionStartTimeRef.current = null;
+    setTimeLeft(0);
 
     const score = calculateFraudScore(events);
     const risk = classifyRisk(score);
@@ -110,8 +279,8 @@ export default function Page() {
 
   useEffect(() => {
     if (!started) return;
-    runQuestion();
-  }, [started, questionIndex]);
+    void startInterview();
+  }, [started]);
 
   useEffect(() => {
     if (!started) return;
@@ -134,48 +303,104 @@ export default function Page() {
     };
   }, [started]);
 
-  const runQuestion = async () => {
+  const askQuestion = async (question: string, nextSessionQuestionId: string) => {
     stopAll();
+    stopAudioAnalysis();
+    isAdvancingRef.current = false;
 
-    setTimeLeft(0);
     setTranscript("");
+    transcriptRef.current = "";
+    setSessionQuestionId(nextSessionQuestionId);
+    setCurrentQuestion(question);
     setVerisState("thinking");
 
-    await new Promise((r) => setTimeout(r, 800));
-
     setVerisState("speaking");
-    setTranscript(currentQuestion.question);
+    await speak(question);
 
-    await speak(currentQuestion.question);
+    setVerisState("listening");
+    questionStartTimeRef.current = Date.now();
+    resetFocusMetrics();
+    startListening();
 
-    if (currentQuestion.type === "coding") {
-      setShowCoding(true);
-
-      addEvent({
-        type: "coding_start",
-        severity: "low",
-      });
-
-      setVerisState("idle");
-    } else {
-      setVerisState("listening");
-      startListening();
-    }
-
-    startTimer();
+    startQuestionTimer();
     startAudioAnalysis();
+  };
+
+  const startInterview = async () => {
+    setIsTransitioning(true);
+    interviewStartTimeRef.current = Date.now();
+    setTimeLeft(0);
+    startRecordingTimer();
+
+    const data = await postJson<{
+      content: string;
+      session_question_id: string;
+    }>("/api/session/question", {
+      attemptId,
+      content: "Explain your experience",
+      source: "system",
+    });
+
+    setIsTransitioning(false);
+    await askQuestion(data.content, data.session_question_id);
+  };
+
+  const submitAnswer = async () => {
+    if (!sessionQuestionId) return;
+    const cleanedTranscript = cleanTranscript(
+      transcriptRef.current.trim() || transcript.trim()
+    );
+    const safeTranscript = cleanedTranscript || "No response provided.";
+    const answerDuration = questionStartTimeRef.current
+      ? Math.max(1, Math.round((Date.now() - questionStartTimeRef.current) / 1000))
+      : 0;
+    const focusMetrics = finalizeFocusMetrics();
+
+    await Promise.all([
+      postJson("/api/session/answer", {
+        sessionQuestionId,
+        transcript: safeTranscript,
+        duration: answerDuration,
+      }),
+    ]);
+
+    void postJson("/api/session/signal", {
+      attemptId,
+      type: "focus_metrics",
+      value: {
+        ...focusMetrics,
+        sessionQuestionId,
+      },
+    }).catch(() => undefined);
+  };
+
+  const getNextQuestion = async () => {
+    const cleanedTranscript = cleanTranscript(
+      transcriptRef.current.trim() || transcript.trim()
+    );
+    const safeTranscript = cleanedTranscript || "No response provided.";
+
+    const data = await postJson<{
+      question: string;
+      session_question_id: string;
+    }>("/api/session/next-question", {
+      attemptId,
+      lastQuestion: currentQuestion,
+      lastAnswer: safeTranscript,
+    });
+
+    await askQuestion(data.question, data.session_question_id);
   };
 
   const startListening = () => {
     recognitionRef.current = startRecognition(
-      () => {
-        if (silenceTimer.current) clearTimeout(silenceTimer.current);
+      (text) => {
+        const nextTranscript = text.trim();
+        if (!nextTranscript) return;
 
-        silenceTimer.current = setTimeout(() => {
-          handleAutoNext();
-        }, 3000);
-      },
-      () => handleAutoNext()
+        transcriptRef.current = nextTranscript;
+        setTranscript(nextTranscript);
+      }
     );
   };
 
@@ -183,21 +408,27 @@ export default function Page() {
     stopRecognition(recognitionRef.current);
     recognitionRef.current = null;
 
-    clearInterval(timerRef.current);
+    clearTimeout(questionTimeoutRef.current);
     clearTimeout(silenceTimer.current);
   };
 
-  const startTimer = () => {
+  const startRecordingTimer = () => {
+    clearInterval(timerRef.current);
+
     timerRef.current = setInterval(() => {
-      setTimeLeft((prev) => {
-        if (prev >= QUESTION_DURATION_SECONDS) {
-          clearInterval(timerRef.current);
-          handleAutoNext();
-          return QUESTION_DURATION_SECONDS;
-        }
-        return prev + 1;
-      });
+      const startTime = interviewStartTimeRef.current;
+      if (!startTime) return;
+
+      setTimeLeft(Math.max(0, Math.floor((Date.now() - startTime) / 1000)));
     }, 1000);
+  };
+
+  const startQuestionTimer = () => {
+    clearTimeout(questionTimeoutRef.current);
+
+    questionTimeoutRef.current = setTimeout(() => {
+      void handleAutoNext();
+    }, QUESTION_DURATION_SECONDS * 1000);
   };
 
   // 🎤 AUDIO ANALYSIS (FIXED CLEANUP)
@@ -246,8 +477,12 @@ export default function Page() {
     }
   };
 
-  const handleAutoNext = () => {
+  const handleAutoNext = async () => {
+    if (isAdvancingRef.current) return;
+    isAdvancingRef.current = true;
+
     stopAll();
+    stopAudioAnalysis();
 
     if (showCoding) {
       addEvent({
@@ -257,11 +492,25 @@ export default function Page() {
     }
 
     setVerisState("thinking");
+    setShowCoding(false);
+    setIsTransitioning(true);
 
-    setTimeout(() => {
-      setShowCoding(false);
-      setQuestionIndex((prev) => (prev + 1) % questions.length);
-    }, 800);
+    try {
+      await submitAnswer();
+      await getNextQuestion();
+      setIsTransitioning(false);
+    } catch (error) {
+      isAdvancingRef.current = false;
+      setIsTransitioning(false);
+      setWarning({
+        type: "hard",
+        message:
+          error instanceof Error
+            ? error.message
+            : "Connection issue while saving the response.",
+        visible: true,
+      });
+    }
   };
 
   // 🚨 TAB DETECTION
@@ -339,6 +588,44 @@ export default function Page() {
     }
   }, [multiFace, faceDetected, attention, started]);
 
+  useEffect(() => {
+    if (!started) return;
+
+    void sendSignal("face_detected", {
+      faces: faceCount,
+      confidence: faceDetected ? 0.92 : 0,
+      attention,
+      multiFace,
+    });
+  }, [attention, faceCount, faceDetected, multiFace, sessionQuestionId, started]);
+
+  useEffect(() => {
+    if (!started || faceDetected) return;
+
+    void sendSignal("no_face", {
+      faces: faceCount,
+      attention,
+    });
+  }, [attention, faceCount, faceDetected, sessionQuestionId, started]);
+
+  useEffect(() => {
+    if (!started || !multiFace) return;
+
+    void sendSignal("multi_face", {
+      faces: faceCount,
+      attention,
+    });
+  }, [attention, faceCount, multiFace, sessionQuestionId, started]);
+
+  useEffect(() => {
+    if (!started || !faceDetected || attention) return;
+
+    void sendSignal("attention_loss", {
+      faces: faceCount,
+      attention,
+    });
+  }, [attention, faceCount, faceDetected, sessionQuestionId, started]);
+
   // 👁️ LONG GAZE DETECTION
   useEffect(() => {
     if (!started) return;
@@ -389,6 +676,47 @@ export default function Page() {
     return () => window.removeEventListener("hireveri-event", handler);
   }, []);
 
+  useEffect(() => {
+    if (!started || !sessionQuestionId || !questionStartTimeRef.current) return;
+
+    const now = Date.now();
+    const currentIsLooking = faceDetected && attention;
+
+    if (focusSampleAtRef.current !== null) {
+      const delta = Math.max(0, now - focusSampleAtRef.current);
+      focusTotalMsRef.current += delta;
+
+      if (isLookingRef.current) {
+        focusTimeMsRef.current += delta;
+      }
+    }
+
+    if (isLookingRef.current && !currentIsLooking) {
+      lookAwayStartRef.current = now;
+    }
+
+    if (
+      !isLookingRef.current &&
+      currentIsLooking &&
+      lookAwayStartRef.current !== null
+    ) {
+      const lookAwayDuration = now - lookAwayStartRef.current;
+      maxLookAwayMsRef.current = Math.max(
+        maxLookAwayMsRef.current,
+        lookAwayDuration
+      );
+
+      if (lookAwayDuration >= 3000) {
+        lookAwayEventsRef.current += 1;
+      }
+
+      lookAwayStartRef.current = null;
+    }
+
+    isLookingRef.current = currentIsLooking;
+    focusSampleAtRef.current = now;
+  }, [attention, faceDetected, sessionQuestionId, started]);
+
   if (!started) {
     return <PrecheckScreen onStart={enterFullscreen} />;
   }
@@ -415,11 +743,12 @@ export default function Page() {
 
         <VerisOrb state={verisState} audioLevel={audioLevel} />
 
-        <TranscriptStream text={transcript} />
+        <TranscriptStream text={currentQuestion} />
 
         <InterviewControls
-          onNext={handleAutoNext}
-          onSkip={handleAutoNext}
+          disabled={isTransitioning}
+          onNext={() => void handleAutoNext()}
+          onSkip={() => void handleAutoNext()}
         />
 
         <button
@@ -432,7 +761,7 @@ export default function Page() {
 
       <CodeEditorModal
         open={showCoding}
-        question={currentQuestion.question}
+        question={currentQuestion}
         onClose={() => {
           addEvent({
             type: "coding_end",
@@ -440,7 +769,7 @@ export default function Page() {
           });
 
           setShowCoding(false);
-          handleAutoNext();
+          void handleAutoNext();
         }}
       />
 

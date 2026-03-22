@@ -10,6 +10,11 @@ type Props = {
 export default function VideoPanel({ timeLeft, onVideoReady }: Props) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const onVideoReadyRef = useRef(onVideoReady);
+  const elapsedSeconds = timeLeft ?? 0;
+  const minutes = Math.floor(elapsedSeconds / 60)
+    .toString()
+    .padStart(2, "0");
+  const seconds = (elapsedSeconds % 60).toString().padStart(2, "0");
 
   useEffect(() => {
     onVideoReadyRef.current = onVideoReady;
@@ -74,7 +79,7 @@ export default function VideoPanel({ timeLeft, onVideoReady }: Props) {
             REC
           </span>
           <span className="text-sm font-semibold tabular-nums text-red-300">
-            {timeLeft}s
+            {minutes}:{seconds}
           </span>
         </div>
       </div>
