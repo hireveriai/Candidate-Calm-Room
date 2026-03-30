@@ -2,6 +2,9 @@ import OpenAI from "openai";
 
 import { prisma } from "@/app/lib/prisma";
 
+export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
+
 type RequestBody = {
   attemptId?: string;
   lastQuestion?: string;
