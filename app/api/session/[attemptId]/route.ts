@@ -22,6 +22,21 @@ type InterviewSignalRecord = {
   created_at: Date | null;
 };
 
+type InterviewAnswerSummary = {
+  answer_id: string;
+  answer_text: string;
+  answer_payload: JsonValue | null;
+  answered_at: Date | null;
+};
+
+type SessionQuestionSummary = {
+  session_question_id: string;
+  content: string;
+  source: string;
+  asked_at: Date | null;
+  interview_answers: InterviewAnswerSummary[];
+};
+
 type FocusMetricsValue = {
   focusRatio?: number;
   lookAwayEvents?: number;
@@ -72,7 +87,7 @@ export async function GET(_: Request, context: RouteContext) {
         orderBy: {
           asked_at: "asc",
         },
-      }),
+      }) as Promise<SessionQuestionSummary[]>,
       prisma.$queryRaw<InterviewSignalRecord[]>`
         select signal_id, attempt_id, type, value, created_at
         from interview_signals
@@ -81,7 +96,7 @@ export async function GET(_: Request, context: RouteContext) {
       `,
     ]);
 
-    const timeline = sessionQuestions.map((item, index) => {
+    const timeline = sessionQuestions.map((item: SessionQuestionSummary, index: number) => {
       const nextQuestion = sessionQuestions[index + 1];
       const questionAskedAt = item.asked_at
         ? new Date(item.asked_at).getTime()
@@ -90,7 +105,7 @@ export async function GET(_: Request, context: RouteContext) {
         ? new Date(nextQuestion.asked_at).getTime()
         : Number.POSITIVE_INFINITY;
 
-      const questionSignals = signals.filter((signal) => {
+      const questionSignals = signals.filter((signal: InterviewSignalRecord) => {
         const createdAt = signal.created_at
           ? new Date(signal.created_at).getTime()
           : Number.NEGATIVE_INFINITY;
@@ -100,7 +115,7 @@ export async function GET(_: Request, context: RouteContext) {
 
       const focusSignal = [...questionSignals]
         .reverse()
-        .find((signal) => signal.type === "focus_metrics");
+        .find((signal: InterviewSignalRecord) => signal.type === "focus_metrics");
       const focusValue = focusSignal ? asFocusMetrics(focusSignal.value) : null;
 
       return {
