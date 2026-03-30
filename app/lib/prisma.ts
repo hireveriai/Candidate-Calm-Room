@@ -1,11 +1,12 @@
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 
-import { PrismaClient } from "../../node_modules/.prisma/client";
 import { Pool } from "pg";
 import { PrismaPg } from "@prisma/adapter-pg";
 
+const { PrismaClient } = require("@prisma/client");
+
 const globalForPrisma = global as unknown as {
-  prisma: PrismaClient | undefined;
+  prisma: InstanceType<typeof PrismaClient> | undefined;
 };
 
 const pool = new Pool({
