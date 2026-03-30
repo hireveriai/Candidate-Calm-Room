@@ -1,6 +1,12 @@
-import { Prisma } from "@prisma/client";
-
 import { prisma } from "@/app/lib/prisma";
+
+type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | { [key: string]: JsonValue }
+  | JsonValue[];
 
 type RouteContext = {
   params: Promise<{
@@ -12,7 +18,7 @@ type InterviewSignalRecord = {
   signal_id: string;
   attempt_id: string;
   type: string;
-  value: Prisma.JsonValue;
+  value: JsonValue;
   created_at: Date | null;
 };
 
@@ -25,7 +31,7 @@ type FocusMetricsValue = {
   sessionQuestionId?: string;
 };
 
-function asFocusMetrics(value: Prisma.JsonValue): FocusMetricsValue | null {
+function asFocusMetrics(value: JsonValue): FocusMetricsValue | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
   }
@@ -67,12 +73,12 @@ export async function GET(_: Request, context: RouteContext) {
           asked_at: "asc",
         },
       }),
-      prisma.$queryRaw<InterviewSignalRecord[]>(Prisma.sql`
+      prisma.$queryRaw<InterviewSignalRecord[]>`
         select signal_id, attempt_id, type, value, created_at
         from interview_signals
         where attempt_id = ${attemptId}::uuid
         order by created_at asc
-      `),
+      `,
     ]);
 
     const timeline = sessionQuestions.map((item, index) => {

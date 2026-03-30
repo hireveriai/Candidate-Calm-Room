@@ -1,6 +1,12 @@
-import { Prisma } from "@prisma/client";
-
 import { prisma } from "@/app/lib/prisma";
+
+type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | { [key: string]: JsonValue }
+  | JsonValue[];
 
 type RequestBody = {
   sessionQuestionId?: string;
@@ -14,7 +20,7 @@ type AnswerRecord = {
   question_id: string | null;
   session_question_id: string | null;
   answer_text: string;
-  answer_payload: Prisma.JsonValue | null;
+  answer_payload: JsonValue | null;
   answered_at: Date | null;
 };
 
@@ -37,7 +43,7 @@ export async function POST(request: Request) {
     const answerPayload =
       duration === undefined ? null : JSON.stringify({ duration });
 
-    const rows = await prisma.$queryRaw<AnswerRecord[]>(Prisma.sql`
+    const rows = await prisma.$queryRaw<AnswerRecord[]>`
       insert into interview_answers (
         attempt_id,
         question_id,
@@ -61,7 +67,7 @@ export async function POST(request: Request) {
         answer_text,
         answer_payload,
         answered_at
-    `);
+    `;
 
     console.log(
       `[session/answer] db:insert-returning ${Date.now() - insertStartedAt}ms total=${Date.now() - startedAt}ms`
