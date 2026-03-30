@@ -1,6 +1,6 @@
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 
-import { PrismaClient } from "@prisma/client";
+import { PrismaClient } from "../../node_modules/.prisma/client";
 import { Pool } from "pg";
 import { PrismaPg } from "@prisma/adapter-pg";
 
@@ -17,7 +17,7 @@ const adapter = new PrismaPg(pool);
 export const prisma =
   globalForPrisma.prisma ||
   new PrismaClient({
-    adapter, // 🔥 THIS IS THE KEY
+    adapter,
   });
 
 if (process.env.NODE_ENV !== "production") {
