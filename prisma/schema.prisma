@@ -463,7 +463,7 @@ model interview_attempts {
   attempt_number              Int
   started_at                  DateTime                     @default(now()) @db.Timestamptz(6)
   ended_at                    DateTime?                    @db.Timestamptz(6)
-  status                      String                       @default("STARTED")
+  status                      String                       @default("started")
   candidate_experience        String?
   mission_snapshot_id         String?                      @db.Uuid
   attempt_question_map        attempt_question_map[]

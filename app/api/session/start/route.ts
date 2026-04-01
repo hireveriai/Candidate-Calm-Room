@@ -62,7 +62,7 @@ export async function POST(request: Request) {
       },
     });
 
-    if (latestAttempt && latestAttempt.status === "STARTED") {
+    if (latestAttempt && latestAttempt.status === "started") {
       return Response.json({
         attemptId: latestAttempt.attempt_id,
         interviewId: invite.interview_id,
@@ -87,7 +87,7 @@ export async function POST(request: Request) {
         data: {
           interview_id: invite.interview_id,
           attempt_number: nextAttemptNumber,
-          status: "STARTED",
+          status: "started",
         },
         select: {
           attempt_id: true,
