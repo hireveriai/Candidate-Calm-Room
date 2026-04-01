@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useParams } from "next/navigation";
 
 import CalmLayout from "@/app/components/calm/core/CalmLayout";
 import CalmHeader from "@/app/components/calm/core/CalmHeader";
@@ -37,7 +38,6 @@ type Question = {
 };
 
 const QUESTION_DURATION_SECONDS = 90;
-const attemptId = "66666666-0000-0000-0000-000000000006";
 
 function cleanTranscript(text: string) {
   const collapsed = text
@@ -72,6 +72,9 @@ function roundMetric(value: number, digits = 2) {
 }
 
 export default function Page() {
+  const params = useParams<{ token: string }>();
+  const inviteToken = typeof params?.token === "string" ? params.token : "";
+
   const [started, setStarted] = useState(false);
   const [showExit, setShowExit] = useState(false);
 
@@ -81,6 +84,7 @@ export default function Page() {
   const [transcript, setTranscript] = useState("");
   const [timeLeft, setTimeLeft] = useState(0);
   const [isTransitioning, setIsTransitioning] = useState(false);
+  const [attemptId, setAttemptId] = useState("");
 
   const [audioLevel, setAudioLevel] = useState(0);
 
@@ -161,7 +165,7 @@ export default function Page() {
   };
 
   const sendSignal = async (type: string, value: unknown) => {
-    if (!sessionQuestionId || isAdvancingRef.current) {
+    if (!sessionQuestionId || !attemptId || isAdvancingRef.current) {
       return;
     }
 
@@ -278,9 +282,9 @@ export default function Page() {
   };
 
   useEffect(() => {
-    if (!started) return;
+    if (!started || !inviteToken) return;
     void startInterview();
-  }, [started]);
+  }, [inviteToken, started]);
 
   useEffect(() => {
     if (!started) return;
@@ -332,11 +336,22 @@ export default function Page() {
     setTimeLeft(0);
     startRecordingTimer();
 
+    const session = await postJson<{
+      attemptId: string;
+      interviewId: string;
+      attemptNumber?: number;
+      reused: boolean;
+    }>("/api/session/start", {
+      token: inviteToken,
+    });
+
+    setAttemptId(session.attemptId);
+
     const data = await postJson<{
       content: string;
       session_question_id: string;
     }>("/api/session/question", {
-      attemptId,
+      attemptId: session.attemptId,
       content: "Explain your experience",
       source: "system",
     });
@@ -346,7 +361,7 @@ export default function Page() {
   };
 
   const submitAnswer = async () => {
-    if (!sessionQuestionId) return;
+    if (!sessionQuestionId || !attemptId) return;
     const cleanedTranscript = cleanTranscript(
       transcriptRef.current.trim() || transcript.trim()
     );
@@ -375,6 +390,10 @@ export default function Page() {
   };
 
   const getNextQuestion = async () => {
+    if (!attemptId) {
+      throw new Error("Interview session is not initialized.");
+    }
+
     const cleanedTranscript = cleanTranscript(
       transcriptRef.current.trim() || transcript.trim()
     );
