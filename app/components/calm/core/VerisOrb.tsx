@@ -34,14 +34,14 @@ export default function VerisOrb({ state, audioLevel = 0 }: Props) {
   const waveDuration = isSpeaking ? 1.4 : isListening ? 2 : 2.4;
 
   return (
-    <div className="mt-3 flex items-center justify-center">
+    <div className="mt-2 flex items-center justify-center">
       <motion.div
-        className="relative flex h-36 w-36 items-center justify-center md:h-40 md:w-40"
+        className="relative flex h-32 w-32 items-center justify-center md:h-36 md:w-36"
         animate={{ scale: sphereScale }}
         transition={{ duration: 0.24, ease: "easeOut" }}
       >
         <motion.div
-          className="absolute inset-[-18%] rounded-full"
+          className="absolute inset-[-14%] rounded-full"
           style={{
             background:
               "radial-gradient(circle, rgba(34,211,238,0.16) 0%, rgba(56,189,248,0.06) 38%, rgba(2,6,23,0) 74%)",
