@@ -427,7 +427,7 @@ model interview_answers {
   answer_text                  String?
   answer_payload               Json?
   answered_at                  DateTime                       @default(now()) @db.Timestamptz(6)
-  session_question_id          String?                        @db.Uuid
+  session_question_id          String?                        @unique(map: "uq_interview_answers_session_question") @db.Uuid
   answer_evaluations           answer_evaluations[]
   interview_answer_evaluations interview_answer_evaluations[]
   interview_attempts           interview_attempts             @relation(fields: [attempt_id], references: [attempt_id], onDelete: Cascade, onUpdate: NoAction)
@@ -556,6 +556,7 @@ model interview_questions {
   question_id           String     @db.Uuid
   question_order        Int
   is_mandatory          Boolean    @default(true)
+  allow_follow_up       Boolean    @default(true)
   created_at            DateTime   @default(now()) @db.Timestamptz(6)
   interviews            interviews @relation(fields: [interview_id], references: [interview_id], onDelete: Cascade, onUpdate: NoAction)
   questions             questions  @relation(fields: [question_id], references: [question_id], onDelete: NoAction, onUpdate: NoAction)
@@ -632,6 +633,7 @@ model interviews {
   created_at                   DateTime                       @default(now()) @db.Timestamptz(6)
   duration_minutes             Int?                           @default(30)
   question_count               Int?                           @default(10)
+  required_follow_up_questions Int                            @default(2)
   ai_strictness                String?                        @default("MEDIUM")
   resume_ai_enabled            Boolean?                       @default(true)
   max_attempts                 Int?                           @default(1)
@@ -822,15 +824,23 @@ model roles {
 }
 
 model session_questions {
-  session_question_id String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  attempt_id          String              @db.Uuid
-  question_id         String?             @db.Uuid
-  content             String
-  source              String
-  asked_at            DateTime?           @default(now()) @db.Timestamptz(6)
-  interview_answers   interview_answers[]
-  interview_attempts  interview_attempts  @relation(fields: [attempt_id], references: [attempt_id], onDelete: NoAction, onUpdate: NoAction)
-  questions           questions?          @relation(fields: [question_id], references: [question_id], onDelete: NoAction, onUpdate: NoAction)
+  session_question_id       String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  attempt_id                String              @db.Uuid
+  question_id               String?             @db.Uuid
+  parent_session_question_id String?            @db.Uuid
+  content                   String
+  source                    String
+  question_kind             String              @default("core")
+  question_order            Int
+  asked_at                  DateTime?           @default(now()) @db.Timestamptz(6)
+  interview_answers         interview_answers[]
+  interview_attempts        interview_attempts  @relation(fields: [attempt_id], references: [attempt_id], onDelete: NoAction, onUpdate: NoAction)
+  parent_session_question   session_questions?  @relation("session_question_followups", fields: [parent_session_question_id], references: [session_question_id], onDelete: NoAction, onUpdate: NoAction)
+  follow_up_questions       session_questions[] @relation("session_question_followups")
+  questions                 questions?          @relation(fields: [question_id], references: [question_id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([attempt_id, question_order], map: "idx_session_questions_attempt_order")
+  @@index([parent_session_question_id], map: "idx_session_questions_parent")
 }
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.

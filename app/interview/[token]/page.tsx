@@ -32,11 +32,6 @@ import {
 
 type VerisState = "idle" | "listening" | "thinking" | "speaking";
 
-type Question = {
-  type: "text" | "coding";
-  question: string;
-};
-
 const QUESTION_DURATION_SECONDS = 90;
 
 function cleanTranscript(text: string) {
@@ -76,6 +71,10 @@ export default function Page() {
   const inviteToken = typeof params?.token === "string" ? params.token : "";
 
   const [started, setStarted] = useState(false);
+  const [interviewFinished, setInterviewFinished] = useState(false);
+  const [completionMessage, setCompletionMessage] = useState(
+    "Interview complete. Thank you for your time."
+  );
   const [showExit, setShowExit] = useState(false);
 
   const [verisState, setVerisState] = useState<VerisState>("idle");
@@ -123,7 +122,7 @@ export default function Page() {
     visible: false,
   });
 
-  const [tabViolations, setTabViolations] = useState(0);
+  const [, setTabViolations] = useState(0);
   const [showCoding, setShowCoding] = useState(false);
 
   const postJson = async <T,>(path: string, body: unknown): Promise<T> => {
@@ -252,19 +251,37 @@ export default function Page() {
   };
 
   const enterFullscreen = async () => {
+    setInterviewFinished(false);
     await document.documentElement.requestFullscreen();
     setStarted(true);
   };
 
-  const handleExit = async () => {
+  const endInterview = async ({
+    completed = false,
+    message,
+  }: {
+    completed?: boolean;
+    message?: string;
+  } = {}) => {
     exitIntentRef.current = true;
 
     if (document.fullscreenElement) {
       await document.exitFullscreen();
     }
 
+    setInterviewFinished(completed);
+    if (message) {
+      setCompletionMessage(message);
+    }
     setStarted(false);
     setShowExit(false);
+    setIsTransitioning(false);
+    setVerisState("idle");
+    setCurrentQuestion("");
+    setSessionQuestionId("");
+    setTranscript("");
+    transcriptRef.current = "";
+    isAdvancingRef.current = false;
 
     stopAll();
     stopAudioAnalysis();
@@ -279,6 +296,10 @@ export default function Page() {
     console.log("🧠 FINAL TIMELINE:", events);
     console.log("⚖️ FRAUD SCORE:", score);
     console.log("🚨 RISK LEVEL:", risk);
+  };
+
+  const handleExit = async () => {
+    await endInterview();
   };
 
   useEffect(() => {
@@ -332,6 +353,7 @@ export default function Page() {
 
   const startInterview = async () => {
     setIsTransitioning(true);
+    setInterviewFinished(false);
     interviewStartTimeRef.current = Date.now();
     setTimeLeft(0);
     startRecordingTimer();
@@ -400,13 +422,23 @@ export default function Page() {
     const safeTranscript = cleanedTranscript || "No response provided.";
 
     const data = await postJson<{
-      question: string;
-      session_question_id: string;
+      complete: boolean;
+      question?: string;
+      session_question_id?: string;
     }>("/api/session/next-question", {
       attemptId,
       lastQuestion: currentQuestion,
       lastAnswer: safeTranscript,
     });
+
+    if (data.complete || !data.question || !data.session_question_id) {
+      await endInterview({
+        completed: true,
+        message:
+          "Interview complete. Your responses, including follow-up questions, have been recorded.",
+      });
+      return;
+    }
 
     await askQuestion(data.question, data.session_question_id);
   };
@@ -735,6 +767,24 @@ export default function Page() {
     isLookingRef.current = currentIsLooking;
     focusSampleAtRef.current = now;
   }, [attention, faceDetected, sessionQuestionId, started]);
+
+  if (interviewFinished) {
+    return (
+      <div className="flex h-screen w-screen flex-col items-center justify-center bg-[#0B0F1A] px-6 text-white">
+        <div className="max-w-xl text-center">
+          <p className="mb-4 text-xs uppercase tracking-[0.28em] text-cyan-300/70">
+            Session Complete
+          </p>
+          <h1 className="mb-4 text-3xl font-medium tracking-[0.04em]">
+            Interview Finished
+          </h1>
+          <p className="text-sm leading-7 text-white/72 md:text-base">
+            {completionMessage}
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   if (!started) {
     return <PrecheckScreen onStart={enterFullscreen} />;

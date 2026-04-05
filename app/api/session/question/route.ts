@@ -10,41 +10,49 @@ type RequestBody = {
   source?: "system" | "ai";
 };
 
+type SessionQuestionRow = {
+  session_question_id: string;
+  question_id: string | null;
+  content: string;
+  source: string;
+  question_kind: string;
+  question_order: number;
+  asked_at: Date | null;
+};
+
 export async function POST(request: Request) {
   const startedAt = Date.now();
 
   try {
     console.log("[session/question] request:start");
     const body = (await request.json()) as RequestBody;
-    const { attemptId, questionId, content, source } = body;
+    const { attemptId } = body;
 
-    if (!attemptId || !content || !source) {
+    if (!attemptId) {
       return Response.json(
-        { error: "attemptId, content, and source are required" },
-        { status: 400 }
-      );
-    }
-
-    if (source !== "system" && source !== "ai") {
-      return Response.json(
-        { error: 'source must be "system" or "ai"' },
+        { error: "attemptId is required" },
         { status: 400 }
       );
     }
 
     const dbStartedAt = Date.now();
-    const sessionQuestion = await prisma.session_questions.create({
-      data: {
-        attempt_id: attemptId,
-        question_id: questionId,
-        content,
-        source,
-      },
-    });
+    const rows = await prisma.$queryRaw<SessionQuestionRow[]>`
+      select *
+      from public.get_first_interview_question(${attemptId}::uuid)
+    `;
+
+    const sessionQuestion = rows[0];
 
     console.log(
-      `[session/question] db:create ${Date.now() - dbStartedAt}ms total=${Date.now() - startedAt}ms`
+      `[session/question] db:get-first ${Date.now() - dbStartedAt}ms total=${Date.now() - startedAt}ms`
     );
+
+    if (!sessionQuestion) {
+      return Response.json(
+        { error: "No question available for this interview" },
+        { status: 404 }
+      );
+    }
 
     return Response.json(sessionQuestion);
   } catch (error) {

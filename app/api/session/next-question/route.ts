@@ -1,5 +1,3 @@
-import OpenAI from "openai";
-
 import { prisma } from "@/app/lib/prisma";
 
 export const dynamic = "force-dynamic";
@@ -11,37 +9,16 @@ type RequestBody = {
   lastAnswer?: string;
 };
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
-
-async function generateNextQuestion(lastQuestion: string, lastAnswer: string) {
-  const openAiStartedAt = Date.now();
-  const completion = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
-    temperature: 0.4,
-    max_tokens: 60,
-    messages: [
-      {
-        role: "system",
-        content: `You are an expert technical interviewer.
-Ask one deep, specific follow-up question.
-Avoid generic wording.
-Keep it concise.`,
-      },
-      {
-        role: "user",
-        content: `Previous question: "${lastQuestion}"
-Candidate answer: "${lastAnswer}"
-Ask one follow-up question only.`,
-      },
-    ],
-  });
-
-  console.log(`[session/next-question] openai ${Date.now() - openAiStartedAt}ms`);
-
-  return completion.choices[0]?.message?.content?.trim() || "Can you elaborate?";
-}
+type NextQuestionRow = {
+  session_question_id: string | null;
+  question_id: string | null;
+  content: string | null;
+  source: string | null;
+  question_kind: string | null;
+  question_order: number | null;
+  asked_at: Date | null;
+  is_complete: boolean;
+};
 
 export async function POST(request: Request) {
   const startedAt = Date.now();
@@ -49,68 +26,57 @@ export async function POST(request: Request) {
   try {
     console.log("[session/next-question] request:start");
     const body = (await request.json()) as RequestBody;
-    const { attemptId, lastQuestion, lastAnswer } = body;
+    const { attemptId, lastAnswer } = body;
 
-    if (!attemptId || !lastAnswer) {
+    if (!attemptId) {
       return Response.json(
-        { error: "attemptId and lastAnswer are required" },
+        { error: "attemptId is required" },
         { status: 400 }
       );
     }
 
-    if (!process.env.OPENAI_API_KEY) {
+    const createStartedAt = Date.now();
+    const rows = await prisma.$queryRaw<NextQuestionRow[]>`
+      select *
+      from public.get_next_interview_question(
+        ${attemptId}::uuid,
+        ${lastAnswer ?? null}
+      )
+    `;
+    console.log(
+      `[session/next-question] db:get-next ${Date.now() - createStartedAt}ms total=${Date.now() - startedAt}ms`
+    );
+
+    const sessionQuestion = rows[0];
+
+    if (!sessionQuestion) {
       return Response.json(
-        { error: "OPENAI_API_KEY is not configured" },
+        { error: "No next question result returned" },
         { status: 500 }
       );
     }
 
-    let effectiveLastQuestion = lastQuestion?.trim() || "";
-
-    if (!effectiveLastQuestion) {
-      const lookupStartedAt = Date.now();
-      const latestSessionQuestion = await prisma.session_questions.findFirst({
+    if (sessionQuestion.is_complete || !sessionQuestion.session_question_id) {
+      await prisma.interview_attempts.updateMany({
         where: {
           attempt_id: attemptId,
         },
-        orderBy: {
-          asked_at: "desc",
-        },
-        select: {
-          content: true,
+        data: {
+          status: "completed",
+          ended_at: new Date(),
         },
       });
-      console.log(
-        `[session/next-question] db:lookup ${Date.now() - lookupStartedAt}ms`
-      );
 
-      if (!latestSessionQuestion) {
-        return Response.json(
-          { error: "no session questions found for this attempt" },
-          { status: 400 }
-        );
-      }
-
-      effectiveLastQuestion = latestSessionQuestion.content;
+      return Response.json({
+        complete: true,
+      });
     }
 
-    const question = await generateNextQuestion(effectiveLastQuestion, lastAnswer);
-
-    const createStartedAt = Date.now();
-    const sessionQuestion = await prisma.session_questions.create({
-      data: {
-        attempt_id: attemptId,
-        content: question,
-        source: "ai",
-      },
-    });
-    console.log(
-      `[session/next-question] db:create ${Date.now() - createStartedAt}ms total=${Date.now() - startedAt}ms`
-    );
-
     return Response.json({
-      question,
+      complete: false,
+      question: sessionQuestion.content,
       session_question_id: sessionQuestion.session_question_id,
+      question_kind: sessionQuestion.question_kind,
     });
   } catch (error) {
     const message =

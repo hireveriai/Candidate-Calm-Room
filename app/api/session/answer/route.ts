@@ -43,37 +43,17 @@ export async function POST(request: Request) {
     }
 
     const insertStartedAt = Date.now();
-    const answerPayload =
-      duration === undefined ? null : JSON.stringify({ duration });
-
     const rows = await prisma.$queryRaw<AnswerRecord[]>`
-      insert into interview_answers (
-        attempt_id,
-        question_id,
-        session_question_id,
-        answer_text,
-        answer_payload
-      )
-      select
-        sq.attempt_id,
-        sq.question_id,
-        sq.session_question_id,
+      select *
+      from public.submit_interview_answer(
+        ${sessionQuestionId}::uuid,
         ${transcript},
-        ${answerPayload}::jsonb
-      from session_questions sq
-      where sq.session_question_id = ${sessionQuestionId}::uuid
-      returning
-        answer_id,
-        attempt_id,
-        question_id,
-        session_question_id,
-        answer_text,
-        answer_payload,
-        answered_at
+        ${duration ?? null}
+      )
     `;
 
     console.log(
-      `[session/answer] db:insert-returning ${Date.now() - insertStartedAt}ms total=${Date.now() - startedAt}ms`
+      `[session/answer] db:submit ${Date.now() - insertStartedAt}ms total=${Date.now() - startedAt}ms`
     );
 
     const answer = rows[0];
