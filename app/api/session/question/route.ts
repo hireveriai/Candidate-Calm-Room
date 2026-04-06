@@ -20,17 +20,26 @@ type SessionQuestionRow = {
   asked_at: Date | null;
 };
 
+function hasMissingFunctionError(error: unknown, functionName: string) {
+  return (
+    error instanceof Error &&
+    error.message.includes("Raw query failed") &&
+    error.message.includes(functionName) &&
+    error.message.includes("does not exist")
+  );
+}
+
 export async function POST(request: Request) {
   const startedAt = Date.now();
 
   try {
     console.log("[session/question] request:start");
     const body = (await request.json()) as RequestBody;
-    const { attemptId } = body;
+    const { attemptId, content, source } = body;
     const fallbackContent =
-      body.content?.trim() ||
+      content?.trim() ||
       "Tell me about your experience and the work most relevant to this role.";
-    const fallbackSource = body.source ?? "system";
+    const fallbackSource = source ?? "system";
 
     if (!attemptId) {
       return Response.json(
@@ -55,62 +64,86 @@ export async function POST(request: Request) {
       if (sessionQuestion) {
         return Response.json(sessionQuestion);
       }
-    } catch (dbError) {
-      const message =
-        dbError instanceof Error ? dbError.message : "Unknown first-question error";
-
-      console.log(
-        `[session/question] db:get-first failed after ${Date.now() - startedAt}ms: ${message}`
-      );
+    } catch (error) {
+      if (!hasMissingFunctionError(error, "public.get_first_interview_question")) {
+        throw error;
+      }
     }
 
     const fallbackStartedAt = Date.now();
-    const fallbackRows = await prisma.$queryRaw<SessionQuestionRow[]>`
-      with next_order as (
-        select coalesce(max(question_order), 0) + 1 as question_order
-        from public.session_questions
-        where attempt_id = ${attemptId}::uuid
-      )
-      insert into public.session_questions (
-        attempt_id,
-        question_id,
-        content,
-        source,
-        question_kind,
-        question_order
-      )
-      select
-        ${attemptId}::uuid,
-        null,
-        ${fallbackContent},
-        ${fallbackSource},
-        'core',
-        next_order.question_order
-      from next_order
-      returning
-        session_question_id,
-        question_id,
-        content,
-        source,
-        question_kind,
-        question_order,
-        asked_at
-    `;
+    const existingQuestion = await prisma.session_questions.findFirst({
+      where: {
+        attempt_id: attemptId,
+      },
+      orderBy: [
+        {
+          asked_at: "desc",
+        },
+        {
+          session_question_id: "desc",
+        },
+      ],
+    });
 
-    const fallbackQuestion = fallbackRows[0];
+    if (existingQuestion) {
+      return Response.json({
+        ...existingQuestion,
+        question_kind: existingQuestion.question_id ? "core" : "follow_up",
+        question_order: 1,
+      } satisfies SessionQuestionRow);
+    }
+
+    const attempt = await prisma.interview_attempts.findUnique({
+      where: {
+        attempt_id: attemptId,
+      },
+      select: {
+        interview_id: true,
+      },
+    });
+
+    if (!attempt) {
+      return Response.json(
+        { error: "Interview attempt not found" },
+        { status: 404 }
+      );
+    }
+
+    const firstPlannedQuestion = await prisma.interview_questions.findFirst({
+      where: {
+        interview_id: attempt.interview_id,
+      },
+      orderBy: {
+        question_order: "asc",
+      },
+      select: {
+        question_id: true,
+        questions: {
+          select: {
+            question_text: true,
+          },
+        },
+      },
+    });
+
+    const createdQuestion = await prisma.session_questions.create({
+      data: {
+        attempt_id: attemptId,
+        question_id: firstPlannedQuestion?.question_id ?? null,
+        content: firstPlannedQuestion?.questions.question_text || fallbackContent,
+        source: fallbackSource,
+      },
+    });
 
     console.log(
       `[session/question] fallback:create ${Date.now() - fallbackStartedAt}ms total=${Date.now() - startedAt}ms`
     );
 
-    if (!fallbackQuestion) {
-      return Response.json(
-        { error: "No question available for this interview" },
-        { status: 404 }
-      );
-    }
-
-    return Response.json(fallbackQuestion);
+    return Response.json({
+      ...createdQuestion,
+      question_kind: createdQuestion.question_id ? "core" : "follow_up",
+      question_order: 1,
+    } satisfies SessionQuestionRow);
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Failed to create session question";
