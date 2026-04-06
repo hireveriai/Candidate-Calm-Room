@@ -4,8 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "prisma generate && next build",
-    "postinstall": "prisma generate",
+    "build": "node scripts/prisma-generate-if-possible.js && tsc --noEmit && next build",
+    "postinstall": "node scripts/prisma-generate-if-possible.js",
     "start": "next start",
     "lint": "eslint"
   },

@@ -20,6 +20,14 @@ type NextQuestionRow = {
   is_complete: boolean;
 };
 
+type AskedQuestionRow = {
+  session_question_id: string;
+  question_id: string | null;
+  content: string;
+  source: string;
+  asked_at: Date | null;
+};
+
 function hasMissingFunctionError(error: unknown, functionName: string) {
   return (
     error instanceof Error &&
@@ -100,7 +108,7 @@ export async function POST(request: Request) {
         );
       }
 
-      const askedQuestions = await prisma.session_questions.findMany({
+      const askedQuestions = (await prisma.session_questions.findMany({
         where: {
           attempt_id: attemptId,
         },
@@ -112,7 +120,7 @@ export async function POST(request: Request) {
             session_question_id: "asc",
           },
         ],
-      });
+      })) as AskedQuestionRow[];
 
       const latestQuestion = askedQuestions.at(-1) ?? null;
       const totalLimit = attempt.interviews?.question_count ?? 9;
