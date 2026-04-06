@@ -352,34 +352,46 @@ export default function Page() {
   };
 
   const startInterview = async () => {
-    setIsTransitioning(true);
-    setInterviewFinished(false);
-    interviewStartTimeRef.current = Date.now();
-    setTimeLeft(0);
-    startRecordingTimer();
+    try {
+      setIsTransitioning(true);
+      setInterviewFinished(false);
+      interviewStartTimeRef.current = Date.now();
+      setTimeLeft(0);
+      startRecordingTimer();
 
-    const session = await postJson<{
-      attemptId: string;
-      interviewId: string;
-      attemptNumber?: number;
-      reused: boolean;
-    }>("/api/session/start", {
-      token: inviteToken,
-    });
+      const session = await postJson<{
+        attemptId: string;
+        interviewId: string;
+        attemptNumber?: number;
+        reused: boolean;
+      }>("/api/session/start", {
+        token: inviteToken,
+      });
 
-    setAttemptId(session.attemptId);
+      setAttemptId(session.attemptId);
 
-    const data = await postJson<{
-      content: string;
-      session_question_id: string;
-    }>("/api/session/question", {
-      attemptId: session.attemptId,
-      content: "Explain your experience",
-      source: "system",
-    });
+      const data = await postJson<{
+        content: string;
+        session_question_id: string;
+      }>("/api/session/question", {
+        attemptId: session.attemptId,
+        content: "Explain your experience",
+        source: "system",
+      });
 
-    setIsTransitioning(false);
-    await askQuestion(data.content, data.session_question_id);
+      setIsTransitioning(false);
+      await askQuestion(data.content, data.session_question_id);
+    } catch (error) {
+      setIsTransitioning(false);
+      setWarning({
+        type: "hard",
+        message:
+          error instanceof Error
+            ? error.message
+            : "Failed to start the interview session.",
+        visible: true,
+      });
+    }
   };
 
   const submitAnswer = async () => {
