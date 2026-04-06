@@ -1,0 +1,251 @@
+import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+
+import { CORS_HEADERS, asStringArray, createSupabase, jsonResponse } from "../_shared/common.ts";
+import { createJsonChatCompletion } from "../_shared/openai.ts";
+
+type GeneratedQuestion = {
+  question_text: string;
+  source_type: "resume" | "job" | "behavioral";
+  reference_context: Record<string, unknown>;
+  mapped_skill?: string;
+  phase_hint?: "warmup" | "core" | "probe" | "closing";
+  difficulty_level?: number;
+  allow_follow_up?: boolean;
+};
+
+function normalizeQuestions(payload: Record<string, unknown>): GeneratedQuestion[] {
+  const rawQuestions = Array.isArray(payload.questions) ? payload.questions : [];
+
+  return rawQuestions
+    .map((item) => {
+      if (!item || typeof item !== "object") {
+        return null;
+      }
+
+      const record = item as Record<string, unknown>;
+      const questionText =
+        typeof record.question_text === "string" ? record.question_text.trim() : "";
+      const sourceType =
+        record.source_type === "resume" ||
+        record.source_type === "job" ||
+        record.source_type === "behavioral"
+          ? record.source_type
+          : null;
+      const mappedSkill =
+        typeof record.mapped_skill === "string" ? record.mapped_skill.trim() : "";
+      const phaseHint =
+        record.phase_hint === "warmup" ||
+        record.phase_hint === "core" ||
+        record.phase_hint === "probe" ||
+        record.phase_hint === "closing"
+          ? record.phase_hint
+          : "core";
+      const difficultyLevel =
+        typeof record.difficulty_level === "number"
+          ? Math.max(1, Math.min(5, Math.round(record.difficulty_level)))
+          : 3;
+
+      if (!questionText || !sourceType) {
+        return null;
+      }
+
+      return {
+        question_text: questionText,
+        source_type: sourceType,
+        reference_context:
+          record.reference_context && typeof record.reference_context === "object"
+            ? (record.reference_context as Record<string, unknown>)
+            : {},
+        mapped_skill: mappedSkill || undefined,
+        phase_hint: phaseHint,
+        difficulty_level: difficultyLevel,
+        allow_follow_up: record.allow_follow_up !== false,
+      } satisfies GeneratedQuestion;
+    })
+    .filter((item): item is GeneratedQuestion => item !== null);
+}
+
+Deno.serve(async (request) => {
+  if (request.method === "OPTIONS") {
+    return new Response("ok", { headers: CORS_HEADERS });
+  }
+
+  if (request.method !== "POST") {
+    return jsonResponse({ success: false, error: "Method not allowed" }, 405);
+  }
+
+  try {
+    const { interview_id: interviewId } = (await request.json()) as {
+      interview_id?: string;
+    };
+
+    if (!interviewId?.trim()) {
+      return jsonResponse({ success: false, error: "interview_id is required" }, 400);
+    }
+
+    const supabase = createSupabase();
+
+    const { data: interview, error: interviewError } = await supabase
+      .from("interviews")
+      .select("interview_id, candidate_id, job_id, duration_minutes, question_count, ai_strictness")
+      .eq("interview_id", interviewId)
+      .single();
+
+    if (interviewError || !interview) {
+      return jsonResponse({ success: false, error: "Interview not found" }, 404);
+    }
+
+    const [{ data: resume }, { data: job }, { data: templateConfig }, { data: skills }] =
+      await Promise.all([
+        supabase
+          .from("candidate_resume_ai")
+          .select("raw_resume, extracted_skills, extracted_claims, claimed_experience_years")
+          .eq("interview_id", interviewId)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle(),
+        supabase
+          .from("job_positions")
+          .select("job_title, job_description, core_skills, difficulty_profile")
+          .eq("job_id", interview.job_id)
+          .single(),
+        supabase
+          .from("interview_configs")
+          .select("template_id, total_duration_minutes, mode")
+          .eq("interview_id", interviewId)
+          .maybeSingle(),
+        supabase
+          .from("interview_skill_map")
+          .select("skill_id, skill_master(skill_name, skill_code)")
+          .eq("interview_id", interviewId),
+      ]);
+
+    const targetQuestionCount =
+      typeof interview.question_count === "number" && interview.question_count > 0
+        ? interview.question_count
+        : typeof templateConfig?.total_duration_minutes === "number" &&
+            templateConfig.total_duration_minutes >= 60
+          ? 17
+          : typeof templateConfig?.total_duration_minutes === "number" &&
+              templateConfig.total_duration_minutes >= 45
+            ? 13
+            : 9;
+
+    const prompt = await createJsonChatCompletion(
+      [
+        {
+          role: "system",
+          content: [
+            "You are generating interview-specific questions for an adaptive AI interview.",
+            `Return exactly ${targetQuestionCount} questions in JSON under key "questions".`,
+            "Rules:",
+            "- Resume-based questions must verify claims from the candidate resume.",
+            "- Job-based questions must validate the job description and core skills.",
+            "- Behavioral questions must test communication, ownership, and decision-making.",
+            "- Include at least 2 strong follow-up-friendly core questions.",
+            "- Each question must include mapped_skill.",
+            "- Each question must include phase_hint from warmup/core/probe/closing.",
+            "- Each question must include difficulty_level from 1 to 5.",
+            "- Each question must include allow_follow_up boolean.",
+            "Return only JSON.",
+          ].join("\n"),
+        },
+        {
+          role: "user",
+          content: JSON.stringify(
+            {
+              interview,
+              resume: {
+                raw_resume: resume?.raw_resume ?? null,
+                extracted_skills: asStringArray(resume?.extracted_skills),
+                extracted_claims: resume?.extracted_claims ?? {},
+                claimed_experience_years: resume?.claimed_experience_years ?? null,
+              },
+              job: {
+                job_title: job?.job_title ?? null,
+                job_description: job?.job_description ?? null,
+                core_skills: asStringArray(job?.core_skills),
+                difficulty_profile: job?.difficulty_profile ?? null,
+              },
+              template_config: templateConfig ?? null,
+              interview_skills: skills ?? [],
+            },
+            null,
+            2
+          ),
+        },
+      ],
+      0.35
+    );
+
+    const questions = normalizeQuestions(prompt);
+
+    if (questions.length === 0) {
+      throw new Error("No valid questions generated");
+    }
+
+    await supabase.from("interview_questions").delete().eq("interview_id", interviewId).eq("is_dynamic", true);
+
+    const skillNames = questions
+      .map((question) => question.mapped_skill)
+      .filter((value): value is string => typeof value === "string" && value.length > 0);
+
+    const { data: skillRows } = skillNames.length
+      ? await supabase
+          .from("skill_master")
+          .select("skill_id, skill_name, skill_code")
+          .or(
+            skillNames
+              .map((skill) => `skill_name.eq.${skill},skill_code.eq.${skill}`)
+              .join(",")
+          )
+      : { data: [] };
+
+    const skillMap = new Map<string, string>();
+    for (const row of skillRows ?? []) {
+      if (typeof row.skill_name === "string") {
+        skillMap.set(row.skill_name.toLowerCase(), row.skill_id);
+      }
+      if (typeof row.skill_code === "string") {
+        skillMap.set(row.skill_code.toLowerCase(), row.skill_id);
+      }
+    }
+
+    const insertRows = questions.map((question, index) => ({
+      interview_id: interviewId,
+      question_id: null,
+      question_order: index + 1,
+      is_mandatory: true,
+      allow_follow_up: question.allow_follow_up ?? true,
+      question_text: question.question_text,
+      source_type: question.source_type,
+      reference_context: question.reference_context,
+      is_dynamic: true,
+      phase_hint: question.phase_hint ?? "core",
+      difficulty_level: question.difficulty_level ?? 3,
+      target_skill_id: question.mapped_skill
+        ? skillMap.get(question.mapped_skill.toLowerCase()) ?? null
+        : null,
+    }));
+
+    const { error: insertError } = await supabase.from("interview_questions").insert(insertRows);
+
+    if (insertError) {
+      throw new Error(`Failed to insert interview questions: ${insertError.message}`);
+    }
+
+    return jsonResponse({
+      success: true,
+      questions_inserted: insertRows.length,
+    });
+  } catch (error) {
+    console.error("[generate-questions]", error);
+    return jsonResponse(
+      {
+        success: false,
+        error: error instanceof Error ? error.message : "Unexpected error",
+      },
+      500
+    );
+  }
+});
