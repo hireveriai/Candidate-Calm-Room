@@ -40,7 +40,7 @@ export async function POST(request: Request) {
       select *
       from public.get_next_interview_question(
         ${attemptId}::uuid,
-        ${lastAnswer ?? null}
+        ${lastAnswer ?? null}::text
       )
     `;
     console.log(

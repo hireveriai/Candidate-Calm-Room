@@ -47,8 +47,8 @@ export async function POST(request: Request) {
       select *
       from public.submit_interview_answer(
         ${sessionQuestionId}::uuid,
-        ${transcript},
-        ${duration ?? null}
+        ${transcript}::text,
+        ${duration ?? null}::integer
       )
     `;
 

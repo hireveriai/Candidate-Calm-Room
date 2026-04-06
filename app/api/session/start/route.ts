@@ -25,7 +25,7 @@ export async function POST(request: Request) {
 
     const rows = await prisma.$queryRaw<SessionStartRow[]>`
       select *
-      from public.start_interview_session(${token})
+      from public.start_interview_session(${token}::text)
     `;
 
     const attempt = rows[0];
