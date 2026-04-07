@@ -20,6 +20,23 @@ type SessionQuestionRow = {
   asked_at: Date | null;
 };
 
+type ExistingSessionQuestionRow = {
+  session_question_id: string;
+  question_id: string | null;
+  content: string;
+  source: string;
+  asked_at: Date | null;
+};
+
+type AttemptInterviewRow = {
+  interview_id: string;
+};
+
+type PlannedQuestionRow = {
+  question_id: string;
+  question_text: string;
+};
+
 function hasMissingFunctionError(error: unknown, functionName: string) {
   return (
     error instanceof Error &&
@@ -71,19 +88,19 @@ export async function POST(request: Request) {
     }
 
     const fallbackStartedAt = Date.now();
-    const existingQuestion = await prisma.session_questions.findFirst({
-      where: {
-        attempt_id: attemptId,
-      },
-      orderBy: [
-        {
-          asked_at: "desc",
-        },
-        {
-          session_question_id: "desc",
-        },
-      ],
-    });
+    const existingQuestions = await prisma.$queryRaw<ExistingSessionQuestionRow[]>`
+      select
+        session_question_id,
+        question_id,
+        content,
+        source,
+        asked_at
+      from public.session_questions
+      where attempt_id = ${attemptId}::uuid
+      order by asked_at desc nulls last, session_question_id desc
+      limit 1
+    `;
+    const existingQuestion = existingQuestions[0];
 
     if (existingQuestion) {
       return Response.json({
@@ -93,14 +110,13 @@ export async function POST(request: Request) {
       } satisfies SessionQuestionRow);
     }
 
-    const attempt = await prisma.interview_attempts.findUnique({
-      where: {
-        attempt_id: attemptId,
-      },
-      select: {
-        interview_id: true,
-      },
-    });
+    const attempts = await prisma.$queryRaw<AttemptInterviewRow[]>`
+      select interview_id
+      from public.interview_attempts
+      where attempt_id = ${attemptId}::uuid
+      limit 1
+    `;
+    const attempt = attempts[0];
 
     if (!attempt) {
       return Response.json(
@@ -109,31 +125,40 @@ export async function POST(request: Request) {
       );
     }
 
-    const firstPlannedQuestion = await prisma.interview_questions.findFirst({
-      where: {
-        interview_id: attempt.interview_id,
-      },
-      orderBy: {
-        question_order: "asc",
-      },
-      select: {
-        question_id: true,
-        questions: {
-          select: {
-            question_text: true,
-          },
-        },
-      },
-    });
+    const plannedQuestions = await prisma.$queryRaw<PlannedQuestionRow[]>`
+      select
+        iq.question_id,
+        q.question_text
+      from public.interview_questions iq
+      join public.questions q
+        on q.question_id = iq.question_id
+      where iq.interview_id = ${attempt.interview_id}::uuid
+      order by iq.question_order asc
+      limit 1
+    `;
+    const firstPlannedQuestion = plannedQuestions[0];
 
-    const createdQuestion = await prisma.session_questions.create({
-      data: {
-        attempt_id: attemptId,
-        question_id: firstPlannedQuestion?.question_id ?? null,
-        content: firstPlannedQuestion?.questions.question_text || fallbackContent,
-        source: fallbackSource,
-      },
-    });
+    const createdQuestions = await prisma.$queryRaw<ExistingSessionQuestionRow[]>`
+      insert into public.session_questions (
+        attempt_id,
+        question_id,
+        content,
+        source
+      )
+      values (
+        ${attemptId}::uuid,
+        ${firstPlannedQuestion?.question_id ?? null}::uuid,
+        ${firstPlannedQuestion?.question_text ?? fallbackContent}::text,
+        ${fallbackSource}::text
+      )
+      returning
+        session_question_id,
+        question_id,
+        content,
+        source,
+        asked_at
+    `;
+    const createdQuestion = createdQuestions[0];
 
     console.log(
       `[session/question] fallback:create ${Date.now() - fallbackStartedAt}ms total=${Date.now() - startedAt}ms`
