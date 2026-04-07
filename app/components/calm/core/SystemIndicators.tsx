@@ -18,59 +18,50 @@ export default function SystemIndicators({
   verisState,
 }: Props) {
   return (
-    <div className="w-full flex items-center justify-center gap-6 mt-4 text-xs text-white/70">
-
-      {/* 👤 FACE STATUS */}
+    <div className="mt-4 flex w-full items-center justify-center gap-6 text-xs text-white/70">
       <div className="flex items-center gap-1">
         {faceCount === 1 && (
-          <span className="text-white/80">👤 Face Detected</span>
+          <span className="text-white/80">Face Detected</span>
         )}
         {faceCount === 0 && (
-          <span className="text-yellow-400">⚠️ No Face Detected</span>
+          <span className="text-yellow-400">No Face Detected</span>
         )}
         {faceCount > 1 && (
-          <span className="text-red-400">🚨 Multiple Faces</span>
+          <span className="text-red-400">Ensure only you are visible</span>
         )}
       </div>
 
-      {/* 🎤 MIC */}
       <div className="flex items-center gap-1">
         {micActive ? (
-          <span className="text-green-400">🎤 Mic Active</span>
+          <span className="text-green-400">Mic Active</span>
         ) : (
-          <span className="text-white/40">🎤 Mic Off</span>
+          <span className="text-white/40">Mic Off</span>
         )}
       </div>
 
-      {/* 👁️ ATTENTION */}
       <div className="flex items-center gap-1">
         {attention ? (
-          <span className="text-white/80">👁️ Focused</span>
+          <span className="text-white/80">Focused</span>
         ) : (
-          <span className="text-yellow-400">⚠️ Looking Away</span>
+          <span className="text-yellow-400">Stay focused on the screen</span>
         )}
       </div>
 
-      {/* 🔒 SECURE MODE */}
       <div className="flex items-center gap-1">
-        {secure && (
-          <span className="text-white/60">🔒 Secure</span>
-        )}
+        {secure && <span className="text-white/60">Secure</span>}
       </div>
 
-      {/* 🤖 VERIS STATE */}
       <div className="flex items-center gap-1">
         {verisState === "speaking" && (
-          <span className="text-blue-400">🗣️ Veris Speaking</span>
+          <span className="text-blue-400">Veris is asking a question</span>
         )}
         {verisState === "listening" && (
-          <span className="text-green-400">🎧 Veris Listening</span>
+          <span className="text-green-400">Veris Listening</span>
         )}
         {verisState === "thinking" && (
-          <span className="text-white/50">💭 Thinking</span>
+          <span className="text-white/50">Thinking</span>
         )}
       </div>
-
     </div>
   );
 }

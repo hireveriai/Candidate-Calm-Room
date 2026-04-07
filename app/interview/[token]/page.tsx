@@ -627,11 +627,11 @@ export default function Page() {
         severity: "high",
       });
 
-      setWarning({
-        type: "hard",
-        message: "Multiple faces detected.",
-        visible: true,
-      });
+        setWarning({
+          type: "hard",
+          message: "Ensure only you are visible.",
+          visible: true,
+        });
     } else if (!faceDetected) {
       addEvent({
         type: "no_face",
