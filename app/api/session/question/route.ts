@@ -18,6 +18,7 @@ type SessionQuestionRow = {
   question_kind: string;
   question_order: number;
   asked_at: Date | null;
+  question_type: string | null;
 };
 
 type ExistingSessionQuestionRow = {
@@ -35,6 +36,11 @@ type AttemptInterviewRow = {
 type PlannedQuestionRow = {
   question_id: string;
   question_text: string;
+  question_type: string | null;
+};
+
+type QuestionTypeRow = {
+  question_type: string | null;
 };
 
 function hasMissingFunctionError(error: unknown, functionName: string) {
@@ -79,7 +85,19 @@ export async function POST(request: Request) {
       );
 
       if (sessionQuestion) {
-        return Response.json(sessionQuestion);
+        const questionTypes = sessionQuestion.question_id
+          ? await prisma.$queryRaw<QuestionTypeRow[]>`
+              select question_type
+              from public.questions
+              where question_id = ${sessionQuestion.question_id}::uuid
+              limit 1
+            `
+          : [];
+
+        return Response.json({
+          ...sessionQuestion,
+          question_type: questionTypes[0]?.question_type ?? null,
+        } satisfies SessionQuestionRow);
       }
     } catch (error) {
       if (!hasMissingFunctionError(error, "public.get_first_interview_question")) {
@@ -103,10 +121,20 @@ export async function POST(request: Request) {
     const existingQuestion = existingQuestions[0];
 
     if (existingQuestion) {
+      const questionTypes = existingQuestion.question_id
+        ? await prisma.$queryRaw<QuestionTypeRow[]>`
+            select question_type
+            from public.questions
+            where question_id = ${existingQuestion.question_id}::uuid
+            limit 1
+          `
+        : [];
+
       return Response.json({
         ...existingQuestion,
         question_kind: existingQuestion.question_id ? "core" : "follow_up",
         question_order: 1,
+        question_type: questionTypes[0]?.question_type ?? null,
       } satisfies SessionQuestionRow);
     }
 
@@ -128,7 +156,8 @@ export async function POST(request: Request) {
     const plannedQuestions = await prisma.$queryRaw<PlannedQuestionRow[]>`
       select
         iq.question_id,
-        q.question_text
+        q.question_text,
+        q.question_type
       from public.interview_questions iq
       join public.questions q
         on q.question_id = iq.question_id
@@ -168,6 +197,7 @@ export async function POST(request: Request) {
       ...createdQuestion,
       question_kind: createdQuestion.question_id ? "core" : "follow_up",
       question_order: 1,
+      question_type: firstPlannedQuestion?.question_type ?? null,
     } satisfies SessionQuestionRow);
   } catch (error) {
     const message =

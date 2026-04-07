@@ -18,6 +18,7 @@ type NextQuestionRow = {
   question_order: number | null;
   asked_at: Date | null;
   is_complete: boolean;
+  question_type?: string | null;
 };
 
 type AskedQuestionRow = {
@@ -26,6 +27,10 @@ type AskedQuestionRow = {
   content: string;
   source: string;
   asked_at: Date | null;
+};
+
+type QuestionTypeRow = {
+  question_type: string | null;
 };
 
 function hasMissingFunctionError(error: unknown, functionName: string) {
@@ -186,6 +191,7 @@ export async function POST(request: Request) {
             questions: {
               select: {
                 question_text: true,
+                question_type: true,
               },
             },
           },
@@ -234,6 +240,7 @@ export async function POST(request: Request) {
               question_kind: createdQuestion.question_id ? "core" : "follow_up",
               question_order: askedTotal + 1,
               is_complete: false,
+              question_type: nextCore?.questions.question_type ?? null,
             }
           : {
               session_question_id: null,
@@ -275,11 +282,22 @@ export async function POST(request: Request) {
       });
     }
 
+    const questionTypes = sessionQuestion.question_id
+      ? await prisma.$queryRaw<QuestionTypeRow[]>`
+          select question_type
+          from public.questions
+          where question_id = ${sessionQuestion.question_id}::uuid
+          limit 1
+        `
+      : [];
+
     return Response.json({
       complete: false,
       question: sessionQuestion.content,
       session_question_id: sessionQuestion.session_question_id,
       question_kind: sessionQuestion.question_kind,
+      question_type:
+        sessionQuestion.question_type ?? questionTypes[0]?.question_type ?? null,
     });
   } catch (error) {
     const message =

@@ -34,6 +34,10 @@ type VerisState = "idle" | "listening" | "thinking" | "speaking";
 
 const QUESTION_DURATION_SECONDS = 90;
 
+function isCodingQuestionType(questionType: string | null | undefined) {
+  return /code|coding|programming/i.test(questionType ?? "");
+}
+
 function cleanTranscript(text: string) {
   const collapsed = text
     .replace(/\s+/g, " ")
@@ -328,7 +332,11 @@ export default function Page() {
     };
   }, [started]);
 
-  const askQuestion = async (question: string, nextSessionQuestionId: string) => {
+  const askQuestion = async (
+    question: string,
+    nextSessionQuestionId: string,
+    questionType?: string | null
+  ) => {
     stopAll();
     stopAudioAnalysis();
     isAdvancingRef.current = false;
@@ -338,16 +346,27 @@ export default function Page() {
     setSessionQuestionId(nextSessionQuestionId);
     setCurrentQuestion(question);
     setVerisState("thinking");
+    setShowCoding(false);
 
     setVerisState("speaking");
     await speak(question);
 
-    setVerisState("listening");
     questionStartTimeRef.current = Date.now();
     resetFocusMetrics();
-    startListening();
-
     startQuestionTimer();
+
+    if (isCodingQuestionType(questionType)) {
+      addEvent({
+        type: "coding_start",
+        severity: "low",
+      });
+      setVerisState("idle");
+      setShowCoding(true);
+      return;
+    }
+
+    setVerisState("listening");
+    startListening();
     startAudioAnalysis();
   };
 
@@ -373,6 +392,7 @@ export default function Page() {
       const data = await postJson<{
         content: string;
         session_question_id: string;
+        question_type?: string | null;
       }>("/api/session/question", {
         attemptId: session.attemptId,
         content: "Explain your experience",
@@ -380,7 +400,11 @@ export default function Page() {
       });
 
       setIsTransitioning(false);
-      await askQuestion(data.content, data.session_question_id);
+      await askQuestion(
+        data.content,
+        data.session_question_id,
+        data.question_type
+      );
     } catch (error) {
       setIsTransitioning(false);
       setWarning({
@@ -423,6 +447,22 @@ export default function Page() {
     }).catch(() => undefined);
   };
 
+  const submitCodeAnswer = async (code: string, language: string) => {
+    if (!sessionQuestionId || !attemptId) return;
+
+    const answerDuration = questionStartTimeRef.current
+      ? Math.max(1, Math.round((Date.now() - questionStartTimeRef.current) / 1000))
+      : 0;
+
+    await postJson("/api/session/code-answer", {
+      sessionQuestionId,
+      code,
+      language,
+      duration: answerDuration,
+      prompt: currentQuestion,
+    });
+  };
+
   const getNextQuestion = async () => {
     if (!attemptId) {
       throw new Error("Interview session is not initialized.");
@@ -437,6 +477,7 @@ export default function Page() {
       complete: boolean;
       question?: string;
       session_question_id?: string;
+      question_type?: string | null;
     }>("/api/session/next-question", {
       attemptId,
       lastQuestion: currentQuestion,
@@ -452,7 +493,48 @@ export default function Page() {
       return;
     }
 
-    await askQuestion(data.question, data.session_question_id);
+    await askQuestion(
+      data.question,
+      data.session_question_id,
+      data.question_type
+    );
+  };
+
+  const handleCodingSubmit = async (payload: {
+    code: string;
+    language: string;
+  }) => {
+    if (isAdvancingRef.current) return;
+    isAdvancingRef.current = true;
+
+    stopAll();
+    stopAudioAnalysis();
+
+    addEvent({
+      type: "coding_end",
+      severity: "low",
+    });
+
+    setShowCoding(false);
+    setIsTransitioning(true);
+    setVerisState("thinking");
+
+    try {
+      await submitCodeAnswer(payload.code, payload.language);
+      await getNextQuestion();
+      setIsTransitioning(false);
+    } catch (error) {
+      isAdvancingRef.current = false;
+      setIsTransitioning(false);
+      setWarning({
+        type: "hard",
+        message:
+          error instanceof Error
+            ? error.message
+            : "Failed to submit the coding answer.",
+        visible: true,
+      });
+    }
   };
 
   const startListening = () => {
@@ -843,6 +925,7 @@ export default function Page() {
       <CodeEditorModal
         open={showCoding}
         question={currentQuestion}
+        onSubmit={handleCodingSubmit}
         onClose={() => {
           addEvent({
             type: "coding_end",
