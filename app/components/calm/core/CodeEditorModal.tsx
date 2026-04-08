@@ -47,6 +47,10 @@ export default function CodeEditorModal({
   const prevLength = useRef(0);
 
   useEffect(() => {
+    if (!open || editorReady) {
+      return;
+    }
+
     let mounted = true;
 
     const configureMonaco = async () => {
@@ -69,7 +73,7 @@ export default function CodeEditorModal({
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [editorReady, open]);
 
   useEffect(() => {
     if (!open) return;

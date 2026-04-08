@@ -1,0 +1,146 @@
+import { analyzeAnswer } from "./answerAnalyzer.ts";
+import { calculateConsistency } from "./consistencyEngine.ts";
+import { calculateFraudRisk } from "./fraudEngine.ts";
+import { calculateSkipPenalty } from "./skipEngine.ts";
+import type { AnswerMetrics, CandidateEvaluation, EvaluatedAnswer } from "./types.ts";
+
+function clampScore(value: number): number {
+  return Math.max(0, Math.min(100, value));
+}
+
+function roundScore(value: number): number {
+  return Math.round(clampScore(value) * 100) / 100;
+}
+
+function average(values: number[]): number {
+  if (values.length === 0) {
+    return 0;
+  }
+
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function uniqueFlags(flags: string[]): string[] {
+  return [...new Set(flags)];
+}
+
+function getAnswerWeight(answer: AnswerMetrics): number {
+  const difficultyWeight =
+    answer.difficulty === "easy" ? 1 : answer.difficulty === "medium" ? 1.2 : 1.5;
+
+  return difficultyWeight + (answer.isCritical ? 0.5 : 0);
+}
+
+function calculateCognitiveScore(answers: AnswerMetrics[]): number {
+  if (answers.length === 0) {
+    return 0;
+  }
+
+  const totalWeight = answers.reduce((sum, answer) => sum + getAnswerWeight(answer), 0);
+  const completedWeight = answers.reduce(
+    (sum, answer) => sum + (answer.skipped ? 0 : getAnswerWeight(answer)),
+    0
+  );
+  const hardQuestions = answers.filter((answer) => answer.difficulty === "hard");
+  const criticalQuestions = answers.filter((answer) => answer.isCritical);
+  const completionRate = totalWeight > 0 ? completedWeight / totalWeight : 0;
+  const hardCompletionRate =
+    hardQuestions.length > 0
+      ? hardQuestions.filter((answer) => !answer.skipped).length / hardQuestions.length
+      : completionRate;
+  const criticalCompletionRate =
+    criticalQuestions.length > 0
+      ? criticalQuestions.filter((answer) => !answer.skipped).length / criticalQuestions.length
+      : completionRate;
+
+  return roundScore(
+    (completionRate * 70 * 1) + (hardCompletionRate * 15 * 1) + (criticalCompletionRate * 15 * 1)
+  );
+}
+
+function calculateConfidenceScore(evaluatedAnswers: EvaluatedAnswer[]): number {
+  if (evaluatedAnswers.length === 0) {
+    return 0;
+  }
+
+  const averageConfidence = average(
+    evaluatedAnswers.map((evaluatedAnswer) => evaluatedAnswer.analysis.confidenceScore)
+  );
+  const averageHesitation = average(
+    evaluatedAnswers.map((evaluatedAnswer) => evaluatedAnswer.analysis.hesitationScore)
+  );
+  const averageRetryCount = average(
+    evaluatedAnswers.map((evaluatedAnswer) => Math.min(evaluatedAnswer.metrics.retryCount, 4))
+  );
+
+  return roundScore(
+    (averageConfidence * 0.65) +
+      ((100 - averageHesitation) * 0.35) -
+      (averageRetryCount * 5)
+  );
+}
+
+export function calculateFinalScore(
+  evaluation: Omit<CandidateEvaluation, "finalScore" | "flags">
+): number {
+  return roundScore(
+    (0.35 * evaluation.cognitiveScore) +
+      (0.25 * evaluation.communicationScore) +
+      (0.20 * evaluation.behavioralConsistencyScore) +
+      (0.20 * evaluation.confidenceScore) -
+      evaluation.skipPenalty
+  );
+}
+
+export function evaluateCandidate(answers: AnswerMetrics[]): CandidateEvaluation {
+  if (answers.length === 0) {
+    return {
+      cognitiveScore: 0,
+      communicationScore: 0,
+      confidenceScore: 0,
+      behavioralConsistencyScore: 0,
+      fraudRiskScore: 0,
+      skipPenalty: 0,
+      finalScore: 0,
+      flags: ["NO_ANSWERS_PROVIDED"],
+    };
+  }
+
+  const evaluatedAnswers: EvaluatedAnswer[] = answers.map((answer) => ({
+    metrics: answer,
+    analysis: analyzeAnswer(answer),
+  }));
+
+  const communicationScore = roundScore(
+    average(evaluatedAnswers.map((evaluatedAnswer) => evaluatedAnswer.analysis.communicationScore))
+  );
+  const confidenceScore = calculateConfidenceScore(evaluatedAnswers);
+  const cognitiveScore = calculateCognitiveScore(answers);
+  const consistency = calculateConsistency(answers);
+  const fraudRisk = calculateFraudRisk(
+    answers,
+    evaluatedAnswers.map((evaluatedAnswer) => evaluatedAnswer.analysis),
+    consistency.score
+  );
+  const skipPenalty = calculateSkipPenalty(answers);
+
+  const baseEvaluation = {
+    cognitiveScore,
+    communicationScore,
+    confidenceScore,
+    behavioralConsistencyScore: consistency.score,
+    fraudRiskScore: fraudRisk.score,
+    skipPenalty: skipPenalty.penalty,
+  };
+
+  return {
+    ...baseEvaluation,
+    finalScore: calculateFinalScore(baseEvaluation),
+    flags: uniqueFlags([
+      ...evaluatedAnswers.flatMap((evaluatedAnswer) => evaluatedAnswer.analysis.riskFlags),
+      ...consistency.flags,
+      ...fraudRisk.flags,
+      ...skipPenalty.flags,
+    ]),
+  };
+}

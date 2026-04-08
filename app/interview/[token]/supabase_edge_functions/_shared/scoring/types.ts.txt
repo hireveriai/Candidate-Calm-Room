@@ -1,0 +1,70 @@
+export type DifficultyLevel = "easy" | "medium" | "hard";
+
+export type EvaluationFlag =
+  | "AVOIDANCE_PATTERN"
+  | "CRITICAL_QUESTION_SKIPPED"
+  | "HIGH_HESITATION"
+  | "LOW_CONFIDENCE"
+  | "COMMUNICATION_CONCERN"
+  | "INCONSISTENT_BEHAVIOR"
+  | "SUSPICIOUS_RESPONSE_PATTERN"
+  | "NO_ANSWERS_PROVIDED"
+  | "SKIPPED_ANSWER"
+  | (string & {});
+
+export type AnswerMetrics = {
+  questionId: string;
+  timeToStart: number;
+  answerDuration: number;
+  wordCount: number;
+  pauseCount: number;
+  retryCount: number;
+  difficulty: DifficultyLevel;
+  isCritical: boolean;
+  skipped: boolean;
+};
+
+export type AnswerAnalysis = {
+  questionId: string;
+  hesitationScore: number;
+  confidenceScore: number;
+  communicationScore: number;
+  riskFlags: EvaluationFlag[];
+};
+
+export type EvaluatedAnswer = {
+  metrics: AnswerMetrics;
+  analysis: AnswerAnalysis;
+};
+
+export type SkipPenaltyResult = {
+  penalty: number;
+  skippedCount: number;
+  criticalSkippedCount: number;
+  flags: EvaluationFlag[];
+};
+
+export type ConsistencyResult = {
+  score: number;
+  durationVariance: number;
+  wordCountVariance: number;
+  abruptShiftCount: number;
+  flags: EvaluationFlag[];
+};
+
+export type FraudRiskResult = {
+  score: number;
+  suspiciousAnswerCount: number;
+  flags: EvaluationFlag[];
+};
+
+export type CandidateEvaluation = {
+  cognitiveScore: number;
+  communicationScore: number;
+  confidenceScore: number;
+  behavioralConsistencyScore: number;
+  fraudRiskScore: number;
+  skipPenalty: number;
+  finalScore: number;
+  flags: EvaluationFlag[];
+};

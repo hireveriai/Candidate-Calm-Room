@@ -1,16 +1,15 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 
 import CalmLayout from "@/app/components/calm/core/CalmLayout";
 import CalmHeader from "@/app/components/calm/core/CalmHeader";
 import VideoPanel from "@/app/components/calm/core/VideoPanel";
-import VerisOrb from "@/app/components/calm/core/VerisOrb";
 import TranscriptStream from "@/app/components/calm/core/TranscriptStream";
 import SystemIndicators from "@/app/components/calm/core/SystemIndicators";
 import InterviewControls from "@/app/components/calm/core/InterviewControls";
-import CodeEditorModal from "@/app/components/calm/core/CodeEditorModal";
 import PrecheckScreen from "@/app/components/calm/flow/PrecheckScreen";
 import ExitModal from "@/app/components/calm/flow/ExitModal";
 
@@ -31,6 +30,16 @@ import {
 } from "@/app/utils/fraudEngine";
 
 type VerisState = "idle" | "listening" | "thinking" | "speaking";
+
+const CodeEditorModal = dynamic(
+  () => import("@/app/components/calm/core/CodeEditorModal"),
+  { ssr: false }
+);
+
+const VerisOrb = dynamic(
+  () => import("@/app/components/calm/core/VerisOrb"),
+  { ssr: false }
+);
 
 const QUESTION_DURATION_SECONDS = 90;
 
@@ -116,7 +125,7 @@ export default function Page() {
   const audioContextRef = useRef<AudioContext | null>(null);
 
   const { faceCount, faceDetected, multiFace, attention } =
-    useCognitiveSignals({ videoRef });
+    useCognitiveSignals({ videoRef, enabled: started });
 
   const { events, addEvent } = useEventTimeline();
 
@@ -922,20 +931,22 @@ export default function Page() {
         </button>
       </CalmLayout>
 
-      <CodeEditorModal
-        open={showCoding}
-        question={currentQuestion}
-        onSubmit={handleCodingSubmit}
-        onClose={() => {
-          addEvent({
-            type: "coding_end",
-            severity: "low",
-          });
+      {showCoding ? (
+        <CodeEditorModal
+          open={showCoding}
+          question={currentQuestion}
+          onSubmit={handleCodingSubmit}
+          onClose={() => {
+            addEvent({
+              type: "coding_end",
+              severity: "low",
+            });
 
-          setShowCoding(false);
-          void handleAutoNext();
-        }}
-      />
+            setShowCoding(false);
+            void handleAutoNext();
+          }}
+        />
+      ) : null}
 
       {showExit && (
         <ExitModal

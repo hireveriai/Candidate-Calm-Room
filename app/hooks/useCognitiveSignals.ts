@@ -1,13 +1,33 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import * as faceapi from "face-api.js";
 
 type Props = {
   videoRef: React.RefObject<HTMLVideoElement | null>;
+  enabled?: boolean;
 };
 
-export default function useCognitiveSignals({ videoRef }: Props) {
+let faceApiReadyPromise: Promise<typeof import("face-api.js")> | null = null;
+
+function loadFaceApi() {
+  if (!faceApiReadyPromise) {
+    faceApiReadyPromise = import("face-api.js").then(async (faceapi) => {
+      await Promise.all([
+        faceapi.nets.tinyFaceDetector.loadFromUri("/models"),
+        faceapi.nets.faceLandmark68Net.loadFromUri("/models"),
+      ]);
+
+      return faceapi;
+    });
+  }
+
+  return faceApiReadyPromise;
+}
+
+export default function useCognitiveSignals({
+  videoRef,
+  enabled = false,
+}: Props) {
   const [faceCount, setFaceCount] = useState(0);
   const [faceDetected, setFaceDetected] = useState(false);
   const [multiFace, setMultiFace] = useState(false);
@@ -16,54 +36,46 @@ export default function useCognitiveSignals({ videoRef }: Props) {
   const [audioAnomaly, setAudioAnomaly] = useState(false);
 
   useEffect(() => {
-    let interval: any;
+    if (!enabled) {
+      return;
+    }
 
-    const loadModels = async () => {
-      console.log("🔄 Loading models...");
-      await faceapi.nets.tinyFaceDetector.loadFromUri("/models");
-      await faceapi.nets.faceLandmark68Net.loadFromUri("/models");
-      console.log("✅ Models loaded");
-    };
+    let interval: ReturnType<typeof setInterval> | null = null;
+    let cancelled = false;
 
-    const detect = async () => {
-      if (!videoRef.current) return;
-
+    const detect = async (faceapi: typeof import("face-api.js")) => {
       const video = videoRef.current;
 
-      // ✅ EXACT SAME CHECK AS YOUR WORKING VERSION
-      if (video.readyState !== 4) {
-        console.log("⛔ Video not ready");
+      if (!video || video.readyState !== 4) {
         return;
       }
 
       try {
-        // 🔥 USE detectAllFaces BUT WITH CONFIG (IMPORTANT)
         const detections = await faceapi
           .detectAllFaces(
             video,
             new faceapi.TinyFaceDetectorOptions({
-              inputSize: 416,       // 👈 KEY FIX
-              scoreThreshold: 0.3,  // 👈 MORE LENIENT
+              inputSize: 320,
+              scoreThreshold: 0.3,
             })
           )
           .withFaceLandmarks();
 
-        const count = detections.length;
+        if (cancelled) {
+          return;
+        }
 
-        console.log("👀 Face count:", count);
+        const count = detections.length;
 
         setFaceCount(count);
         setFaceDetected(count >= 1);
         setMultiFace(count > 1);
 
-        // 👁️ ATTENTION (ONLY IF 1 FACE)
         if (count === 1) {
           const landmarks = detections[0].landmarks;
-
           const nose = landmarks.getNose()[3];
           const leftEye = landmarks.getLeftEye()[0];
           const rightEye = landmarks.getRightEye()[3];
-
           const eyeCenterX = (leftEye.x + rightEye.x) / 2;
           const deviation = Math.abs(nose.x - eyeCenterX);
 
@@ -71,43 +83,64 @@ export default function useCognitiveSignals({ videoRef }: Props) {
         } else {
           setAttention(true);
         }
-
-      } catch (err) {
-        console.error("❌ Detection error:", err);
+      } catch (error) {
+        console.error("Face detection error:", error);
       }
     };
 
     const start = async () => {
-      await loadModels();
+      const faceapi = await loadFaceApi();
 
-      // ⏱️ SAME INTERVAL AS BEFORE (STABLE)
-      interval = setInterval(detect, 1000);
+      if (cancelled) {
+        return;
+      }
+
+      interval = setInterval(() => {
+        void detect(faceapi);
+      }, 1_200);
     };
 
-    start();
+    void start();
 
-    return () => clearInterval(interval);
-  }, [videoRef]);
+    return () => {
+      cancelled = true;
 
-  // 🪟 TAB DETECTION
+      if (interval) {
+        clearInterval(interval);
+      }
+    };
+  }, [enabled, videoRef]);
+
   useEffect(() => {
-    const handle = () => {
+    const handleVisibilityChange = () => {
       setTabActive(document.visibilityState === "visible");
     };
 
-    document.addEventListener("visibilitychange", handle);
-    return () => document.removeEventListener("visibilitychange", handle);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () =>
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
   }, []);
 
-  // 🔊 AUDIO ANOMALY (UNCHANGED)
   useEffect(() => {
-    let frame: number;
+    if (!enabled) {
+      return;
+    }
+
+    let frame = 0;
+    let stream: MediaStream | null = null;
+    let ctx: AudioContext | null = null;
+    let cancelled = false;
 
     const setup = async () => {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-        const ctx = new AudioContext();
+        if (cancelled) {
+          stream.getTracks().forEach((track) => track.stop());
+          return;
+        }
+
+        ctx = new AudioContext();
         const src = ctx.createMediaStreamSource(stream);
         const analyser = ctx.createAnalyser();
 
@@ -117,31 +150,42 @@ export default function useCognitiveSignals({ videoRef }: Props) {
         const data = new Uint8Array(analyser.frequencyBinCount);
 
         const loop = () => {
+          if (cancelled) {
+            return;
+          }
+
           analyser.getByteFrequencyData(data);
-          const avg = data.reduce((a, b) => a + b, 0) / data.length;
+          const avg = data.reduce((sum, value) => sum + value, 0) / data.length;
 
           setAudioAnomaly(avg > 180);
-
           frame = requestAnimationFrame(loop);
         };
 
         loop();
-      } catch (e) {
-        console.error(e);
+      } catch (error) {
+        console.error(error);
       }
     };
 
-    setup();
+    void setup();
 
-    return () => cancelAnimationFrame(frame);
-  }, []);
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(frame);
+      stream?.getTracks().forEach((track) => track.stop());
+
+      if (ctx && ctx.state !== "closed") {
+        void ctx.close();
+      }
+    };
+  }, [enabled]);
 
   return {
-    faceCount,
-    faceDetected,
-    multiFace,
-    attention,
+    faceCount: enabled ? faceCount : 0,
+    faceDetected: enabled ? faceDetected : false,
+    multiFace: enabled ? multiFace : false,
+    attention: enabled ? attention : true,
     tabActive,
-    audioAnomaly,
+    audioAnomaly: enabled ? audioAnomaly : false,
   };
 }

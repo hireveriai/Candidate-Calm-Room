@@ -1,0 +1,83 @@
+import { analyzeAnswer } from "./answerAnalyzer.ts";
+import type { AnswerAnalysis, AnswerMetrics, FraudRiskResult } from "./types.ts";
+
+function clampScore(value: number): number {
+  return Math.max(0, Math.min(100, value));
+}
+
+function roundScore(value: number): number {
+  return Math.round(clampScore(value) * 100) / 100;
+}
+
+function average(values: number[]): number {
+  if (values.length === 0) {
+    return 0;
+  }
+
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+export function calculateFraudRisk(
+  answers: AnswerMetrics[],
+  analyses?: AnswerAnalysis[],
+  consistencyScore = 100
+): FraudRiskResult {
+  const resolvedAnalyses = analyses ?? answers.map((answer) => analyzeAnswer(answer));
+
+  let suspiciousAnswerCount = 0;
+  let criticalSkippedCount = 0;
+  let skippedCount = 0;
+
+  answers.forEach((answer, index) => {
+    const analysis = resolvedAnalyses[index];
+
+    if (answer.skipped) {
+      skippedCount += 1;
+      if (answer.isCritical) {
+        criticalSkippedCount += 1;
+      }
+      return;
+    }
+
+    if (analysis.hesitationScore >= 70 && answer.retryCount >= 2) {
+      suspiciousAnswerCount += 1;
+    }
+  });
+
+  const averageHesitation = average(resolvedAnalyses.map((analysis) => analysis.hesitationScore));
+  const retryPressure = average(answers.map((answer) => Math.min(answer.retryCount, 4))) / 4;
+  const inconsistencyPressure = (100 - clampScore(consistencyScore)) / 100;
+
+  const score = roundScore(
+    (suspiciousAnswerCount * 18) +
+      (criticalSkippedCount * 25) +
+      (skippedCount >= 2 ? 10 : 0) +
+      (averageHesitation * 0.18) +
+      (retryPressure * 22) +
+      (inconsistencyPressure * 30)
+  );
+
+  const flags: FraudRiskResult["flags"] = [];
+
+  if (suspiciousAnswerCount > 0 || score >= 70) {
+    flags.push("SUSPICIOUS_RESPONSE_PATTERN");
+  }
+
+  if (criticalSkippedCount > 0) {
+    flags.push("CRITICAL_QUESTION_SKIPPED");
+  }
+
+  if (skippedCount >= 2) {
+    flags.push("AVOIDANCE_PATTERN");
+  }
+
+  if (consistencyScore < 60) {
+    flags.push("INCONSISTENT_BEHAVIOR");
+  }
+
+  return {
+    score,
+    suspiciousAnswerCount,
+    flags,
+  };
+}

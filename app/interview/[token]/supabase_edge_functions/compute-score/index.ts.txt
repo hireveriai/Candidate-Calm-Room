@@ -1,6 +1,375 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
 import { CORS_HEADERS, createSupabase, jsonResponse } from "../_shared/common.ts";
+import { evaluateCandidate } from "../_shared/scoring/scoringEngine.ts";
+import type { AnswerMetrics, DifficultyLevel } from "../_shared/scoring/types.ts";
+
+type ComputeScoreRequest = {
+  attempt_id?: string;
+  answers?: unknown[];
+};
+
+type SessionQuestionRecord = {
+  session_question_id?: string | null;
+  difficulty_level?: number | null;
+  source_context?: Record<string, unknown> | null;
+  contradiction_probe?: boolean | null;
+};
+
+type StoredAnswerRecord = {
+  answer_id?: string;
+  answer_text?: string | null;
+  answer_payload?: Record<string, unknown> | null;
+  session_question_id?: string | null;
+  session_questions?: SessionQuestionRecord | SessionQuestionRecord[] | null;
+};
+
+type DerivedAnswerMetrics = {
+  metrics: AnswerMetrics;
+  missingFields: string[];
+};
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function asNonNegativeNumber(value: unknown): number | null {
+  if (typeof value !== "number" || Number.isNaN(value) || value < 0) {
+    return null;
+  }
+
+  return value;
+}
+
+function asBoolean(value: unknown): boolean | null {
+  return typeof value === "boolean" ? value : null;
+}
+
+function getNestedValue(record: Record<string, unknown>, path: string[]): unknown {
+  let current: unknown = record;
+
+  for (const key of path) {
+    const currentRecord = asRecord(current);
+    if (!currentRecord || !(key in currentRecord)) {
+      return undefined;
+    }
+    current = currentRecord[key];
+  }
+
+  return current;
+}
+
+function extractNumber(record: Record<string, unknown>, paths: string[][]): number | null {
+  for (const path of paths) {
+    const value = asNonNegativeNumber(getNestedValue(record, path));
+    if (value !== null) {
+      return value;
+    }
+  }
+
+  return null;
+}
+
+function extractBoolean(record: Record<string, unknown>, paths: string[][]): boolean | null {
+  for (const path of paths) {
+    const value = asBoolean(getNestedValue(record, path));
+    if (value !== null) {
+      return value;
+    }
+  }
+
+  return null;
+}
+
+function countWords(text: string | null | undefined): number {
+  if (!text) {
+    return 0;
+  }
+
+  return text
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean).length;
+}
+
+function mapDifficultyLevel(value: unknown): DifficultyLevel {
+  if (value === "easy" || value === "medium" || value === "hard") {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "easy" || normalized === "medium" || normalized === "hard") {
+      return normalized;
+    }
+  }
+
+  if (typeof value === "number") {
+    if (value <= 2) {
+      return "easy";
+    }
+
+    if (value >= 4) {
+      return "hard";
+    }
+  }
+
+  return "medium";
+}
+
+function normalizeAnswerMetrics(record: Record<string, unknown>, index: number): AnswerMetrics {
+  const questionId =
+    typeof record.questionId === "string" && record.questionId.trim().length > 0
+      ? record.questionId.trim()
+      : typeof record.question_id === "string" && record.question_id.trim().length > 0
+        ? record.question_id.trim()
+        : `question-${index + 1}`;
+
+  return {
+    questionId,
+    timeToStart:
+      asNonNegativeNumber(record.timeToStart) ??
+      asNonNegativeNumber(record.time_to_start) ??
+      0,
+    answerDuration:
+      asNonNegativeNumber(record.answerDuration) ??
+      asNonNegativeNumber(record.answer_duration) ??
+      0,
+    wordCount: Math.max(
+      0,
+      Math.round(
+        asNonNegativeNumber(record.wordCount) ??
+          asNonNegativeNumber(record.word_count) ??
+          0
+      )
+    ),
+    pauseCount: Math.max(
+      0,
+      Math.round(
+        asNonNegativeNumber(record.pauseCount) ??
+          asNonNegativeNumber(record.pause_count) ??
+          0
+      )
+    ),
+    retryCount: Math.max(
+      0,
+      Math.round(
+        asNonNegativeNumber(record.retryCount) ??
+          asNonNegativeNumber(record.retry_count) ??
+          0
+      )
+    ),
+    difficulty: mapDifficultyLevel(record.difficulty ?? record.difficulty_level),
+    isCritical:
+      asBoolean(record.isCritical) ??
+      asBoolean(record.is_critical) ??
+      false,
+    skipped:
+      asBoolean(record.skipped) ??
+      asBoolean(record.isSkipped) ??
+      asBoolean(record.is_skipped) ??
+      false,
+  };
+}
+
+function deriveStoredAnswerMetrics(row: StoredAnswerRecord): DerivedAnswerMetrics {
+  const payload = asRecord(row.answer_payload) ?? {};
+  const sessionQuestion = Array.isArray(row.session_questions)
+    ? row.session_questions[0] ?? null
+    : row.session_questions ?? null;
+  const sourceContext = asRecord(sessionQuestion?.source_context) ?? {};
+  const missingFields: string[] = [];
+
+  const timeToStart =
+    extractNumber(payload, [
+      ["timeToStart"],
+      ["time_to_start"],
+      ["timeToStartMs"],
+      ["time_to_start_ms"],
+      ["signals", "timeToStart"],
+      ["signals", "time_to_start"],
+      ["metrics", "timeToStart"],
+      ["metrics", "time_to_start"],
+      ["speech", "timeToStart"],
+      ["speech", "time_to_start"],
+    ]) ?? 0;
+
+  if (timeToStart === 0) {
+    missingFields.push("timeToStart");
+  }
+
+  const answerDurationMs =
+    extractNumber(payload, [
+      ["answerDuration"],
+      ["answer_duration"],
+      ["answerDurationMs"],
+      ["answer_duration_ms"],
+      ["durationMs"],
+      ["duration_ms"],
+      ["signals", "answerDuration"],
+      ["signals", "durationMs"],
+      ["metrics", "answerDuration"],
+      ["metrics", "durationMs"],
+    ]) ??
+    ((extractNumber(payload, [
+      ["duration"],
+      ["duration_seconds"],
+      ["signals", "duration"],
+      ["signals", "duration_seconds"],
+      ["metrics", "duration"],
+      ["metrics", "duration_seconds"],
+    ]) ?? 0) * 1_000);
+
+  if (answerDurationMs === 0) {
+    missingFields.push("answerDuration");
+  }
+
+  const wordCount =
+    Math.round(
+      extractNumber(payload, [
+        ["wordCount"],
+        ["word_count"],
+        ["signals", "wordCount"],
+        ["signals", "word_count"],
+        ["metrics", "wordCount"],
+        ["metrics", "word_count"],
+      ]) ?? countWords(row.answer_text)
+    );
+
+  const pauseCount =
+    Math.round(
+      extractNumber(payload, [
+        ["pauseCount"],
+        ["pause_count"],
+        ["signals", "pauseCount"],
+        ["signals", "pause_count"],
+        ["metrics", "pauseCount"],
+        ["metrics", "pause_count"],
+        ["speech", "pauseCount"],
+        ["speech", "pause_count"],
+      ]) ?? 0
+    );
+
+  if (pauseCount === 0) {
+    missingFields.push("pauseCount");
+  }
+
+  const retryCount =
+    Math.round(
+      extractNumber(payload, [
+        ["retryCount"],
+        ["retry_count"],
+        ["signals", "retryCount"],
+        ["signals", "retry_count"],
+        ["metrics", "retryCount"],
+        ["metrics", "retry_count"],
+        ["speech", "retryCount"],
+        ["speech", "retry_count"],
+      ]) ?? 0
+    );
+
+  if (retryCount === 0) {
+    missingFields.push("retryCount");
+  }
+
+  const answerText = row.answer_text?.trim() ?? "";
+  const skipped =
+    extractBoolean(payload, [
+      ["skipped"],
+      ["isSkipped"],
+      ["is_skipped"],
+      ["signals", "skipped"],
+      ["signals", "isSkipped"],
+      ["signals", "is_skipped"],
+      ["metrics", "skipped"],
+      ["metrics", "isSkipped"],
+      ["metrics", "is_skipped"],
+    ]) ??
+    (
+      answerText.length === 0 ||
+      answerText.toLowerCase() === "no response provided." ||
+      answerText.toLowerCase() === "no response provided"
+    );
+
+  const isCritical =
+    extractBoolean(payload, [
+      ["isCritical"],
+      ["is_critical"],
+      ["signals", "isCritical"],
+      ["signals", "is_critical"],
+      ["metrics", "isCritical"],
+      ["metrics", "is_critical"],
+    ]) ??
+    extractBoolean(sourceContext, [
+      ["isCritical"],
+      ["is_critical"],
+      ["critical"],
+      ["required"],
+      ["mustAnswer"],
+      ["must_answer"],
+    ]) ??
+    Boolean(sessionQuestion?.contradiction_probe);
+
+  const difficulty =
+    extractNumber(payload, [
+      ["difficultyLevel"],
+      ["difficulty_level"],
+      ["signals", "difficultyLevel"],
+      ["signals", "difficulty_level"],
+      ["metrics", "difficultyLevel"],
+      ["metrics", "difficulty_level"],
+    ]) ?? sessionQuestion?.difficulty_level ?? "medium";
+
+  return {
+    metrics: {
+      questionId: row.session_question_id ?? row.answer_id ?? crypto.randomUUID(),
+      timeToStart,
+      answerDuration: answerDurationMs,
+      wordCount: Math.max(0, wordCount),
+      pauseCount: Math.max(0, pauseCount),
+      retryCount: Math.max(0, retryCount),
+      difficulty: mapDifficultyLevel(difficulty),
+      isCritical,
+      skipped,
+    },
+    missingFields: [...new Set(missingFields)],
+  };
+}
+
+async function loadAnswerMetricsFromAttempt(attemptId: string) {
+  const supabase = createSupabase();
+  const { data, error } = await supabase
+    .from("interview_answers")
+    .select(`
+      answer_id,
+      answer_text,
+      answer_payload,
+      session_question_id,
+      session_questions (
+        session_question_id,
+        difficulty_level,
+        source_context,
+        contradiction_probe
+      )
+    `)
+    .eq("attempt_id", attemptId)
+    .order("answered_at", { ascending: true });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  const derivedAnswers = (data ?? []).map((row) => deriveStoredAnswerMetrics(row as StoredAnswerRecord));
+
+  return {
+    answers: derivedAnswers.map((entry) => entry.metrics),
+    missingSignalFields: [
+      ...new Set(derivedAnswers.flatMap((entry) => entry.missingFields)),
+    ],
+  };
+}
 
 Deno.serve(async (request) => {
   if (request.method === "OPTIONS") {
@@ -12,24 +381,35 @@ Deno.serve(async (request) => {
   }
 
   try {
-    const { attempt_id: attemptId } = (await request.json()) as { attempt_id?: string };
+    const { attempt_id: attemptId, answers: rawAnswers } =
+      (await request.json()) as ComputeScoreRequest;
 
-    if (!attemptId?.trim()) {
-      return jsonResponse({ success: false, error: "attempt_id is required" }, 400);
+    let answers: AnswerMetrics[] = [];
+    let missingSignalFields: string[] = [];
+
+    if (Array.isArray(rawAnswers) && rawAnswers.length > 0) {
+      answers = rawAnswers.map((value, index) => normalizeAnswerMetrics(asRecord(value) ?? {}, index));
+    } else if (attemptId?.trim()) {
+      const derived = await loadAnswerMetricsFromAttempt(attemptId.trim());
+      answers = derived.answers;
+      missingSignalFields = derived.missingSignalFields;
+    } else {
+      return jsonResponse(
+        { success: false, error: "answers or attempt_id is required" },
+        400
+      );
     }
 
-    const supabase = createSupabase();
-    const { data, error } = await supabase.rpc("compute_final_interview_score", {
-      p_attempt_id: attemptId.trim(),
-    });
-
-    if (error) {
-      throw new Error(error.message);
-    }
+    const evaluation = evaluateCandidate(answers);
 
     return jsonResponse({
       success: true,
-      data: Array.isArray(data) ? data[0] ?? null : data,
+      data: {
+        attempt_id: attemptId?.trim() ?? null,
+        answers_evaluated: answers.length,
+        missing_signal_fields: missingSignalFields,
+        evaluation,
+      },
     });
   } catch (error) {
     console.error("[compute-score]", error);

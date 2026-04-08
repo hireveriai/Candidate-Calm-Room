@@ -1,0 +1,99 @@
+import type { AnswerMetrics, ConsistencyResult } from "./types.ts";
+
+function clampScore(value: number): number {
+  return Math.max(0, Math.min(100, value));
+}
+
+function roundScore(value: number): number {
+  return Math.round(clampScore(value) * 100) / 100;
+}
+
+function mean(values: number[]): number {
+  if (values.length === 0) {
+    return 0;
+  }
+
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function standardDeviation(values: number[]): number {
+  if (values.length <= 1) {
+    return 0;
+  }
+
+  const valuesMean = mean(values);
+  const variance =
+    values.reduce((sum, value) => sum + ((value - valuesMean) ** 2), 0) / values.length;
+
+  return Math.sqrt(variance);
+}
+
+function coefficientOfVariation(values: number[]): number {
+  const valuesMean = mean(values);
+
+  if (valuesMean <= 0) {
+    return 0;
+  }
+
+  return standardDeviation(values) / valuesMean;
+}
+
+function ratio(left: number, right: number): number {
+  const safeLeft = Math.max(left, 1);
+  const safeRight = Math.max(right, 1);
+  return Math.max(safeLeft, safeRight) / Math.min(safeLeft, safeRight);
+}
+
+export function calculateConsistency(answers: AnswerMetrics[]): ConsistencyResult {
+  const completedAnswers = answers.filter((answer) => !answer.skipped);
+
+  if (completedAnswers.length < 2) {
+    return {
+      score: 100,
+      durationVariance: 0,
+      wordCountVariance: 0,
+      abruptShiftCount: 0,
+      flags: [],
+    };
+  }
+
+  const durations = completedAnswers.map((answer) => Math.max(answer.answerDuration, 1));
+  const wordCounts = completedAnswers.map((answer) => Math.max(answer.wordCount, 1));
+  const durationVariance = coefficientOfVariation(durations);
+  const wordCountVariance = coefficientOfVariation(wordCounts);
+
+  let abruptShiftCount = 0;
+
+  for (let index = 1; index < completedAnswers.length; index += 1) {
+    const previous = completedAnswers[index - 1];
+    const current = completedAnswers[index];
+
+    const durationRatio = ratio(previous.answerDuration, current.answerDuration);
+    const wordRatio = ratio(previous.wordCount, current.wordCount);
+    const wordDelta = Math.abs(previous.wordCount - current.wordCount);
+
+    if (durationRatio >= 3 || wordRatio >= 3 || wordDelta >= 90) {
+      abruptShiftCount += 1;
+    }
+  }
+
+  const variancePenalty =
+    Math.min(durationVariance * 40, 35) +
+    Math.min(wordCountVariance * 35, 30) +
+    Math.min(abruptShiftCount * 12, 35);
+
+  const score = roundScore(100 - variancePenalty);
+  const flags: ConsistencyResult["flags"] = [];
+
+  if (score < 60 || abruptShiftCount >= 2) {
+    flags.push("INCONSISTENT_BEHAVIOR");
+  }
+
+  return {
+    score,
+    durationVariance: Math.round(durationVariance * 1_000) / 1_000,
+    wordCountVariance: Math.round(wordCountVariance * 1_000) / 1_000,
+    abruptShiftCount,
+    flags,
+  };
+}

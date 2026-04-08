@@ -1,0 +1,135 @@
+import type { AnswerAnalysis, AnswerMetrics, EvaluationFlag } from "./types.ts";
+
+const START_DELAY_SOFT_THRESHOLD_MS = 1_500;
+const START_DELAY_HARD_THRESHOLD_MS = 8_000;
+const OPTIMAL_DURATION_MIN_MS = 30_000;
+const OPTIMAL_DURATION_MAX_MS = 150_000;
+const VERY_SHORT_ANSWER_MS = 12_000;
+const LOW_WORD_COUNT = 20;
+const GOOD_WORD_COUNT_MIN = 35;
+const GOOD_WORD_COUNT_MAX = 160;
+const HIGH_WORD_COUNT = 260;
+
+function clampScore(value: number): number {
+  return Math.max(0, Math.min(100, value));
+}
+
+function roundScore(value: number): number {
+  return Math.round(clampScore(value) * 100) / 100;
+}
+
+function scaleToHundred(value: number, min: number, max: number): number {
+  if (value <= min) {
+    return 0;
+  }
+
+  if (value >= max) {
+    return 100;
+  }
+
+  return ((value - min) / (max - min)) * 100;
+}
+
+function interpolate(value: number, min: number, max: number, outMin: number, outMax: number) {
+  if (value <= min) {
+    return outMin;
+  }
+
+  if (value >= max) {
+    return outMax;
+  }
+
+  const ratio = (value - min) / (max - min);
+  return outMin + (outMax - outMin) * ratio;
+}
+
+function getCommunicationScore(wordCount: number): number {
+  if (wordCount <= 0) {
+    return 0;
+  }
+
+  if (wordCount < LOW_WORD_COUNT) {
+    return interpolate(wordCount, 1, LOW_WORD_COUNT, 10, 45);
+  }
+
+  if (wordCount < GOOD_WORD_COUNT_MIN) {
+    return interpolate(wordCount, LOW_WORD_COUNT, GOOD_WORD_COUNT_MIN, 45, 72);
+  }
+
+  if (wordCount <= GOOD_WORD_COUNT_MAX) {
+    const center = 95;
+    const spread = 65;
+    const distance = Math.min(Math.abs(wordCount - center), spread);
+    return 92 - (distance / spread) * 12;
+  }
+
+  if (wordCount <= HIGH_WORD_COUNT) {
+    return interpolate(wordCount, GOOD_WORD_COUNT_MAX, HIGH_WORD_COUNT, 80, 52);
+  }
+
+  return interpolate(Math.min(wordCount, 380), HIGH_WORD_COUNT, 380, 52, 28);
+}
+
+export function analyzeAnswer(answer: AnswerMetrics): AnswerAnalysis {
+  if (answer.skipped) {
+    return {
+      questionId: answer.questionId,
+      hesitationScore: 100,
+      confidenceScore: 0,
+      communicationScore: 0,
+      riskFlags: ["SKIPPED_ANSWER"],
+    };
+  }
+
+  const startDelayScore = scaleToHundred(
+    answer.timeToStart,
+    START_DELAY_SOFT_THRESHOLD_MS,
+    START_DELAY_HARD_THRESHOLD_MS
+  );
+
+  const answerMinutes = answer.answerDuration > 0 ? answer.answerDuration / 60_000 : 0;
+  const pauseDensity = answerMinutes > 0 ? answer.pauseCount / answerMinutes : answer.pauseCount;
+  const pauseScore = scaleToHundred(pauseDensity, 2, 10);
+
+  const hesitationScore = roundScore((startDelayScore * 0.6) + (pauseScore * 0.4));
+
+  const retryPenalty = scaleToHundred(answer.retryCount, 0, 4) * 0.45;
+  const shortAnswerPenalty =
+    answer.answerDuration < VERY_SHORT_ANSWER_MS
+      ? scaleToHundred(VERY_SHORT_ANSWER_MS - answer.answerDuration, 0, VERY_SHORT_ANSWER_MS) *
+        0.45
+      : 0;
+  const balancedDurationBonus =
+    answer.answerDuration >= OPTIMAL_DURATION_MIN_MS &&
+    answer.answerDuration <= OPTIMAL_DURATION_MAX_MS
+      ? 12
+      : 0;
+
+  const confidenceScore = roundScore(
+    82 - (hesitationScore * 0.25) - retryPenalty - shortAnswerPenalty + balancedDurationBonus
+  );
+
+  const communicationScore = roundScore(getCommunicationScore(answer.wordCount));
+
+  const riskFlags: EvaluationFlag[] = [];
+
+  if (hesitationScore >= 75) {
+    riskFlags.push("HIGH_HESITATION");
+  }
+
+  if (confidenceScore <= 35) {
+    riskFlags.push("LOW_CONFIDENCE");
+  }
+
+  if (communicationScore <= 40) {
+    riskFlags.push("COMMUNICATION_CONCERN");
+  }
+
+  return {
+    questionId: answer.questionId,
+    hesitationScore,
+    confidenceScore,
+    communicationScore,
+    riskFlags,
+  };
+}

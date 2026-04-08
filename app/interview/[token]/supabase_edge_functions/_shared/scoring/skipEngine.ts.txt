@@ -1,0 +1,54 @@
+import type { AnswerMetrics, SkipPenaltyResult } from "./types.ts";
+
+const SKIP_PENALTIES = {
+  easy: 15,
+  medium: 10,
+  hard: 5,
+} as const;
+
+function roundPenalty(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+export function calculateSkipPenalty(answers: AnswerMetrics[]): SkipPenaltyResult {
+  let penalty = 0;
+  let skippedCount = 0;
+  let criticalSkippedCount = 0;
+
+  for (const answer of answers) {
+    if (!answer.skipped) {
+      continue;
+    }
+
+    skippedCount += 1;
+    penalty += SKIP_PENALTIES[answer.difficulty];
+
+    if (answer.isCritical) {
+      criticalSkippedCount += 1;
+      penalty += 25;
+    }
+  }
+
+  if (skippedCount >= 2 && skippedCount <= 3) {
+    penalty *= 1.5;
+  } else if (skippedCount >= 4) {
+    penalty *= 2;
+  }
+
+  const flags: SkipPenaltyResult["flags"] = [];
+
+  if (skippedCount >= 2) {
+    flags.push("AVOIDANCE_PATTERN");
+  }
+
+  if (criticalSkippedCount > 0) {
+    flags.push("CRITICAL_QUESTION_SKIPPED");
+  }
+
+  return {
+    penalty: roundPenalty(penalty),
+    skippedCount,
+    criticalSkippedCount,
+    flags,
+  };
+}
