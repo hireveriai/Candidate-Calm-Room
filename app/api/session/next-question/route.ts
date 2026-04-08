@@ -33,6 +33,29 @@ type QuestionTypeRow = {
   question_type: string | null;
 };
 
+type AttemptContextRow = {
+  interview_id: string;
+  question_count: number | null;
+};
+
+type LatestAnswerRow = {
+  answer_text: string | null;
+};
+
+type NextCoreQuestionRow = {
+  question_id: string;
+  question_text: string;
+  question_type: string | null;
+};
+
+type CreatedSessionQuestionRow = {
+  session_question_id: string;
+  question_id: string | null;
+  content: string;
+  source: string;
+  asked_at: Date | null;
+};
+
 function hasMissingFunctionError(error: unknown, functionName: string) {
   return (
     error instanceof Error &&
@@ -92,19 +115,17 @@ export async function POST(request: Request) {
         throw error;
       }
 
-      const attempt = await prisma.interview_attempts.findUnique({
-        where: {
-          attempt_id: attemptId,
-        },
-        select: {
-          interview_id: true,
-          interviews: {
-            select: {
-              question_count: true,
-            },
-          },
-        },
-      });
+      const attempts = await prisma.$queryRaw<AttemptContextRow[]>`
+        select
+          ia.interview_id,
+          i.question_count
+        from public.interview_attempts ia
+        join public.interviews i
+          on i.interview_id = ia.interview_id
+        where ia.attempt_id = ${attemptId}::uuid
+        limit 1
+      `;
+      const attempt = attempts[0];
 
       if (!attempt) {
         return Response.json(
@@ -113,25 +134,23 @@ export async function POST(request: Request) {
         );
       }
 
-      const askedQuestions = (await prisma.session_questions.findMany({
-        where: {
-          attempt_id: attemptId,
-        },
-        orderBy: [
-          {
-            asked_at: "asc",
-          },
-          {
-            session_question_id: "asc",
-          },
-        ],
-      })) as AskedQuestionRow[];
+      const askedQuestions = await prisma.$queryRaw<AskedQuestionRow[]>`
+        select
+          session_question_id,
+          question_id,
+          content,
+          source,
+          asked_at
+        from public.session_questions
+        where attempt_id = ${attemptId}::uuid
+        order by asked_at asc nulls last, session_question_id asc
+      `;
 
       const latestQuestion = askedQuestions.at(-1) ?? null;
-      const totalLimit = attempt.interviews?.question_count ?? 9;
+      const totalLimit = attempt.question_count ?? 9;
       const askedTotal = askedQuestions.length;
       const askedFollowUps = askedQuestions.filter(
-        (question) => !question.question_id
+        (question: AskedQuestionRow) => !question.question_id
       ).length;
       const requiredFollowUps = Math.min(2, totalLimit);
       const remainingSlots = Math.max(totalLimit - askedTotal, 0);
@@ -150,17 +169,15 @@ export async function POST(request: Request) {
         };
       } else {
         const latestAnswerRecord = latestQuestion
-          ? await prisma.interview_answers.findFirst({
-              where: {
-                session_question_id: latestQuestion.session_question_id,
-              },
-              orderBy: {
-                answered_at: "desc",
-              },
-              select: {
-                answer_text: true,
-              },
-            })
+          ? (
+              await prisma.$queryRaw<LatestAnswerRow[]>`
+                select answer_text
+                from public.interview_answers
+                where session_question_id = ${latestQuestion.session_question_id}::uuid
+                order by answered_at desc nulls last
+                limit 1
+              `
+            )[0]
           : null;
 
         const effectiveLastAnswer =
@@ -168,34 +185,26 @@ export async function POST(request: Request) {
         const wordCount = effectiveLastAnswer
           ? effectiveLastAnswer.trim().split(/\s+/).length
           : 0;
-        const askedCoreQuestionIds = askedQuestions
-          .map((question) => question.question_id)
-          .filter((questionId): questionId is string => Boolean(questionId));
 
-        const nextCore = await prisma.interview_questions.findFirst({
-          where: {
-            interview_id: attempt.interview_id,
-            ...(askedCoreQuestionIds.length > 0
-              ? {
-                  question_id: {
-                    notIn: askedCoreQuestionIds,
-                  },
-                }
-              : {}),
-          },
-          orderBy: {
-            question_order: "asc",
-          },
-          select: {
-            question_id: true,
-            questions: {
-              select: {
-                question_text: true,
-                question_type: true,
-              },
-            },
-          },
-        });
+        const nextCores = await prisma.$queryRaw<NextCoreQuestionRow[]>`
+          select
+            iq.question_id,
+            q.question_text,
+            q.question_type
+          from public.interview_questions iq
+          join public.questions q
+            on q.question_id = iq.question_id
+          where iq.interview_id = ${attempt.interview_id}::uuid
+            and not exists (
+              select 1
+              from public.session_questions sq
+              where sq.attempt_id = ${attemptId}::uuid
+                and sq.question_id = iq.question_id
+            )
+          order by iq.question_order asc
+          limit 1
+        `;
+        const nextCore = nextCores[0];
 
         const shouldAskFollowUp =
           Boolean(latestQuestion?.question_id) &&
@@ -205,34 +214,77 @@ export async function POST(request: Request) {
             remainingSlots <= remainingFollowUps + 1 ||
             !nextCore);
 
-        const createdQuestion = shouldAskFollowUp
-          ? await prisma.session_questions.create({
-              data: {
-                attempt_id: attemptId,
-                question_id: null,
-                content: buildFollowUpQuestion(effectiveLastAnswer),
-                source: "ai",
-              },
-            })
-          : nextCore
-            ? await prisma.session_questions.create({
-                data: {
-                  attempt_id: attemptId,
-                  question_id: nextCore.question_id,
-                  content: nextCore.questions.question_text,
-                  source: "system",
-                },
-              })
-            : remainingFollowUps > 0 && effectiveLastAnswer
-              ? await prisma.session_questions.create({
-                  data: {
-                    attempt_id: attemptId,
-                    question_id: null,
-                    content: buildFollowUpQuestion(effectiveLastAnswer),
-                    source: "ai",
-                  },
-                })
-              : null;
+        let createdQuestion: CreatedSessionQuestionRow | null = null;
+        let createdQuestionType: string | null = null;
+
+        if (shouldAskFollowUp) {
+          const createdQuestions = await prisma.$queryRaw<CreatedSessionQuestionRow[]>`
+            insert into public.session_questions (
+              attempt_id,
+              question_id,
+              content,
+              source
+            )
+            values (
+              ${attemptId}::uuid,
+              ${null}::uuid,
+              ${buildFollowUpQuestion(effectiveLastAnswer)}::text,
+              ${"ai"}::text
+            )
+            returning
+              session_question_id,
+              question_id,
+              content,
+              source,
+              asked_at
+          `;
+          createdQuestion = createdQuestions[0] ?? null;
+        } else if (nextCore) {
+          const createdQuestions = await prisma.$queryRaw<CreatedSessionQuestionRow[]>`
+            insert into public.session_questions (
+              attempt_id,
+              question_id,
+              content,
+              source
+            )
+            values (
+              ${attemptId}::uuid,
+              ${nextCore.question_id}::uuid,
+              ${nextCore.question_text}::text,
+              ${"system"}::text
+            )
+            returning
+              session_question_id,
+              question_id,
+              content,
+              source,
+              asked_at
+          `;
+          createdQuestion = createdQuestions[0] ?? null;
+          createdQuestionType = nextCore.question_type ?? null;
+        } else if (remainingFollowUps > 0 && effectiveLastAnswer) {
+          const createdQuestions = await prisma.$queryRaw<CreatedSessionQuestionRow[]>`
+            insert into public.session_questions (
+              attempt_id,
+              question_id,
+              content,
+              source
+            )
+            values (
+              ${attemptId}::uuid,
+              ${null}::uuid,
+              ${buildFollowUpQuestion(effectiveLastAnswer)}::text,
+              ${"ai"}::text
+            )
+            returning
+              session_question_id,
+              question_id,
+              content,
+              source,
+              asked_at
+          `;
+          createdQuestion = createdQuestions[0] ?? null;
+        }
 
         sessionQuestion = createdQuestion
           ? {
@@ -240,7 +292,7 @@ export async function POST(request: Request) {
               question_kind: createdQuestion.question_id ? "core" : "follow_up",
               question_order: askedTotal + 1,
               is_complete: false,
-              question_type: nextCore?.questions.question_type ?? null,
+              question_type: createdQuestionType,
             }
           : {
               session_question_id: null,
