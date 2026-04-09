@@ -558,21 +558,41 @@ export async function POST(request: Request) {
             `
           )[0]
         : null;
-      const latestEvaluation =
-        latestQuestion && latestAnswerRecord?.answer_text
-          ? (
-              await prisma.$queryRaw<LatestEvaluationRow[]>`
-                  select iae.skill_score
-                  from public.interview_answers ia
-                  join public.interview_answer_evaluations iae
-                    on iae.answer_id = ia.answer_id
-                   and iae.evaluator_type = 'AI'
-                  where ia.session_question_id = ${latestQuestion.session_question_id}::uuid
-                  order by ia.answered_at desc nulls last
-                  limit 1
-              `
-            )[0]
-          : null;
+      let latestEvaluation: LatestEvaluationRow | null = null;
+
+      if (latestQuestion && latestAnswerRecord?.answer_text) {
+        try {
+          latestEvaluation = (
+            await prisma.$queryRaw<LatestEvaluationRow[]>`
+              select iae.skill_score
+              from public.interview_answers ia
+              join public.interview_answer_evaluations iae
+                on iae.answer_id = ia.answer_id
+               and iae.evaluator_type = 'AI'
+              where ia.session_question_id = ${latestQuestion.session_question_id}::uuid
+              order by ia.answered_at desc nulls last
+              limit 1
+            `
+          )[0] ?? null;
+        } catch (error) {
+          if (!hasMissingDatabaseColumnError(error)) {
+            throw error;
+          }
+
+          latestEvaluation = (
+            await prisma.$queryRaw<LatestEvaluationRow[]>`
+              select iae.score as skill_score
+              from public.interview_answers ia
+              join public.interview_answer_evaluations iae
+                on iae.answer_id = ia.answer_id
+               and iae.evaluator_type = 'AI'
+              where ia.session_question_id = ${latestQuestion.session_question_id}::uuid
+              order by ia.answered_at desc nulls last
+              limit 1
+            `
+          )[0] ?? null;
+        }
+      }
 
       const effectiveLastAnswer =
         lastAnswer?.trim() || latestAnswerRecord?.answer_text || "";
