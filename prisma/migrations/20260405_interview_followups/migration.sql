@@ -94,32 +94,183 @@ create unique index if not exists uq_interview_answers_session_question
   on interview_answers (session_question_id)
   where session_question_id is not null;
 
-create or replace function public.build_follow_up_question(p_last_answer text)
+create or replace function public.build_follow_up_question(
+  p_last_answer text,
+  p_last_question text,
+  p_skill_name text,
+  p_probe_type text,
+  p_is_contradiction boolean
+)
 returns text
 language plpgsql
 as $$
 declare
   v_answer text := nullif(trim(coalesce(p_last_answer, '')), '');
-  v_excerpt text;
+  v_clean_answer text;
+  v_role text;
+  v_experience text;
+  v_primary_skill text := nullif(trim(coalesce(p_skill_name, '')), '');
+  v_primary_tool text := null;
 begin
   if v_answer is null then
     return 'Can you give one concrete example from your recent work and explain the result?';
   end if;
 
-  v_excerpt := left(regexp_replace(v_answer, '\s+', ' ', 'g'), 160);
+  v_clean_answer := regexp_replace(v_answer, '\s+', ' ', 'g');
+  v_clean_answer := regexp_replace(v_clean_answer, '^(hi|hello|hey)\m[\s,.-]*', '', 'i');
+  v_clean_answer := regexp_replace(v_clean_answer, '^(so|well|okay|alright|basically|actually)\m[\s,.-]*', '', 'i');
+  v_clean_answer := regexp_replace(
+    v_clean_answer,
+    '\m(my name is|i am|i''m|this is)\M\s+[a-z][a-z\s.''-]{1,40}(?:\s*,\s*|\s+and\s+)',
+    '',
+    'i'
+  );
+  v_clean_answer := regexp_replace(
+    v_clean_answer,
+    '\m(you know|kind of|sort of|basically|actually|like)\M[\s,]*',
+    ' ',
+    'gi'
+  );
+  v_clean_answer := trim(regexp_replace(v_clean_answer, '\s+', ' ', 'g'));
 
-  if v_excerpt ~* '\m(led|managed|owned|architected|designed|built|implemented|improved|optimized|migrated|scaled)\M' then
-    return format(
-      'You mentioned "%s". What was the hardest decision you made there, and what measurable impact did it have?',
-      v_excerpt
+  v_role := substring(
+    v_clean_answer
+    from '(?:i work(?:ing)? as|currently work(?:ing)? as|working as|my role is|i serve as|i''m|i am)\s+(?:an?\s+)?([^,.;]+?)(?:\s+(?:with|where|focused|handling|responsible|using|on)\M|[,.;]|$)'
+  );
+
+  if v_role is null then
+    v_role := substring(
+      v_clean_answer
+      from '(?:current role(?: is)?|position(?: is)?)\s+(?:an?\s+)?([^,.;]+?)(?:\s+(?:with|where|focused|handling|responsible|using|on)\M|[,.;]|$)'
     );
   end if;
 
-  return format(
-    'You mentioned "%s". Can you walk me through one specific example, your exact role, and the outcome?',
-    v_excerpt
+  if v_role is not null then
+    v_role := trim(regexp_replace(v_role, '^(an?|the)\s+', '', 'i'));
+    v_role := trim(regexp_replace(v_role, '\m(?:at|with|for)\M.*$', '', 'i'));
+    v_role := trim(regexp_replace(v_role, '[.,"'']', '', 'g'));
+
+    if v_role !~* '\m(admin|administrator|engineer|developer|analyst|manager|lead|architect|consultant|specialist|officer)\M' then
+      v_role := null;
+    end if;
+  end if;
+
+  v_experience := substring(
+    v_clean_answer
+    from '\m(\d+\+?\s+(?:years?|yrs?)(?:\s+of)?\s+(?:experience|in [a-z][a-z\s/-]+)?)\M'
   );
+
+  if v_primary_skill is null then
+    if v_clean_answer ~* '\mdatabase administration\M' then
+      v_primary_skill := 'database administration';
+    elsif v_clean_answer ~* '\mdatabase management\M' then
+      v_primary_skill := 'database management';
+    elsif v_clean_answer ~* '\mperformance tuning\M' then
+      v_primary_skill := 'performance tuning';
+    elsif v_clean_answer ~* '\mquery optimization\M' then
+      v_primary_skill := 'query optimization';
+    elsif v_clean_answer ~* '\mbackup and recovery\M' then
+      v_primary_skill := 'backup and recovery';
+    elsif v_clean_answer ~* '\mincident management\M' then
+      v_primary_skill := 'incident management';
+    elsif v_clean_answer ~* '\msystem design\M' then
+      v_primary_skill := 'system design';
+    elsif v_clean_answer ~* '\mapi development\M' then
+      v_primary_skill := 'api development';
+    elsif v_clean_answer ~* '\mdata migration\M' then
+      v_primary_skill := 'data migration';
+    elsif v_clean_answer ~* '\metl\M' then
+      v_primary_skill := 'ETL';
+    elsif v_clean_answer ~* '\msql\M' then
+      v_primary_skill := 'SQL';
+    elsif v_clean_answer ~* '\mtypescript\M' then
+      v_primary_skill := 'TypeScript';
+    elsif v_clean_answer ~* '\mnode\.?js\M' then
+      v_primary_skill := 'Node.js';
+    elsif v_clean_answer ~* '\mreact\M' then
+      v_primary_skill := 'React';
+    elsif v_clean_answer ~* '\mpython\M' then
+      v_primary_skill := 'Python';
+    end if;
+  end if;
+
+  if v_clean_answer ~* '\moracle\M' then
+    v_primary_tool := 'Oracle';
+  elsif v_clean_answer ~* '\mpostgresql\M|\mpostgres\M' then
+    v_primary_tool := 'PostgreSQL';
+  elsif v_clean_answer ~* '\mmysql\M' then
+    v_primary_tool := 'MySQL';
+  elsif v_clean_answer ~* '\mmongodb\M' then
+    v_primary_tool := 'MongoDB';
+  elsif v_clean_answer ~* '\msql server\M' then
+    v_primary_tool := 'SQL Server';
+  elsif v_clean_answer ~* '\mlinux\M' then
+    v_primary_tool := 'Linux';
+  elsif v_clean_answer ~* '\maws\M' then
+    v_primary_tool := 'AWS';
+  elsif v_clean_answer ~* '\mazure\M' then
+    v_primary_tool := 'Azure';
+  elsif v_clean_answer ~* '\mdocker\M' then
+    v_primary_tool := 'Docker';
+  elsif v_clean_answer ~* '\mkubernetes\M' then
+    v_primary_tool := 'Kubernetes';
+  elsif v_clean_answer ~* '\mjira\M' then
+    v_primary_tool := 'Jira';
+  end if;
+
+  if coalesce(p_is_contradiction, false) then
+    return 'Can you clarify the specific steps you took, the decisions you made, and how you verified the outcome?';
+  end if;
+
+  if coalesce(p_probe_type, '') = 'numbers' then
+    return 'What was the measurable outcome of that work, and how did you track it?';
+  end if;
+
+  if coalesce(p_probe_type, '') = 'tools' and coalesce(v_primary_tool, v_primary_skill) is not null then
+    return format(
+      'How have you used %s in a recent project, and what was the result?',
+      coalesce(v_primary_tool, v_primary_skill)
+    );
+  end if;
+
+  if v_role is not null and coalesce(v_primary_skill, v_primary_tool) is not null then
+    return format(
+      'In your role as a %s, can you walk me through a recent project where you applied %s?',
+      v_role,
+      coalesce(v_primary_skill, v_primary_tool)
+    );
+  end if;
+
+  if v_role is not null then
+    return format(
+      'In your role as a %s, can you walk me through a recent project and the outcome?',
+      v_role
+    );
+  end if;
+
+  if coalesce(v_primary_skill, v_primary_tool) is not null then
+    return format(
+      'Can you walk me through a recent project where you used %s and the result you achieved?',
+      coalesce(v_primary_skill, v_primary_tool)
+    );
+  end if;
+
+  if v_experience is not null then
+    return format(
+      'From your %s, can you share one concrete example of a problem you solved and the result?',
+      v_experience
+    );
+  end if;
+
+  return 'Can you walk me through one recent project, your responsibilities, and the outcome?';
 end;
+$$;
+
+create or replace function public.build_follow_up_question(p_last_answer text)
+returns text
+language sql
+as $$
+  select public.build_follow_up_question($1, null, null, null, false);
 $$;
 
 create or replace function public.start_interview_session(p_token text)

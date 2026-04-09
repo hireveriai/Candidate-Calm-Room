@@ -56,6 +56,47 @@ type CreatedSessionQuestionRow = {
   asked_at: Date | null;
 };
 
+type AnswerSummary = {
+  role: string | null;
+  skills: string[];
+  tools: string[];
+  experience: string | null;
+  keyPoints: string[];
+  cleanedText: string;
+};
+
+const SKILL_KEYWORDS = [
+  "database administration",
+  "database management",
+  "performance tuning",
+  "query optimization",
+  "backup and recovery",
+  "incident management",
+  "system design",
+  "api development",
+  "data migration",
+  "etl",
+  "sql",
+  "typescript",
+  "node.js",
+  "react",
+  "python",
+];
+
+const TOOL_KEYWORDS = [
+  "Oracle",
+  "PostgreSQL",
+  "MySQL",
+  "MongoDB",
+  "SQL Server",
+  "Linux",
+  "AWS",
+  "Azure",
+  "Docker",
+  "Kubernetes",
+  "Jira",
+];
+
 function hasMissingFunctionError(error: unknown, functionName: string) {
   return (
     error instanceof Error &&
@@ -76,6 +117,118 @@ function hasMissingDatabaseRoutineError(error: unknown) {
 
 function normalizeText(value: string | null | undefined) {
   return value?.replace(/\s+/g, " ").trim() ?? "";
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function cleanAnswerText(value: string | null | undefined) {
+  let cleaned = normalizeText(value);
+
+  if (!cleaned) {
+    return "";
+  }
+
+  cleaned = cleaned
+    .replace(/^(hi|hello|hey)\b[\s,.-]*/i, "")
+    .replace(/^(so|well|okay|alright|basically|actually)\b[\s,.-]*/i, "")
+    .replace(
+      /\b(?:my name is|i am|i'm|this is)\s+[a-z][a-z\s.'-]{1,40}(?:\s*,\s*|\s+and\s+)/i,
+      ""
+    )
+    .replace(
+      /\b(?:you know|kind of|sort of|basically|actually|like)\b[\s,]*/gi,
+      " "
+    );
+
+  return normalizeText(cleaned);
+}
+
+function sanitizeRole(value: string | null | undefined) {
+  const role = normalizeText(value)
+    .replace(/^(an?|the)\s+/i, "")
+    .replace(/\b(?:at|with|for)\b.*$/i, "")
+    .replace(/[.,"']/g, "")
+    .trim();
+
+  if (!role) {
+    return null;
+  }
+
+  const roleWords = role.split(/\s+/).slice(0, 6);
+  const candidateRole = roleWords.join(" ");
+
+  if (!/\b(admin|administrator|engineer|developer|analyst|manager|lead|architect|consultant|specialist|officer)\b/i.test(candidateRole)) {
+    return null;
+  }
+
+  return candidateRole;
+}
+
+function extractRole(answer: string) {
+  const patterns = [
+    /(?:i work(?:ing)? as|currently work(?:ing)? as|working as|my role is|i serve as|i'm|i am)\s+(?:an?\s+)?([^,.;\n]+?)(?:\s+(?:with|where|focused|handling|responsible|using|on)\b|[,.;\n]|$)/i,
+    /(?:current role(?: is)?|position(?: is)?)\s+(?:an?\s+)?([^,.;\n]+?)(?:\s+(?:with|where|focused|handling|responsible|using|on)\b|[,.;\n]|$)/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = answer.match(pattern);
+    const role = sanitizeRole(match?.[1]);
+
+    if (role) {
+      return role;
+    }
+  }
+
+  return null;
+}
+
+function extractExperience(answer: string) {
+  const match = answer.match(
+    /\b(\d+\+?\s+(?:years?|yrs?)(?:\s+of)?\s+(?:experience|in [a-z][a-z\s/-]+)?)\b/i
+  );
+
+  return normalizeText(match?.[1]) || null;
+}
+
+function extractKeywordMatches(answer: string, keywords: string[], limit = 3) {
+  const matches: string[] = [];
+
+  for (const keyword of keywords) {
+    const pattern = new RegExp(`\\b${escapeRegExp(keyword)}\\b`, "i");
+
+    if (pattern.test(answer) && !matches.includes(keyword)) {
+      matches.push(keyword);
+    }
+
+    if (matches.length >= limit) {
+      break;
+    }
+  }
+
+  return matches;
+}
+
+function extractKeyPoints(answer: string) {
+  return answer
+    .split(/[.!?;]+/)
+    .map((part) => normalizeText(part))
+    .filter((part) => part.split(/\s+/).length >= 5)
+    .slice(0, 2);
+}
+
+function summarizeAnswer(answer: string | null | undefined): AnswerSummary {
+  const cleanedText = cleanAnswerText(answer);
+
+  return {
+    role: extractRole(cleanedText),
+    skills: extractKeywordMatches(cleanedText, SKILL_KEYWORDS),
+    tools: extractKeywordMatches(cleanedText, TOOL_KEYWORDS),
+    experience: extractExperience(cleanedText),
+    keyPoints: extractKeyPoints(cleanedText),
+    cleanedText,
+  };
 }
 
 function isExperienceOverviewQuestion(question: string | null | undefined) {
@@ -113,21 +266,30 @@ function answerAlreadyCoversExperienceOverview(answer: string | null | undefined
 }
 
 function buildFollowUpQuestion(lastAnswer: string | null | undefined) {
-  const answer = lastAnswer?.trim();
+  const summary = summarizeAnswer(lastAnswer);
+  const focusSkill = summary.skills[0] ?? summary.tools[0] ?? null;
 
-  if (!answer) {
+  if (!summary.cleanedText) {
     return "Can you give one concrete example from your recent work and explain the result?";
   }
 
-  const excerpt = answer.replace(/\s+/g, " ").slice(0, 160);
-  const ownershipPattern =
-    /\b(led|managed|owned|architected|designed|built|implemented|improved|optimized|migrated|scaled)\b/i;
-
-  if (ownershipPattern.test(excerpt)) {
-    return `You mentioned "${excerpt}". What was the hardest decision you made there, and what measurable impact did it have?`;
+  if (summary.role && focusSkill) {
+    return `In your role as a ${summary.role}, can you walk me through a recent project where you applied ${focusSkill}?`;
   }
 
-  return `You mentioned "${excerpt}". Can you walk me through one recent project where you applied those skills and the outcome you achieved?`;
+  if (summary.role) {
+    return `In your role as a ${summary.role}, can you walk me through a recent project and the outcome?`;
+  }
+
+  if (focusSkill) {
+    return `Can you walk me through a recent project where you used ${focusSkill} and the result you achieved?`;
+  }
+
+  if (summary.experience) {
+    return `From your ${summary.experience}, can you share one concrete example of a problem you solved and the result?`;
+  }
+
+  return "Can you walk me through one recent project, your responsibilities, and the outcome?";
 }
 
 export async function POST(request: Request) {
