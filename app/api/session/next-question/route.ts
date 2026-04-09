@@ -1,5 +1,13 @@
 import { prisma } from "@/app/lib/prisma";
-import { resolveEffectiveQuestionCount } from "@/app/lib/interviewBudget";
+import {
+  buildAskedQuestionState,
+  buildFallbackCoreQuestion,
+  buildInterviewBlueprint,
+  deriveInterviewPhase,
+  pickNextExpectedSource,
+  selectNextCoreQuestion,
+  shouldCompleteInterview,
+} from "@/app/lib/interviewFlow";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -27,6 +35,7 @@ type AskedQuestionRow = {
   question_id: string | null;
   content: string;
   source: string;
+  question_kind: string | null;
   asked_at: Date | null;
 };
 
@@ -36,9 +45,13 @@ type QuestionTypeRow = {
 
 type AttemptContextRow = {
   interview_id: string;
+  started_at: Date;
   question_count: number | null;
   duration_minutes: number | null;
   planned_question_count: number | null;
+  required_follow_up_questions: number | null;
+  experience_level: string | null;
+  job_title: string | null;
 };
 
 type LatestAnswerRow = {
@@ -46,9 +59,16 @@ type LatestAnswerRow = {
 };
 
 type NextCoreQuestionRow = {
-  question_id: string;
+  question_id: string | null;
   question_text: string;
   question_type: string | null;
+  source_type: string | null;
+  question_order: number;
+  allow_follow_up: boolean | null;
+  difficulty_level: number | null;
+  phase_hint: string | null;
+  target_skill_id: string | null;
+  skill_name: string | null;
 };
 
 type CreatedSessionQuestionRow = {
@@ -56,7 +76,17 @@ type CreatedSessionQuestionRow = {
   question_id: string | null;
   content: string;
   source: string;
+  question_kind?: string | null;
   asked_at: Date | null;
+};
+
+type LatestEvaluationRow = {
+  skill_score: string | number | null;
+};
+
+type RequiredSkillRow = {
+  skill_id: string;
+  skill_name: string | null;
 };
 
 type AnswerSummary = {
@@ -100,22 +130,26 @@ const TOOL_KEYWORDS = [
   "Jira",
 ];
 
-function hasMissingFunctionError(error: unknown, functionName: string) {
+function hasMissingDatabaseColumnError(error: unknown) {
   return (
     error instanceof Error &&
     error.message.includes("Raw query failed") &&
-    error.message.includes(functionName) &&
-    error.message.includes("does not exist")
+    error.message.toLowerCase().includes("column") &&
+    error.message.toLowerCase().includes("does not exist")
   );
 }
 
-function hasMissingDatabaseRoutineError(error: unknown) {
-  return (
-    error instanceof Error &&
-    error.message.includes("Raw query failed") &&
-    error.message.includes("does not exist") &&
-    error.message.includes("function public.")
-  );
+function asNumber(value: string | number | null | undefined) {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : 0;
+  }
+
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  return 0;
 }
 
 function normalizeText(value: string | null | undefined) {
@@ -313,28 +347,18 @@ export async function POST(request: Request) {
     const createStartedAt = Date.now();
     let sessionQuestion: NextQuestionRow | undefined;
 
-    try {
-      const rows = await prisma.$queryRaw<NextQuestionRow[]>`
-        select *
-        from public.get_next_interview_question(
-          ${attemptId}::uuid,
-          ${lastAnswer ?? null}::text
-        )
-      `;
-      sessionQuestion = rows[0];
-    } catch (error) {
-      if (
-        !hasMissingFunctionError(error, "public.get_next_interview_question") &&
-        !hasMissingDatabaseRoutineError(error)
-      ) {
-        throw error;
-      }
+    let attempts: AttemptContextRow[];
 
-      const attempts = await prisma.$queryRaw<AttemptContextRow[]>`
+    try {
+      attempts = await prisma.$queryRaw<AttemptContextRow[]>`
         select
           ia.interview_id,
+          ia.started_at,
           i.question_count,
           i.duration_minutes,
+          i.required_follow_up_questions,
+          jp.experience_level,
+          jp.job_title,
           (
             select count(*)
             from public.interview_questions iq
@@ -343,198 +367,414 @@ export async function POST(request: Request) {
         from public.interview_attempts ia
         join public.interviews i
           on i.interview_id = ia.interview_id
+        left join public.job_positions jp
+          on jp.job_id = i.job_id
         where ia.attempt_id = ${attemptId}::uuid
         limit 1
       `;
-      const attempt = attempts[0];
-
-      if (!attempt) {
-        return Response.json(
-          { error: "Interview attempt not found" },
-          { status: 404 }
-        );
+    } catch (error) {
+      if (!hasMissingDatabaseColumnError(error)) {
+        throw error;
       }
 
-      const askedQuestions = await prisma.$queryRaw<AskedQuestionRow[]>`
+      attempts = await prisma.$queryRaw<AttemptContextRow[]>`
+        select
+          ia.interview_id,
+          ia.started_at,
+          i.question_count,
+          i.duration_minutes,
+          ${null}::int as required_follow_up_questions,
+          jp.experience_level,
+          jp.job_title,
+          (
+            select count(*)
+            from public.interview_questions iq
+            where iq.interview_id = ia.interview_id
+          )::int as planned_question_count
+        from public.interview_attempts ia
+        join public.interviews i
+          on i.interview_id = ia.interview_id
+        left join public.job_positions jp
+          on jp.job_id = i.job_id
+        where ia.attempt_id = ${attemptId}::uuid
+        limit 1
+      `;
+    }
+
+    const attempt = attempts[0];
+
+    if (!attempt) {
+      return Response.json(
+        { error: "Interview attempt not found" },
+        { status: 404 }
+      );
+    }
+
+    const askedQuestions = await prisma.$queryRaw<AskedQuestionRow[]>`
         select
           session_question_id,
           question_id,
           content,
           source,
+          question_kind,
           asked_at
         from public.session_questions
         where attempt_id = ${attemptId}::uuid
-        order by asked_at asc nulls last, session_question_id asc
+        order by question_order asc nulls last, asked_at asc nulls last, session_question_id asc
+    `;
+
+    const latestQuestion = askedQuestions.at(-1) ?? null;
+    const blueprint = buildInterviewBlueprint({
+      configuredCount: attempt.question_count,
+      durationMinutes: attempt.duration_minutes,
+      plannedQuestionCount: attempt.planned_question_count,
+      experienceLevel: attempt.experience_level,
+    });
+    const totalLimit = blueprint.totalQuestions;
+    const askedTotal = askedQuestions.length;
+    const askedFollowUps = askedQuestions.filter(
+      (question: AskedQuestionRow) => question.question_kind === "follow_up"
+    ).length;
+    const requiredFollowUps = Math.min(
+      attempt.required_follow_up_questions ?? 2,
+      Math.max(totalLimit - 1, 0)
+    );
+    const remainingFollowUps = Math.max(requiredFollowUps - askedFollowUps, 0);
+    const elapsedSeconds = Math.max(
+      0,
+      Math.round((Date.now() - new Date(attempt.started_at).getTime()) / 1000)
+    );
+
+    let plannedQuestions: NextCoreQuestionRow[] = [];
+
+    try {
+      plannedQuestions = await prisma.$queryRaw<NextCoreQuestionRow[]>`
+          select
+            iq.question_id,
+            coalesce(nullif(iq.question_text, ''), q.question_text) as question_text,
+            coalesce(iq.question_type, q.question_type) as question_type,
+            iq.source_type,
+            iq.question_order,
+            iq.allow_follow_up,
+            iq.difficulty_level,
+            iq.phase_hint,
+            iq.target_skill_id,
+            sm.skill_name
+          from public.interview_questions iq
+          left join public.questions q
+            on q.question_id = iq.question_id
+          left join public.skill_master sm
+            on sm.skill_id = iq.target_skill_id
+          where iq.interview_id = ${attempt.interview_id}::uuid
+            and coalesce(nullif(iq.question_text, ''), q.question_text) is not null
+          order by iq.question_order asc
       `;
+    } catch (plannedQuestionError) {
+      if (!hasMissingDatabaseColumnError(plannedQuestionError)) {
+        throw plannedQuestionError;
+      }
 
-      const latestQuestion = askedQuestions.at(-1) ?? null;
-      const totalLimit = resolveEffectiveQuestionCount({
-        configuredCount: attempt.question_count,
-        durationMinutes: attempt.duration_minutes,
-        plannedQuestionCount: attempt.planned_question_count,
-      });
-      const askedTotal = askedQuestions.length;
-      const askedFollowUps = askedQuestions.filter(
-        (question: AskedQuestionRow) => !question.question_id
-      ).length;
-      const requiredFollowUps = Math.min(2, totalLimit);
-      const remainingSlots = Math.max(totalLimit - askedTotal, 0);
-      const remainingFollowUps = Math.max(requiredFollowUps - askedFollowUps, 0);
+      plannedQuestions = await prisma.$queryRaw<NextCoreQuestionRow[]>`
+          select
+            iq.question_id,
+            q.question_text,
+            q.question_type,
+            ${null}::text as source_type,
+            iq.question_order,
+            ${true}::boolean as allow_follow_up,
+            q.difficulty_level,
+            ${null}::text as phase_hint,
+            ${null}::uuid as target_skill_id,
+            ${null}::text as skill_name
+          from public.interview_questions iq
+          join public.questions q
+            on q.question_id = iq.question_id
+          where iq.interview_id = ${attempt.interview_id}::uuid
+          order by iq.question_order asc
+      `;
+    }
 
-      if (remainingSlots <= 0) {
-        sessionQuestion = {
-          session_question_id: null,
-          question_id: null,
-          content: null,
-          source: null,
-          question_kind: null,
-          question_order: null,
-          asked_at: null,
-          is_complete: true,
-        };
-      } else {
-        const latestAnswerRecord = latestQuestion
-          ? (
-              await prisma.$queryRaw<LatestAnswerRow[]>`
+    const requiredSkills = await prisma.$queryRaw<RequiredSkillRow[]>`
+        select distinct
+          sm.skill_id,
+          sm.skill_name
+        from public.interview_skill_map ism
+        join public.skill_master sm
+          on sm.skill_id = ism.skill_id
+        where ism.interview_id = ${attempt.interview_id}::uuid
+    `;
+
+    const askedState = buildAskedQuestionState({
+      askedQuestions: askedQuestions.map((question: AskedQuestionRow) => ({
+        questionId: question.question_id,
+        content: question.content,
+        questionKind: question.question_kind,
+      })),
+      plannedQuestions: plannedQuestions.map((question: NextCoreQuestionRow) => ({
+        questionId: question.question_id,
+        questionText: question.question_text,
+        questionType: question.question_type,
+        sourceType: question.source_type,
+        questionOrder: question.question_order,
+        allowFollowUp: question.allow_follow_up ?? true,
+        difficultyLevel: question.difficulty_level,
+        phaseHint: question.phase_hint,
+        targetSkillId: question.target_skill_id,
+        skillName: question.skill_name,
+      })),
+      requiredSkills: requiredSkills.map((skill: RequiredSkillRow) => ({
+        skillId: skill.skill_id,
+        skillName: skill.skill_name,
+      })),
+    });
+
+    const completion = shouldCompleteInterview({
+      askedTotal,
+      totalQuestions: totalLimit,
+      elapsedSeconds,
+      durationMinutes: attempt.duration_minutes,
+      requiredSkillIds: requiredSkills.map((skill: RequiredSkillRow) => skill.skill_id),
+      coveredSkillIds: askedState.coveredSkillIds,
+    });
+
+    if (completion.complete) {
+      sessionQuestion = {
+        session_question_id: null,
+        question_id: null,
+        content: null,
+        source: null,
+        question_kind: null,
+        question_order: null,
+        asked_at: null,
+        is_complete: true,
+      };
+    } else {
+      const latestAnswerRecord = latestQuestion
+        ? (
+            await prisma.$queryRaw<LatestAnswerRow[]>`
                 select answer_text
                 from public.interview_answers
                 where session_question_id = ${latestQuestion.session_question_id}::uuid
                 order by answered_at desc nulls last
                 limit 1
+            `
+          )[0]
+        : null;
+      const latestEvaluation =
+        latestQuestion && latestAnswerRecord?.answer_text
+          ? (
+              await prisma.$queryRaw<LatestEvaluationRow[]>`
+                  select iae.skill_score
+                  from public.interview_answers ia
+                  join public.interview_answer_evaluations iae
+                    on iae.answer_id = ia.answer_id
+                   and iae.evaluator_type = 'AI'
+                  where ia.session_question_id = ${latestQuestion.session_question_id}::uuid
+                  order by ia.answered_at desc nulls last
+                  limit 1
               `
             )[0]
           : null;
 
-        const effectiveLastAnswer =
-          lastAnswer?.trim() || latestAnswerRecord?.answer_text || "";
-        const wordCount = effectiveLastAnswer
-          ? effectiveLastAnswer.trim().split(/\s+/).length
-          : 0;
+      const effectiveLastAnswer =
+        lastAnswer?.trim() || latestAnswerRecord?.answer_text || "";
+      const wordCount = effectiveLastAnswer
+        ? effectiveLastAnswer.trim().split(/\s+/).length
+        : 0;
+      const skillScore = asNumber(latestEvaluation?.skill_score);
+      const targetDifficulty =
+        skillScore >= 0.75 ? 4 : skillScore > 0 && skillScore <= 0.45 ? 2 : 3;
+      const nextCore = selectNextCoreQuestion({
+        plannedQuestions: plannedQuestions.map((question: NextCoreQuestionRow) => ({
+          questionId: question.question_id,
+          questionText: question.question_text,
+          questionType: question.question_type,
+          sourceType: question.source_type,
+          questionOrder: question.question_order,
+          allowFollowUp: question.allow_follow_up ?? true,
+          difficultyLevel: question.difficulty_level,
+          phaseHint: question.phase_hint,
+          targetSkillId: question.target_skill_id,
+          skillName: question.skill_name,
+        })),
+        askedQuestions: askedQuestions.map((question: AskedQuestionRow) => ({
+          questionId: question.question_id,
+          content: question.content,
+          questionKind: question.question_kind,
+        })),
+        blueprint,
+        targetDifficulty,
+      });
+      const shouldPreferNextCore =
+        Boolean(nextCore) &&
+        isExperienceOverviewQuestion(latestQuestion?.content) &&
+        answerAlreadyCoversExperienceOverview(effectiveLastAnswer);
 
-        const nextCores = await prisma.$queryRaw<NextCoreQuestionRow[]>`
-          select
-            iq.question_id,
-            q.question_text,
-            q.question_type
-          from public.interview_questions iq
-          join public.questions q
-            on q.question_id = iq.question_id
-          where iq.interview_id = ${attempt.interview_id}::uuid
-            and not exists (
-              select 1
-              from public.session_questions sq
-              where sq.attempt_id = ${attemptId}::uuid
-                and sq.question_id = iq.question_id
-            )
-          order by iq.question_order asc
-          limit 1
-        `;
-        const nextCore = nextCores[0];
-        const shouldPreferNextCore =
-          Boolean(nextCore) &&
-          isExperienceOverviewQuestion(latestQuestion?.content) &&
-          answerAlreadyCoversExperienceOverview(effectiveLastAnswer);
+      const shouldAskFollowUp =
+        latestQuestion?.question_kind === "core" &&
+        !shouldPreferNextCore &&
+        remainingFollowUps > 0 &&
+        Boolean(effectiveLastAnswer) &&
+        (wordCount >= 25 ||
+          skillScore <= 0.55 ||
+          !nextCore);
 
-        const shouldAskFollowUp =
-          Boolean(latestQuestion?.question_id) &&
-          !shouldPreferNextCore &&
-          remainingFollowUps > 0 &&
-          Boolean(effectiveLastAnswer) &&
-          (wordCount >= 25 ||
-            remainingSlots <= remainingFollowUps + 1 ||
-            !nextCore);
+      let createdQuestion: CreatedSessionQuestionRow | null = null;
+      let createdQuestionType: string | null = null;
 
-        let createdQuestion: CreatedSessionQuestionRow | null = null;
-        let createdQuestionType: string | null = null;
-
-        if (shouldAskFollowUp) {
-          const createdQuestions = await prisma.$queryRaw<CreatedSessionQuestionRow[]>`
+      if (shouldAskFollowUp) {
+        const createdQuestions = await prisma.$queryRaw<CreatedSessionQuestionRow[]>`
             insert into public.session_questions (
               attempt_id,
               question_id,
               content,
-              source
+              source,
+              question_kind,
+              question_order
             )
             values (
               ${attemptId}::uuid,
               ${null}::uuid,
               ${buildFollowUpQuestion(effectiveLastAnswer)}::text,
-              ${"ai"}::text
+              ${"ai"}::text,
+              ${"follow_up"}::text,
+              ${askedTotal + 1}::integer
             )
             returning
               session_question_id,
               question_id,
               content,
               source,
-              asked_at
+              asked_at,
+              question_kind
           `;
-          createdQuestion = createdQuestions[0] ?? null;
-        } else if (nextCore) {
-          const createdQuestions = await prisma.$queryRaw<CreatedSessionQuestionRow[]>`
+        createdQuestion = createdQuestions[0] ?? null;
+        createdQuestionType = "follow_up";
+      } else if (nextCore?.questionText) {
+        const createdQuestions = await prisma.$queryRaw<CreatedSessionQuestionRow[]>`
             insert into public.session_questions (
               attempt_id,
               question_id,
               content,
-              source
+              source,
+              question_kind,
+              question_order
             )
             values (
               ${attemptId}::uuid,
-              ${nextCore.question_id}::uuid,
-              ${nextCore.question_text}::text,
-              ${"system"}::text
+              ${nextCore.questionId}::uuid,
+              ${nextCore.questionText}::text,
+              ${"system"}::text,
+              ${"core"}::text,
+              ${askedTotal + 1}::integer
             )
             returning
               session_question_id,
               question_id,
               content,
               source,
-              asked_at
+              asked_at,
+              question_kind
           `;
-          createdQuestion = createdQuestions[0] ?? null;
-          createdQuestionType = nextCore.question_type ?? null;
-        } else if (remainingFollowUps > 0 && effectiveLastAnswer) {
-          const createdQuestions = await prisma.$queryRaw<CreatedSessionQuestionRow[]>`
+        createdQuestion = createdQuestions[0] ?? null;
+        createdQuestionType = nextCore.questionType ?? "open_ended";
+      } else {
+        const nextExpectedSource = pickNextExpectedSource(
+          blueprint,
+          askedState.usedDistribution
+        );
+        const uncoveredSkill =
+          requiredSkills.find(
+            (skill: RequiredSkillRow) => !askedState.coveredSkillIds.has(skill.skill_id)
+          ) ??
+          null;
+        const phase = deriveInterviewPhase({
+          askedTotal,
+          totalQuestions: totalLimit,
+        });
+        const createdQuestions = await prisma.$queryRaw<CreatedSessionQuestionRow[]>`
             insert into public.session_questions (
               attempt_id,
               question_id,
               content,
-              source
+              source,
+              question_kind,
+              question_order
             )
             values (
               ${attemptId}::uuid,
               ${null}::uuid,
-              ${buildFollowUpQuestion(effectiveLastAnswer)}::text,
-              ${"ai"}::text
+              ${buildFallbackCoreQuestion({
+                sourceType: nextExpectedSource,
+                skillName: uncoveredSkill?.skill_name ?? plannedQuestions[0]?.skill_name ?? null,
+                roleTitle: attempt.job_title,
+                phase,
+              })}::text,
+              ${"system"}::text,
+              ${"core"}::text,
+              ${askedTotal + 1}::integer
             )
             returning
               session_question_id,
               question_id,
               content,
               source,
-              asked_at
+              asked_at,
+              question_kind
           `;
-          createdQuestion = createdQuestions[0] ?? null;
-        }
-
-        sessionQuestion = createdQuestion
-          ? {
-              ...createdQuestion,
-              question_kind: createdQuestion.question_id ? "core" : "follow_up",
-              question_order: askedTotal + 1,
-              is_complete: false,
-              question_type: createdQuestionType,
-            }
-          : {
-              session_question_id: null,
-              question_id: null,
-              content: null,
-              source: null,
-              question_kind: null,
-              question_order: null,
-              asked_at: null,
-              is_complete: true,
-            };
+        createdQuestion = createdQuestions[0] ?? null;
+        createdQuestionType =
+          nextExpectedSource === "behavioral" ? "behavioral" : "open_ended";
       }
+
+      if (!createdQuestion && remainingFollowUps > 0 && effectiveLastAnswer) {
+        const createdQuestions = await prisma.$queryRaw<CreatedSessionQuestionRow[]>`
+            insert into public.session_questions (
+              attempt_id,
+              question_id,
+              content,
+              source,
+              question_kind,
+              question_order
+            )
+            values (
+              ${attemptId}::uuid,
+              ${null}::uuid,
+              ${buildFollowUpQuestion(effectiveLastAnswer)}::text,
+              ${"ai"}::text,
+              ${"follow_up"}::text,
+              ${askedTotal + 1}::integer
+            )
+            returning
+              session_question_id,
+              question_id,
+              content,
+              source,
+              asked_at,
+              question_kind
+          `;
+        createdQuestion = createdQuestions[0] ?? null;
+        createdQuestionType = "follow_up";
+      }
+
+      sessionQuestion = createdQuestion
+        ? {
+            ...createdQuestion,
+            question_kind: createdQuestion.question_kind ?? "core",
+            question_order: askedTotal + 1,
+            is_complete: false,
+            question_type: createdQuestionType,
+          }
+        : {
+            session_question_id: null,
+            question_id: null,
+            content: null,
+            source: null,
+            question_kind: null,
+            question_order: null,
+            asked_at: null,
+            is_complete: true,
+          };
     }
 
     console.log(
