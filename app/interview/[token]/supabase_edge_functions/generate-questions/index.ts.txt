@@ -1,17 +1,96 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
-import { CORS_HEADERS, asStringArray, createSupabase, jsonResponse } from "../_shared/common.ts";
+import {
+  CORS_HEADERS,
+  asStringArray,
+  createSupabase,
+  jsonResponse,
+} from "../_shared/common.ts";
 import { createJsonChatCompletion } from "../_shared/openai.ts";
+
+type QuestionSource = "resume" | "job" | "behavioral";
 
 type GeneratedQuestion = {
   question_text: string;
-  source_type: "resume" | "job" | "behavioral";
+  source_type: QuestionSource;
   reference_context: Record<string, unknown>;
   mapped_skill?: string;
   phase_hint?: "warmup" | "core" | "probe" | "closing";
   difficulty_level?: number;
   allow_follow_up?: boolean;
 };
+
+type ResumeContext = {
+  rawResume: string | null;
+  skills: string[];
+  claims: string[];
+  experienceYears: number | null;
+};
+
+type JobContext = {
+  title: string | null;
+  description: string | null;
+  coreSkills: string[];
+  difficultyProfile: string | null;
+};
+
+type InterviewContext = {
+  roleTitle: string | null;
+  resume: ResumeContext;
+  job: JobContext;
+  interviewSkills: string[];
+};
+
+type Distribution = Record<QuestionSource, number>;
+
+const STOP_WORDS = new Set([
+  "a",
+  "an",
+  "and",
+  "are",
+  "as",
+  "at",
+  "be",
+  "can",
+  "do",
+  "for",
+  "from",
+  "have",
+  "how",
+  "in",
+  "is",
+  "of",
+  "on",
+  "or",
+  "the",
+  "this",
+  "to",
+  "what",
+  "when",
+  "where",
+  "with",
+  "would",
+  "you",
+  "your",
+]);
+
+const GENERIC_PATTERNS = [
+  /tell me about yourself/i,
+  /tell me about your experience/i,
+  /walk me through your background/i,
+  /describe your background/i,
+  /what do you do/i,
+  /tell me about a recent problem/i,
+];
+
+const INTENT_PATTERNS: Array<{ intent: string; pattern: RegExp }> = [
+  { intent: "optimize", pattern: /\b(optimi[sz]e|performance|slow query|bottleneck)\b/i },
+  { intent: "debug", pattern: /\b(debug|troubleshoot|incident|issue|failure|outage)\b/i },
+  { intent: "design", pattern: /\b(design|architect|structure|approach|plan)\b/i },
+  { intent: "migration", pattern: /\b(migration|migrate|upgrade|moderni[sz]e)\b/i },
+  { intent: "ownership", pattern: /\b(led|owned|managed|responsible|stakeholder)\b/i },
+  { intent: "behavior", pattern: /\b(conflict|decision|feedback|trade-?off|priority|pressure)\b/i },
+];
 
 function normalizePositiveInteger(value: number | null | undefined) {
   if (typeof value !== "number" || !Number.isFinite(value)) {
@@ -20,6 +99,28 @@ function normalizePositiveInteger(value: number | null | undefined) {
 
   const normalized = Math.floor(value);
   return normalized > 0 ? normalized : 0;
+}
+
+function normalizeText(value: string | null | undefined) {
+  return value?.replace(/\s+/g, " ").trim() ?? "";
+}
+
+function normalizeQuestionText(value: string | null | undefined) {
+  return normalizeText(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function tokenizeQuestion(value: string | null | undefined) {
+  return normalizeQuestionText(value)
+    .split(" ")
+    .filter((token) => token.length > 2 && !STOP_WORDS.has(token));
+}
+
+function uniqueStrings(values: Array<string | null | undefined>) {
+  return [...new Set(values.map((value) => normalizeText(value)).filter(Boolean))];
 }
 
 function deriveQuestionTargetFromDuration(durationMinutes: number | null | undefined) {
@@ -50,6 +151,143 @@ function resolveEffectiveQuestionCount(params: {
   }
 
   return effectiveCount;
+}
+
+function buildDistribution(totalQuestions: number, hasResumeContext: boolean): Distribution {
+  const weights = hasResumeContext
+    ? { resume: 0.3, job: 0.5, behavioral: 0.2 }
+    : { resume: 0, job: 0.7, behavioral: 0.3 };
+
+  const base = {
+    resume: Math.floor(totalQuestions * weights.resume),
+    job: Math.floor(totalQuestions * weights.job),
+    behavioral: Math.floor(totalQuestions * weights.behavioral),
+  } satisfies Distribution;
+
+  let assigned = base.resume + base.job + base.behavioral;
+  const order: QuestionSource[] = hasResumeContext
+    ? ["job", "resume", "behavioral"]
+    : ["job", "behavioral", "resume"];
+
+  while (assigned < totalQuestions) {
+    const next = order[(assigned - (base.resume + base.job + base.behavioral)) % order.length];
+    base[next] += 1;
+    assigned += 1;
+  }
+
+  if (hasResumeContext && base.resume === 0 && totalQuestions >= 3) {
+    base.resume = 1;
+    if (base.job > base.behavioral) {
+      base.job -= 1;
+    } else {
+      base.behavioral -= 1;
+    }
+  }
+
+  return base;
+}
+
+function extractClaimPhrases(value: unknown): string[] {
+  const phrases: string[] = [];
+
+  const walk = (input: unknown) => {
+    if (!input) {
+      return;
+    }
+
+    if (typeof input === "string") {
+      const normalized = normalizeText(input);
+      if (normalized && normalized.length >= 8) {
+        phrases.push(normalized);
+      }
+      return;
+    }
+
+    if (Array.isArray(input)) {
+      input.forEach(walk);
+      return;
+    }
+
+    if (typeof input === "object") {
+      Object.values(input as Record<string, unknown>).forEach(walk);
+    }
+  };
+
+  walk(value);
+
+  return uniqueStrings(phrases).slice(0, 12);
+}
+
+function detectIntent(questionText: string) {
+  for (const candidate of INTENT_PATTERNS) {
+    if (candidate.pattern.test(questionText)) {
+      return candidate.intent;
+    }
+  }
+
+  return "general";
+}
+
+function similarityScore(left: string, right: string) {
+  const leftTokens = new Set(tokenizeQuestion(left));
+  const rightTokens = new Set(tokenizeQuestion(right));
+
+  if (leftTokens.size === 0 || rightTokens.size === 0) {
+    return 0;
+  }
+
+  let overlap = 0;
+  for (const token of leftTokens) {
+    if (rightTokens.has(token)) {
+      overlap += 1;
+    }
+  }
+
+  const unionSize = new Set([...leftTokens, ...rightTokens]).size;
+  return unionSize === 0 ? 0 : overlap / unionSize;
+}
+
+function isGenericQuestion(questionText: string) {
+  return GENERIC_PATTERNS.some((pattern) => pattern.test(questionText));
+}
+
+function containsAnchor(questionText: string, anchors: string[]) {
+  const normalized = normalizeQuestionText(questionText);
+  return anchors.some((anchor) => {
+    const normalizedAnchor = normalizeQuestionText(anchor);
+    return normalizedAnchor.length >= 3 && normalized.includes(normalizedAnchor);
+  });
+}
+
+function buildContextAnchors(context: InterviewContext) {
+  const resumeAnchors = uniqueStrings([
+    ...context.resume.skills,
+    ...context.resume.claims,
+    context.resume.experienceYears ? `${context.resume.experienceYears} years` : null,
+    context.roleTitle,
+  ]);
+  const jobAnchors = uniqueStrings([
+    context.roleTitle,
+    ...context.job.coreSkills,
+    ...context.interviewSkills,
+  ]);
+  const behavioralAnchors = uniqueStrings([context.roleTitle, ...context.job.coreSkills]);
+
+  return { resumeAnchors, jobAnchors, behavioralAnchors };
+}
+
+function isContextualQuestion(question: GeneratedQuestion, context: InterviewContext) {
+  const anchors = buildContextAnchors(context);
+
+  if (question.source_type === "resume") {
+    return containsAnchor(question.question_text, anchors.resumeAnchors);
+  }
+
+  if (question.source_type === "job") {
+    return containsAnchor(question.question_text, anchors.jobAnchors);
+  }
+
+  return containsAnchor(question.question_text, anchors.behavioralAnchors);
 }
 
 function normalizeQuestions(payload: Record<string, unknown>): GeneratedQuestion[] {
@@ -102,6 +340,271 @@ function normalizeQuestions(payload: Record<string, unknown>): GeneratedQuestion
       } satisfies GeneratedQuestion;
     })
     .filter((item): item is GeneratedQuestion => item !== null);
+}
+
+function isTooSimilar(
+  questionText: string,
+  sourceType: QuestionSource,
+  acceptedQuestions: GeneratedQuestion[]
+) {
+  const newIntent = detectIntent(questionText);
+  const newTokens = tokenizeQuestion(questionText);
+
+  return acceptedQuestions.some((existing) => {
+    const existingIntent = detectIntent(existing.question_text);
+    const score = similarityScore(questionText, existing.question_text);
+    const sharedLongTokens = newTokens.filter((token) =>
+      tokenizeQuestion(existing.question_text).includes(token)
+    );
+
+    return (
+      score >= 0.58 ||
+      (newIntent === existingIntent &&
+        sharedLongTokens.length >= 3 &&
+        existing.source_type === sourceType)
+    );
+  });
+}
+
+function buildReferenceContext(params: {
+  sourceType: QuestionSource;
+  roleTitle: string | null;
+  anchor: string;
+  intent: string;
+  claim?: string | null;
+}) {
+  return {
+    role_title: params.roleTitle,
+    anchor: params.anchor,
+    intent: params.intent,
+    claim: params.claim ?? null,
+  } satisfies Record<string, unknown>;
+}
+
+function buildResumeQuestion(params: {
+  roleTitle: string | null;
+  skillOrClaim: string;
+  index: number;
+}): GeneratedQuestion {
+  const focus = normalizeText(params.skillOrClaim) || "your background";
+  const rolePrefix = params.roleTitle ? `For the ${params.roleTitle} role, ` : "";
+  const templates = [
+    `${rolePrefix}you highlighted ${focus}. Can you walk me through a concrete project where you applied it and what result you achieved?`,
+    `${rolePrefix}your resume points to ${focus}. What was the most technically challenging part of that work, and how did you handle it?`,
+    `${rolePrefix}you mentioned ${focus}. How did you measure success in that work and what changed because of your contribution?`,
+  ];
+
+  return {
+    question_text: templates[params.index % templates.length],
+    source_type: "resume",
+    reference_context: buildReferenceContext({
+      sourceType: "resume",
+      roleTitle: params.roleTitle,
+      anchor: focus,
+      intent: detectIntent(templates[params.index % templates.length]),
+      claim: focus,
+    }),
+    mapped_skill: focus,
+    phase_hint: params.index === 0 ? "warmup" : "core",
+    difficulty_level: 3,
+    allow_follow_up: true,
+  };
+}
+
+function buildJobQuestion(params: {
+  roleTitle: string | null;
+  skill: string;
+  index: number;
+}): GeneratedQuestion {
+  const skill = normalizeText(params.skill) || "the core responsibilities";
+  const rolePrefix = params.roleTitle ? `In the ${params.roleTitle} role, ` : "";
+  const templates = [
+    `${rolePrefix}how have you handled ${skill} in a production environment?`,
+    `${rolePrefix}what is your approach to solving a real problem involving ${skill}?`,
+    `${rolePrefix}can you walk me through a situation where ${skill} was critical to delivery or stability?`,
+    `${rolePrefix}what trade-offs do you consider when working on ${skill}?`,
+  ];
+
+  return {
+    question_text: templates[params.index % templates.length],
+    source_type: "job",
+    reference_context: buildReferenceContext({
+      sourceType: "job",
+      roleTitle: params.roleTitle,
+      anchor: skill,
+      intent: detectIntent(templates[params.index % templates.length]),
+    }),
+    mapped_skill: skill,
+    phase_hint: params.index >= 2 ? "probe" : "core",
+    difficulty_level: 3 + (params.index % 2),
+    allow_follow_up: true,
+  };
+}
+
+function buildBehavioralQuestion(params: {
+  roleTitle: string | null;
+  skill: string;
+  index: number;
+}): GeneratedQuestion {
+  const skill = normalizeText(params.skill) || "your work";
+  const rolePrefix = params.roleTitle ? `In your ${params.roleTitle} work, ` : "";
+  const templates = [
+    `${rolePrefix}tell me about a time you had to make a difficult decision while working on ${skill}.`,
+    `${rolePrefix}describe a situation where you had to balance speed, quality, and stakeholder expectations around ${skill}.`,
+    `${rolePrefix}share an example of how you handled pressure or disagreement while delivering work related to ${skill}.`,
+  ];
+
+  return {
+    question_text: templates[params.index % templates.length],
+    source_type: "behavioral",
+    reference_context: buildReferenceContext({
+      sourceType: "behavioral",
+      roleTitle: params.roleTitle,
+      anchor: skill,
+      intent: detectIntent(templates[params.index % templates.length]),
+    }),
+    mapped_skill: skill,
+    phase_hint: "probe",
+    difficulty_level: 3,
+    allow_follow_up: true,
+  };
+}
+
+function buildFallbackQuestion(
+  sourceType: QuestionSource,
+  context: InterviewContext,
+  index: number
+): GeneratedQuestion {
+  if (sourceType === "resume") {
+    const focus =
+      context.resume.claims[index % Math.max(context.resume.claims.length, 1)] ??
+      context.resume.skills[index % Math.max(context.resume.skills.length, 1)] ??
+      context.roleTitle ??
+      "your recent experience";
+
+    return buildResumeQuestion({
+      roleTitle: context.roleTitle,
+      skillOrClaim: focus,
+      index,
+    });
+  }
+
+  if (sourceType === "job") {
+    const focus =
+      context.job.coreSkills[index % Math.max(context.job.coreSkills.length, 1)] ??
+      context.interviewSkills[index % Math.max(context.interviewSkills.length, 1)] ??
+      context.roleTitle ??
+      "the role requirements";
+
+    return buildJobQuestion({
+      roleTitle: context.roleTitle,
+      skill: focus,
+      index,
+    });
+  }
+
+  const focus =
+    context.job.coreSkills[index % Math.max(context.job.coreSkills.length, 1)] ??
+    context.interviewSkills[index % Math.max(context.interviewSkills.length, 1)] ??
+    context.roleTitle ??
+    "your core responsibilities";
+
+  return buildBehavioralQuestion({
+    roleTitle: context.roleTitle,
+    skill: focus,
+    index,
+  });
+}
+
+function distributeQuestions(
+  generatedQuestions: GeneratedQuestion[],
+  distribution: Distribution,
+  context: InterviewContext
+) {
+  const accepted: GeneratedQuestion[] = [];
+  const acceptedBySource: Record<QuestionSource, GeneratedQuestion[]> = {
+    resume: [],
+    job: [],
+    behavioral: [],
+  };
+
+  for (const question of generatedQuestions) {
+    if (isGenericQuestion(question.question_text)) {
+      continue;
+    }
+
+    if (!isContextualQuestion(question, context)) {
+      continue;
+    }
+
+    if (isTooSimilar(question.question_text, question.source_type, accepted)) {
+      continue;
+    }
+
+    if (acceptedBySource[question.source_type].length >= distribution[question.source_type]) {
+      continue;
+    }
+
+    accepted.push(question);
+    acceptedBySource[question.source_type].push(question);
+  }
+
+  for (const sourceType of ["job", "resume", "behavioral"] as QuestionSource[]) {
+    let index = 0;
+
+    while (acceptedBySource[sourceType].length < distribution[sourceType]) {
+      const fallback = buildFallbackQuestion(sourceType, context, index);
+
+      if (
+        !isGenericQuestion(fallback.question_text) &&
+        !isTooSimilar(fallback.question_text, fallback.source_type, accepted)
+      ) {
+        accepted.push(fallback);
+        acceptedBySource[sourceType].push(fallback);
+      }
+
+      index += 1;
+
+      if (index > 20) {
+        break;
+      }
+    }
+  }
+
+  const orderedSources: QuestionSource[] = [];
+  const remaining = { ...distribution };
+
+  while (orderedSources.length < Object.values(distribution).reduce((sum, value) => sum + value, 0)) {
+    if (remaining.resume > 0) {
+      orderedSources.push("resume");
+      remaining.resume -= 1;
+    }
+
+    if (remaining.job > 0) {
+      orderedSources.push("job");
+      remaining.job -= 1;
+    }
+
+    if (remaining.job > 0) {
+      orderedSources.push("job");
+      remaining.job -= 1;
+    }
+
+    if (remaining.behavioral > 0) {
+      orderedSources.push("behavioral");
+      remaining.behavioral -= 1;
+    }
+  }
+
+  const sourceQueues: Record<QuestionSource, GeneratedQuestion[]> = {
+    resume: [...acceptedBySource.resume],
+    job: [...acceptedBySource.job],
+    behavioral: [...acceptedBySource.behavioral],
+  };
+
+  return orderedSources
+    .map((sourceType) => sourceQueues[sourceType].shift() ?? null)
+    .filter((question): question is GeneratedQuestion => question !== null);
 }
 
 Deno.serve(async (request) => {
@@ -159,6 +662,35 @@ Deno.serve(async (request) => {
           .eq("interview_id", interviewId),
       ]);
 
+    const context: InterviewContext = {
+      roleTitle: normalizeText(job?.job_title) || null,
+      resume: {
+        rawResume: resume?.raw_resume ?? null,
+        skills: uniqueStrings(asStringArray(resume?.extracted_skills)).slice(0, 12),
+        claims: extractClaimPhrases(resume?.extracted_claims),
+        experienceYears:
+          typeof resume?.claimed_experience_years === "number"
+            ? resume.claimed_experience_years
+            : null,
+      },
+      job: {
+        title: normalizeText(job?.job_title) || null,
+        description: normalizeText(job?.job_description) || null,
+        coreSkills: uniqueStrings(asStringArray(job?.core_skills)).slice(0, 12),
+        difficultyProfile: normalizeText(job?.difficulty_profile) || null,
+      },
+      interviewSkills: uniqueStrings(
+        (skills ?? []).flatMap((item) => {
+          const skill = item?.skill_master as
+            | { skill_name?: string | null; skill_code?: string | null }
+            | null
+            | undefined;
+
+          return [skill?.skill_name ?? null, skill?.skill_code ?? null];
+        })
+      ).slice(0, 12),
+    };
+
     const targetQuestionCount = resolveEffectiveQuestionCount({
       configuredCount: interview.question_count,
       durationMinutes:
@@ -166,23 +698,29 @@ Deno.serve(async (request) => {
           ? interview.duration_minutes
           : templateConfig?.total_duration_minutes,
     });
+    const distribution = buildDistribution(
+      targetQuestionCount,
+      context.resume.skills.length > 0 || context.resume.claims.length > 0
+    );
 
     const prompt = await createJsonChatCompletion(
       [
         {
           role: "system",
           content: [
-            "You are generating interview-specific questions for an adaptive AI interview.",
+            "You are generating role-specific interview questions.",
             `Return exactly ${targetQuestionCount} questions in JSON under key "questions".`,
-            "Rules:",
-            "- Resume-based questions must verify claims from the candidate resume.",
-            "- Job-based questions must validate the job description and core skills.",
-            "- Behavioral questions must test communication, ownership, and decision-making.",
-            "- Include at least 2 strong follow-up-friendly core questions.",
-            "- Each question must include mapped_skill.",
-            "- Each question must include phase_hint from warmup/core/probe/closing.",
-            "- Each question must include difficulty_level from 1 to 5.",
-            "- Each question must include allow_follow_up boolean.",
+            `Question distribution must be: ${distribution.resume} resume, ${distribution.job} job, ${distribution.behavioral} behavioral.`,
+            "Strict rules:",
+            "- Do not ask generic questions such as 'tell me about yourself' or 'tell me about your experience'.",
+            "- Every resume question must reference a resume skill, resume claim, or claimed experience.",
+            "- Every job question must reference the job title, a required skill, or a job responsibility.",
+            "- Every behavioral question must still be anchored to the role or a relevant skill.",
+            "- Do not repeat the same intent with different wording.",
+            "- Vary intent across optimization, troubleshooting, design, migration, ownership, decision-making, and trade-offs.",
+            "- Each question must be concise, specific, and interviewer-style.",
+            "- Each question must include mapped_skill when possible.",
+            "- Each question must include source_type, reference_context, phase_hint, difficulty_level, and allow_follow_up.",
             "Return only JSON.",
           ].join("\n"),
         },
@@ -190,41 +728,60 @@ Deno.serve(async (request) => {
           role: "user",
           content: JSON.stringify(
             {
-              interview,
+              interview: {
+                ...interview,
+                target_question_count: targetQuestionCount,
+                target_distribution: distribution,
+              },
               resume: {
-                raw_resume: resume?.raw_resume ?? null,
-                extracted_skills: asStringArray(resume?.extracted_skills),
-                extracted_claims: resume?.extracted_claims ?? {},
-                claimed_experience_years: resume?.claimed_experience_years ?? null,
+                raw_resume: context.resume.rawResume,
+                extracted_skills: context.resume.skills,
+                extracted_claims: context.resume.claims,
+                claimed_experience_years: context.resume.experienceYears,
               },
               job: {
-                job_title: job?.job_title ?? null,
-                job_description: job?.job_description ?? null,
-                core_skills: asStringArray(job?.core_skills),
-                difficulty_profile: job?.difficulty_profile ?? null,
+                job_title: context.job.title,
+                job_description: context.job.description,
+                core_skills: context.job.coreSkills,
+                difficulty_profile: context.job.difficultyProfile,
               },
-              template_config: templateConfig ?? null,
-              interview_skills: skills ?? [],
+              interview_skills: context.interviewSkills,
+              generation_rules: {
+                reject_generic: true,
+                reject_repetition: true,
+                priority_order: [
+                  "uncovered job skills",
+                  "unverified resume claims",
+                  "behavioral fallback",
+                ],
+              },
             },
             null,
             2
           ),
         },
       ],
-      0.35
+      0.25
     );
 
-    const questions = normalizeQuestions(prompt);
+    const normalizedQuestions = normalizeQuestions(prompt);
+    const questions = distributeQuestions(normalizedQuestions, distribution, context);
 
     if (questions.length === 0) {
-      throw new Error("No valid questions generated");
+      throw new Error("No valid questions generated after validation");
     }
 
-    await supabase.from("interview_questions").delete().eq("interview_id", interviewId).eq("is_dynamic", true);
+    await supabase
+      .from("interview_questions")
+      .delete()
+      .eq("interview_id", interviewId)
+      .eq("is_dynamic", true);
 
-    const skillNames = questions
-      .map((question) => question.mapped_skill)
-      .filter((value): value is string => typeof value === "string" && value.length > 0);
+    const skillNames = uniqueStrings([
+      ...questions.map((question) => question.mapped_skill ?? null),
+      ...context.job.coreSkills,
+      ...context.interviewSkills,
+    ]);
 
     const { data: skillRows } = skillNames.length
       ? await supabase
@@ -254,8 +811,14 @@ Deno.serve(async (request) => {
       is_mandatory: true,
       allow_follow_up: question.allow_follow_up ?? true,
       question_text: question.question_text,
+      question_type:
+        question.source_type === "behavioral" ? "behavioral" : "open_ended",
       source_type: question.source_type,
-      reference_context: question.reference_context,
+      reference_context: {
+        ...question.reference_context,
+        distribution_slot: question.source_type,
+        memory_key: normalizeQuestionText(question.question_text),
+      },
       is_dynamic: true,
       phase_hint: question.phase_hint ?? "core",
       difficulty_level: question.difficulty_level ?? 3,
@@ -264,7 +827,9 @@ Deno.serve(async (request) => {
         : null,
     }));
 
-    const { error: insertError } = await supabase.from("interview_questions").insert(insertRows);
+    const { error: insertError } = await supabase
+      .from("interview_questions")
+      .insert(insertRows);
 
     if (insertError) {
       throw new Error(`Failed to insert interview questions: ${insertError.message}`);
@@ -273,6 +838,8 @@ Deno.serve(async (request) => {
     return jsonResponse({
       success: true,
       questions_inserted: insertRows.length,
+      distribution,
+      resume_stored: Boolean(context.resume.rawResume),
     });
   } catch (error) {
     console.error("[generate-questions]", error);
