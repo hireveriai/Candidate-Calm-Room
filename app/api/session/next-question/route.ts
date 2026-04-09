@@ -65,6 +65,44 @@ function hasMissingFunctionError(error: unknown, functionName: string) {
   );
 }
 
+function normalizeText(value: string | null | undefined) {
+  return value?.replace(/\s+/g, " ").trim() ?? "";
+}
+
+function isExperienceOverviewQuestion(question: string | null | undefined) {
+  const normalized = normalizeText(question).toLowerCase();
+
+  return (
+    normalized.includes("tell me about your experience") ||
+    normalized.includes("tell me about yourself") ||
+    normalized.includes("walk me through your background") ||
+    normalized.includes("work most relevant to this role") ||
+    normalized.includes("roles and responsibilities") ||
+    normalized.includes("role and responsibilities") ||
+    normalized.includes("current role")
+  );
+}
+
+function answerAlreadyCoversExperienceOverview(answer: string | null | undefined) {
+  const normalized = normalizeText(answer);
+
+  if (!normalized) {
+    return false;
+  }
+
+  const wordCount = normalized.split(/\s+/).length;
+  const mentionsRole =
+    /\b(currently|working as|my role|responsib|experience|years?|senior|lead|engineer|administrator|developer|analyst|manager)\b/i.test(
+      normalized
+    );
+  const technologyMatches =
+    normalized.match(
+      /\b(sql|oracle|postgres|postgresql|mysql|database|dba|linux|aws|azure|etl|jira|mongodb|python|java|node|typescript|react)\b/gi
+    )?.length ?? 0;
+
+  return wordCount >= 35 && mentionsRole && technologyMatches >= 1;
+}
+
 function buildFollowUpQuestion(lastAnswer: string | null | undefined) {
   const answer = lastAnswer?.trim();
 
@@ -80,7 +118,7 @@ function buildFollowUpQuestion(lastAnswer: string | null | undefined) {
     return `You mentioned "${excerpt}". What was the hardest decision you made there, and what measurable impact did it have?`;
   }
 
-  return `You mentioned "${excerpt}". Can you walk me through one specific example, your exact role, and the outcome?`;
+  return `You mentioned "${excerpt}". Can you walk me through one recent project where you applied those skills and the outcome you achieved?`;
 }
 
 export async function POST(request: Request) {
@@ -205,9 +243,14 @@ export async function POST(request: Request) {
           limit 1
         `;
         const nextCore = nextCores[0];
+        const shouldPreferNextCore =
+          Boolean(nextCore) &&
+          isExperienceOverviewQuestion(latestQuestion?.content) &&
+          answerAlreadyCoversExperienceOverview(effectiveLastAnswer);
 
         const shouldAskFollowUp =
           Boolean(latestQuestion?.question_id) &&
+          !shouldPreferNextCore &&
           remainingFollowUps > 0 &&
           Boolean(effectiveLastAnswer) &&
           (wordCount >= 25 ||

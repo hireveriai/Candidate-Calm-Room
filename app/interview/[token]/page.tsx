@@ -30,6 +30,29 @@ import {
 } from "@/app/utils/fraudEngine";
 
 type VerisState = "idle" | "listening" | "thinking" | "speaking";
+type TerminationType =
+  | "manual_exit"
+  | "tab_close"
+  | "disconnect"
+  | "timeout";
+
+type TerminationPayload = {
+  attemptId: string;
+  terminationType: TerminationType;
+  sessionQuestionId?: string;
+  transcript?: string;
+  duration?: number;
+  currentPhase?: string;
+};
+
+type TerminationResult = {
+  completed: true;
+  early_exit: true;
+  completion_percentage: number;
+  final_score: number;
+  reliability_score: number;
+  termination_type: TerminationType;
+};
 
 const CodeEditorModal = dynamic(
   () => import("@/app/components/calm/core/CodeEditorModal"),
@@ -41,7 +64,10 @@ const VerisOrb = dynamic(
   { ssr: false }
 );
 
-const QUESTION_DURATION_SECONDS = 90;
+const INACTIVITY_TIMEOUT_MS = 5 * 60 * 1000;
+const DISCONNECT_GRACE_MS = 15 * 1000;
+const STRICT_TAB_TERMINATION = false;
+const PENDING_TERMINATION_STORAGE_KEY = "hireveri.pendingTermination";
 
 function isCodingQuestionType(questionType: string | null | undefined) {
   return /code|coding|programming/i.test(questionType ?? "");
@@ -79,6 +105,29 @@ function roundMetric(value: number, digits = 2) {
   return Number(value.toFixed(digits));
 }
 
+function getCurrentPhaseFromState(
+  verisState: VerisState,
+  showCoding: boolean
+): string {
+  if (showCoding) {
+    return "probe";
+  }
+
+  if (verisState === "speaking") {
+    return "warmup";
+  }
+
+  if (verisState === "thinking") {
+    return "core";
+  }
+
+  if (verisState === "listening") {
+    return "core";
+  }
+
+  return "core";
+}
+
 export default function Page() {
   const params = useParams<{ token: string }>();
   const inviteToken = typeof params?.token === "string" ? params.token : "";
@@ -104,6 +153,8 @@ export default function Page() {
   const silenceTimer = useRef<any>(null);
   const timerRef = useRef<any>(null);
   const questionTimeoutRef = useRef<any>(null);
+  const inactivityTimeoutRef = useRef<any>(null);
+  const disconnectTimeoutRef = useRef<any>(null);
   const interviewStartTimeRef = useRef<number | null>(null);
   const questionStartTimeRef = useRef<number | null>(null);
   const focusTimeMsRef = useRef(0);
@@ -116,6 +167,7 @@ export default function Page() {
   const exitIntentRef = useRef(false);
   const transcriptRef = useRef("");
   const isAdvancingRef = useRef(false);
+  const terminationInFlightRef = useRef(false);
   const lastSignalSentRef = useRef<Record<string, number>>({});
   const lastSignalPayloadRef = useRef<Record<string, string>>({});
 
@@ -137,6 +189,25 @@ export default function Page() {
 
   const [, setTabViolations] = useState(0);
   const [showCoding, setShowCoding] = useState(false);
+
+  const persistPendingTermination = (payload: TerminationPayload) => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.localStorage.setItem(
+      PENDING_TERMINATION_STORAGE_KEY,
+      JSON.stringify(payload)
+    );
+  };
+
+  const clearPendingTermination = () => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.localStorage.removeItem(PENDING_TERMINATION_STORAGE_KEY);
+  };
 
   const postJson = async <T,>(path: string, body: unknown): Promise<T> => {
     const url =
@@ -176,6 +247,75 @@ export default function Page() {
     throw new Error("Request failed");
   };
 
+  const getTerminationPayload = (
+    terminationType: TerminationType
+  ): TerminationPayload | null => {
+    if (!attemptId) {
+      return null;
+    }
+
+    const cleanedTranscript = cleanTranscript(
+      transcriptRef.current.trim() || transcript.trim()
+    );
+    const duration = questionStartTimeRef.current
+      ? Math.max(1, Math.round((Date.now() - questionStartTimeRef.current) / 1000))
+      : undefined;
+
+    return {
+      attemptId,
+      terminationType,
+      sessionQuestionId: sessionQuestionId || undefined,
+      transcript: cleanedTranscript || undefined,
+      duration,
+      currentPhase: getCurrentPhaseFromState(verisState, showCoding),
+    };
+  };
+
+  const postTerminationPayload = async (
+    payload: TerminationPayload
+  ): Promise<TerminationResult> => {
+    const url =
+      typeof window === "undefined"
+        ? "/api/session/terminate"
+        : new URL("/api/session/terminate", window.location.origin).toString();
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+      keepalive: true,
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error || "Failed to terminate interview");
+    }
+
+    return data as TerminationResult;
+  };
+
+  const flushPendingTermination = async () => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const raw = window.localStorage.getItem(PENDING_TERMINATION_STORAGE_KEY);
+    if (!raw) {
+      return;
+    }
+
+    try {
+      const payload = JSON.parse(raw) as TerminationPayload;
+      await postTerminationPayload(payload);
+      clearPendingTermination();
+    } catch {
+      // Keep the payload for the next retry opportunity.
+    }
+  };
+
   const sendSignal = async (type: string, value: unknown) => {
     if (!sessionQuestionId || !attemptId || isAdvancingRef.current) {
       return;
@@ -203,6 +343,86 @@ export default function Page() {
     } catch {
       lastSignalSentRef.current[type] = 0;
     }
+  };
+
+  const terminateInterview = async (
+    terminationType: TerminationType,
+    {
+      useBeacon = false,
+      message,
+    }: {
+      useBeacon?: boolean;
+      message?: string;
+    } = {}
+  ) => {
+    if (terminationInFlightRef.current) {
+      return;
+    }
+
+    terminationInFlightRef.current = true;
+
+    const payload = getTerminationPayload(terminationType);
+
+    try {
+      if (payload) {
+        if (useBeacon && typeof navigator !== "undefined" && navigator.sendBeacon) {
+          const body = JSON.stringify(payload);
+          const blob = new Blob([body], { type: "application/json" });
+          const accepted = navigator.sendBeacon("/api/session/terminate", blob);
+
+          if (!accepted) {
+            persistPendingTermination(payload);
+          } else {
+            clearPendingTermination();
+          }
+
+          return;
+        } else {
+          try {
+            const result = await postTerminationPayload(payload);
+            clearPendingTermination();
+
+            await endInterview({
+              completed: result.completed,
+              message:
+                message ??
+                `Interview ended early. Partial evaluation generated with ${result.completion_percentage}% completion and reliability score ${result.reliability_score}.`,
+            });
+            return;
+          } catch {
+            persistPendingTermination(payload);
+          }
+        }
+      }
+
+      await endInterview({
+        completed: true,
+        message:
+          message ??
+          "Interview ended early. Your partial responses will be finalized when the connection is restored.",
+      });
+    } finally {
+      if (useBeacon) {
+        return;
+      }
+
+      terminationInFlightRef.current = false;
+    }
+  };
+
+  const resetInactivityTimeout = () => {
+    clearTimeout(inactivityTimeoutRef.current);
+
+    if (!started || showCoding || terminationInFlightRef.current) {
+      return;
+    }
+
+    inactivityTimeoutRef.current = setTimeout(() => {
+      void terminateInterview("timeout", {
+        message:
+          "Interview ended due to inactivity. A partial evaluation has been generated from your recorded responses.",
+      });
+    }, INACTIVITY_TIMEOUT_MS);
   };
 
   const resetFocusMetrics = () => {
@@ -299,6 +519,8 @@ export default function Page() {
     stopAll();
     stopAudioAnalysis();
     clearInterval(timerRef.current);
+    clearTimeout(inactivityTimeoutRef.current);
+    clearTimeout(disconnectTimeoutRef.current);
     interviewStartTimeRef.current = null;
     questionStartTimeRef.current = null;
     setTimeLeft(0);
@@ -312,8 +534,15 @@ export default function Page() {
   };
 
   const handleExit = async () => {
-    await endInterview();
+    await terminateInterview("manual_exit", {
+      message:
+        "Interview exited early. A partial evaluation has been generated from your submitted responses.",
+    });
   };
+
+  useEffect(() => {
+    void flushPendingTermination();
+  }, []);
 
   useEffect(() => {
     if (!started || !inviteToken) return;
@@ -341,6 +570,72 @@ export default function Page() {
     };
   }, [started]);
 
+  useEffect(() => {
+    resetInactivityTimeout();
+
+    return () => {
+      clearTimeout(inactivityTimeoutRef.current);
+    };
+  }, [started, sessionQuestionId, transcript, showCoding]);
+
+  useEffect(() => {
+    if (!started || !attemptId) {
+      return;
+    }
+
+    const handleOffline = () => {
+      clearTimeout(disconnectTimeoutRef.current);
+      disconnectTimeoutRef.current = setTimeout(() => {
+        void terminateInterview("disconnect", {
+          message:
+            "Interview ended because the connection was lost for too long. A partial evaluation has been generated.",
+        });
+      }, DISCONNECT_GRACE_MS);
+    };
+
+    const handleOnline = () => {
+      clearTimeout(disconnectTimeoutRef.current);
+      void flushPendingTermination();
+    };
+
+    window.addEventListener("offline", handleOffline);
+    window.addEventListener("online", handleOnline);
+
+    return () => {
+      clearTimeout(disconnectTimeoutRef.current);
+      window.removeEventListener("offline", handleOffline);
+      window.removeEventListener("online", handleOnline);
+    };
+  }, [attemptId, started, transcript, sessionQuestionId, verisState, showCoding]);
+
+  useEffect(() => {
+    if (!started || !attemptId) {
+      return;
+    }
+
+    const handlePageHide = () => {
+      if (terminationInFlightRef.current) {
+        return;
+      }
+
+      const payload = getTerminationPayload("tab_close");
+      if (!payload) {
+        return;
+      }
+
+      persistPendingTermination(payload);
+      void terminateInterview("tab_close", { useBeacon: true });
+    };
+
+    window.addEventListener("pagehide", handlePageHide);
+    window.addEventListener("beforeunload", handlePageHide);
+
+    return () => {
+      window.removeEventListener("pagehide", handlePageHide);
+      window.removeEventListener("beforeunload", handlePageHide);
+    };
+  }, [attemptId, started, transcript, sessionQuestionId, verisState, showCoding]);
+
   const askQuestion = async (
     question: string,
     nextSessionQuestionId: string,
@@ -356,6 +651,7 @@ export default function Page() {
     setCurrentQuestion(question);
     setVerisState("thinking");
     setShowCoding(false);
+    resetInactivityTimeout();
 
     setVerisState("speaking");
     await speak(question);
@@ -446,6 +742,8 @@ export default function Page() {
       }),
     ]);
 
+    resetInactivityTimeout();
+
     void postJson("/api/session/signal", {
       attemptId,
       type: "focus_metrics",
@@ -470,6 +768,8 @@ export default function Page() {
       duration: answerDuration,
       prompt: currentQuestion,
     });
+
+    resetInactivityTimeout();
   };
 
   const getNextQuestion = async () => {
@@ -579,10 +879,6 @@ export default function Page() {
 
   const startQuestionTimer = () => {
     clearTimeout(questionTimeoutRef.current);
-
-    questionTimeoutRef.current = setTimeout(() => {
-      void handleAutoNext();
-    }, QUESTION_DURATION_SECONDS * 1000);
   };
 
   // 🎤 AUDIO ANALYSIS (FIXED CLEANUP)
@@ -673,6 +969,14 @@ export default function Page() {
 
     const handleVisibility = () => {
       if (document.visibilityState === "hidden") {
+        if (STRICT_TAB_TERMINATION) {
+          void terminateInterview("tab_close", {
+            message:
+              "Interview ended because tab switching is blocked in strict mode. A partial evaluation has been generated.",
+          });
+          return;
+        }
+
         setTabViolations((prev) => {
           const newCount = prev + 1;
 
@@ -689,7 +993,12 @@ export default function Page() {
               visible: true,
             });
 
-            setTimeout(() => handleExit(), 2000);
+            setTimeout(() => {
+              void terminateInterview("tab_close", {
+                message:
+                  "Interview ended after repeated tab switches. A partial evaluation has been generated.",
+              });
+            }, 2000);
           } else {
             setWarning({
               type: "hard",

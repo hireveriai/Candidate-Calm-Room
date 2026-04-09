@@ -464,6 +464,16 @@ model interview_attempts {
   started_at                  DateTime                     @default(now()) @db.Timestamptz(6)
   ended_at                    DateTime?                    @db.Timestamptz(6)
   status                      String                       @default("started")
+  termination_type            String?
+  termination_detected_at     DateTime?                    @db.Timestamptz(6)
+  termination_phase           String?
+  time_elapsed_seconds        Int?
+  questions_answered          Int                          @default(0)
+  expected_questions          Int?
+  completion_percentage       Decimal?                     @db.Decimal(5, 4)
+  reliability_score           Decimal?                     @db.Decimal(5, 2)
+  early_exit                  Boolean                      @default(false)
+  termination_metadata        Json                         @default("{}")
   candidate_experience        String?
   mission_snapshot_id         String?                      @db.Uuid
   attempt_question_map        attempt_question_map[]
