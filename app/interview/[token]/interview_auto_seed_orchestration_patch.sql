@@ -20,6 +20,89 @@ as $$
   );
 $$;
 
+create or replace function public.clean_job_role_title(p_value text)
+returns text
+language plpgsql
+immutable
+as $$
+declare
+  v_cleaned text := public.normalize_seed_text(p_value);
+  v_tokens text[];
+  v_noise_tokens text[] := array[
+    'apac', 'asia', 'bangalore', 'bengaluru', 'blr', 'chennai', 'delhi',
+    'dubai', 'emea', 'europe', 'gurgaon', 'gurugram', 'holland', 'hybrid',
+    'hyderabad', 'india', 'kolkata', 'london', 'mumbai', 'netherlands',
+    'noida', 'onsite', 'on-site', 'pune', 'remote', 'singapore', 'uae',
+    'uk', 'usa', 'us', 'wfh'
+  ];
+begin
+  if v_cleaned is null then
+    return null;
+  end if;
+
+  v_cleaned := regexp_replace(
+    v_cleaned,
+    '\((?:[^)]*\m(remote|hybrid|onsite|on-site|wfh|work from home|shift|bangalore|bengaluru|holland|netherlands|india|uk|usa|us)\M[^)]*)\)',
+    ' ',
+    'gi'
+  );
+  v_cleaned := regexp_replace(v_cleaned, '\m(sr)\.?\M', 'Senior', 'gi');
+  v_cleaned := regexp_replace(v_cleaned, '\m(jr)\.?\M', 'Junior', 'gi');
+  v_cleaned := regexp_replace(v_cleaned, '\m(assoc)\.?\M', 'Associate', 'gi');
+
+  if position(' | ' in v_cleaned) > 0 then
+    v_cleaned := split_part(v_cleaned, ' | ', 1);
+  end if;
+
+  if position(' - ' in v_cleaned) > 0 then
+    if split_part(lower(v_cleaned), ' - ', 1) ~ '(remote|hybrid|onsite|on-site|wfh|shift|bangalore|bengaluru|holland|india|uk|usa|us)'
+    then
+      v_cleaned := split_part(v_cleaned, ' - ', 2);
+    else
+      v_cleaned := split_part(v_cleaned, ' - ', 1);
+    end if;
+  end if;
+
+  if position(', ' in v_cleaned) > 0 then
+    v_cleaned := split_part(v_cleaned, ', ', 1);
+  end if;
+
+  v_cleaned := regexp_replace(v_cleaned, '\m(remote|hybrid|onsite|on-site|work from home|wfh)\M', ' ', 'gi');
+  v_cleaned := regexp_replace(
+    v_cleaned,
+    '\m(day|night|rotational|general|morning|evening|first|second|third|1st|2nd|3rd|us|uk|europe|emea|apac|ist)\M\s+\mshift\M',
+    ' ',
+    'gi'
+  );
+  v_cleaned := regexp_replace(v_cleaned, '\mshift\M\s*[a-z0-9:+-]*', ' ', 'gi');
+  v_cleaned := public.normalize_seed_text(v_cleaned);
+
+  if v_cleaned is null then
+    return null;
+  end if;
+
+  v_tokens := regexp_split_to_array(v_cleaned, '\s+');
+
+  while coalesce(array_length(v_tokens, 1), 0) > 0
+    and lower(v_tokens[1]) = any(v_noise_tokens) loop
+    v_tokens := v_tokens[2:array_length(v_tokens, 1)];
+  end loop;
+
+  while coalesce(array_length(v_tokens, 1), 0) > 0
+    and lower(v_tokens[array_length(v_tokens, 1)]) = any(v_noise_tokens) loop
+    v_tokens := v_tokens[1:array_length(v_tokens, 1) - 1];
+  end loop;
+
+  v_cleaned := public.normalize_seed_text(array_to_string(v_tokens, ' '));
+
+  if v_cleaned is null then
+    return null;
+  end if;
+
+  return initcap(lower(v_cleaned));
+end;
+$$;
+
 create or replace function public.dedupe_text_array(p_values text[])
 returns text[]
 language sql
@@ -108,6 +191,33 @@ as $$
   ) as ranked_claims;
 $$;
 
+create or replace function public.extract_job_description_anchors(p_job_description text)
+returns text[]
+language sql
+stable
+as $$
+  with responsibility_lines as (
+    select distinct nullif(trim(line), '') as responsibility
+    from regexp_split_to_table(coalesce(p_job_description, ''), E'[\\n\\r]+|[.?!;]') as line
+    where length(trim(line)) between 20 and 180
+      and trim(line) ~* '\m(handle|manage|maintain|monitor|optimi[sz]e|troubleshoot|support|design|deliver|migrate|automate|secure|improve|own|lead)\M'
+  ),
+  ranked as (
+    select responsibility, length(responsibility) as responsibility_length
+    from responsibility_lines
+    where responsibility is not null
+  )
+  select coalesce(
+    array(
+      select responsibility
+      from ranked
+      order by responsibility_length desc, responsibility
+      limit 6
+    ),
+    '{}'::text[]
+  );
+$$;
+
 create or replace function public.derive_resume_experience_years(p_resume_text text)
 returns integer
 language plpgsql
@@ -177,6 +287,48 @@ as $$
       from matched
       order by length(skill) desc, skill
       limit 10
+    ),
+    '{}'::text[]
+  );
+$$;
+
+create or replace function public.compute_overlap_skills(
+  p_resume_anchors text[],
+  p_job_skills text[]
+)
+returns text[]
+language sql
+stable
+as $$
+  with resume_anchors as (
+    select distinct nullif(trim(anchor), '') as anchor
+    from unnest(coalesce(p_resume_anchors, '{}'::text[])) as anchor
+  ),
+  job_skills as (
+    select distinct nullif(trim(skill), '') as skill
+    from unnest(coalesce(p_job_skills, '{}'::text[])) as skill
+  ),
+  matched as (
+    select distinct js.skill, length(js.skill) as skill_length
+    from job_skills js
+    join resume_anchors ra
+      on lower(js.skill) = lower(ra.anchor)
+         or (
+           length(lower(js.skill)) >= 4
+           and length(lower(ra.anchor)) >= 4
+           and (
+             position(lower(js.skill) in lower(ra.anchor)) > 0
+             or position(lower(ra.anchor) in lower(js.skill)) > 0
+           )
+         )
+    where js.skill is not null
+      and ra.anchor is not null
+  )
+  select coalesce(
+    array(
+      select skill
+      from matched
+      order by skill_length desc, skill
     ),
     '{}'::text[]
   );
@@ -308,36 +460,29 @@ language plpgsql
 immutable
 as $$
 declare
-  v_role_title text := public.normalize_seed_text(p_role_title);
   v_anchor text := public.normalize_seed_text(p_anchor);
-  v_role_prefix text;
 begin
-  v_role_prefix := case
-    when v_role_title is not null then format('In the %s role, ', v_role_title)
-    else ''
-  end;
-
   if p_source_type = 'resume' then
     return case mod(greatest(coalesce(p_variant, 0), 0), 3)
-      when 0 then format('%syou highlighted %s. Can you walk me through a concrete project where you applied it and what result you achieved?', v_role_prefix, coalesce(v_anchor, 'your recent background'))
-      when 1 then format('%syour background includes %s. What was the most technically challenging part of that work, and how did you handle it?', v_role_prefix, coalesce(v_anchor, 'your recent work'))
-      else format('From your experience with %s, how did you measure success and what changed because of your contribution?', coalesce(v_anchor, 'your core work'))
+      when 0 then format('You highlighted %s. What was the most demanding piece of work around it, and how did you deliver the result?', coalesce(v_anchor, 'your recent background'))
+      when 1 then format('Your background includes %s. What problem forced you to go deepest technically, and what did you change?', coalesce(v_anchor, 'your recent work'))
+      else format('When %s mattered most in your work, what outcome were you responsible for and how did you get there?', coalesce(v_anchor, 'your core work'))
     end;
   end if;
 
   if p_source_type = 'behavioral' then
     return case mod(greatest(coalesce(p_variant, 0), 0), 3)
-      when 0 then format('Tell me about a time you had to make a difficult decision while working on %s.', coalesce(v_anchor, 'a critical responsibility in this role'))
-      when 1 then format('%sdescribe a situation where you had to balance speed, quality, and stakeholder expectations around %s.', v_role_prefix, coalesce(v_anchor, 'an important responsibility'))
-      else format('%sshare an example of how you handled pressure or disagreement while delivering work related to %s.', v_role_prefix, coalesce(v_anchor, 'this role'))
+      when 0 then format('When work around %s started going off track, how did you regain control and align the team?', coalesce(v_anchor, 'a critical responsibility in this role'))
+      when 1 then format('Think of a time you had conflicting priorities around %s. How did you decide what to protect first?', coalesce(v_anchor, 'an important responsibility'))
+      else format('When people pushed for speed on %s, how did you defend quality, reliability, or risk controls?', coalesce(v_anchor, 'this role'))
     end;
   end if;
 
   return case mod(greatest(coalesce(p_variant, 0), 0), 4)
-    when 0 then format('%show have you handled %s in a production environment?', v_role_prefix, coalesce(v_anchor, 'the core responsibilities of this role'))
-    when 1 then format('This role requires strong %s. What is your approach to solving a real problem in that area?', coalesce(v_anchor, 'execution in the core responsibilities'))
-    when 2 then format('%scan you walk me through a situation where %s was critical to delivery or stability?', v_role_prefix, coalesce(v_anchor, 'this responsibility'))
-    else format('What trade-offs do you consider when working on %s in a production setting?', coalesce(v_anchor, 'this area'))
+    when 0 then format('How do you troubleshoot %s when it starts failing in production?', coalesce(v_anchor, 'the core responsibilities of this role'))
+    when 1 then format('If you had to improve %s under real delivery pressure, what would you examine first?', coalesce(v_anchor, 'execution in the core responsibilities'))
+    when 2 then format('What signals tell you %s is degrading, and what actions do you take next?', coalesce(v_anchor, 'this responsibility'))
+    else format('Walk me through how you would execute %s reliably in a live environment.', coalesce(v_anchor, 'this area'))
   end;
 end;
 $$;
@@ -465,12 +610,15 @@ declare
   v_duration_minutes integer;
   v_role_title text;
   v_job_skills text[];
+  v_job_description text;
+  v_job_responsibilities text[];
   v_interview_skills text[];
   v_resume_skills text[];
   v_resume_claims jsonb;
   v_claim_anchors text[];
   v_resume_years integer;
   v_resume_anchors text[];
+  v_overlap_anchors text[];
   v_job_anchors text[];
   v_behavioral_anchors text[];
   v_total_questions integer;
@@ -527,12 +675,14 @@ begin
   select
     i.question_count,
     i.duration_minutes,
-    jp.job_title,
-    coalesce(jp.core_skills, '{}'::text[])
+    public.clean_job_role_title(jp.job_title),
+    coalesce(jp.core_skills, '{}'::text[]),
+    jp.job_description
     into v_question_count,
          v_duration_minutes,
          v_role_title,
-         v_job_skills
+         v_job_skills,
+         v_job_description
   from public.interviews i
   join public.job_positions jp
     on jp.job_id = i.job_id
@@ -554,6 +704,8 @@ begin
     on sm.skill_id = ism.skill_id
   where ism.interview_id = p_interview_id;
 
+  v_job_responsibilities := public.extract_job_description_anchors(v_job_description);
+
   select
     coalesce(cra.extracted_skills, '{}'::text[]),
     coalesce(cra.extracted_claims, '[]'::jsonb),
@@ -570,6 +722,13 @@ begin
   v_resume_anchors := public.dedupe_text_array(
     coalesce(v_resume_skills, '{}'::text[]) || coalesce(v_claim_anchors, '{}'::text[])
   );
+  v_overlap_anchors := public.compute_overlap_skills(
+    v_resume_anchors,
+    coalesce(v_job_skills, '{}'::text[]) || coalesce(v_interview_skills, '{}'::text[])
+  );
+  v_resume_anchors := public.dedupe_text_array(
+    coalesce(v_overlap_anchors, '{}'::text[]) || coalesce(v_resume_anchors, '{}'::text[])
+  );
 
   if v_resume_years is not null then
     v_resume_anchors := public.dedupe_text_array(
@@ -582,7 +741,9 @@ begin
   end if;
 
   v_job_anchors := public.dedupe_text_array(
+    coalesce(v_overlap_anchors, '{}'::text[]) ||
     coalesce(v_job_skills, '{}'::text[]) ||
+    coalesce(v_job_responsibilities, '{}'::text[]) ||
     coalesce(v_interview_skills, '{}'::text[]) ||
     case
       when public.normalize_seed_text(v_role_title) is not null then array[public.normalize_seed_text(v_role_title)]
@@ -591,6 +752,8 @@ begin
   );
 
   v_behavioral_anchors := public.dedupe_text_array(
+    coalesce(v_overlap_anchors, '{}'::text[]) ||
+    coalesce(v_job_responsibilities, '{}'::text[]) ||
     coalesce(v_interview_skills, '{}'::text[]) ||
     coalesce(v_job_skills, '{}'::text[]) ||
     case

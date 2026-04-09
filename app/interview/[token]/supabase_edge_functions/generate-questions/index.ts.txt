@@ -31,6 +31,7 @@ type JobContext = {
   title: string | null;
   description: string | null;
   coreSkills: string[];
+  responsibilities: string[];
   difficultyProfile: string | null;
 };
 
@@ -39,6 +40,7 @@ type InterviewContext = {
   resume: ResumeContext;
   job: JobContext;
   interviewSkills: string[];
+  overlapSkills: string[];
 };
 
 type Distribution = Record<QuestionSource, number>;
@@ -82,6 +84,12 @@ const GENERIC_PATTERNS = [
   /what do you do/i,
   /tell me about a recent problem/i,
 ];
+const WEAK_LEAD_IN_PATTERNS = [
+  /^describe a situation\b/i,
+  /^share an example\b/i,
+  /^tell me about a time\b/i,
+  /^can you walk me through a situation\b/i,
+];
 
 const INTENT_PATTERNS: Array<{ intent: string; pattern: RegExp }> = [
   { intent: "optimize", pattern: /\b(optimi[sz]e|performance|slow query|bottleneck)\b/i },
@@ -105,6 +113,155 @@ function normalizeText(value: string | null | undefined) {
   return value?.replace(/\s+/g, " ").trim() ?? "";
 }
 
+const ROLE_SEGMENT_SPLIT = /\s+\|\s+|\s+-\s+|\s+–\s+|\s+—\s+|,\s*/;
+const ROLE_KEYWORDS = [
+  "administrator",
+  "admin",
+  "architect",
+  "analyst",
+  "consultant",
+  "coordinator",
+  "database",
+  "developer",
+  "devops",
+  "engineer",
+  "lead",
+  "manager",
+  "officer",
+  "principal",
+  "specialist",
+  "staff",
+];
+const ROLE_NOISE_TOKENS = new Set([
+  "apac",
+  "asia",
+  "bangalore",
+  "bengaluru",
+  "blr",
+  "chennai",
+  "delhi",
+  "dubai",
+  "emea",
+  "europe",
+  "gurgaon",
+  "gurugram",
+  "holland",
+  "hybrid",
+  "hyderabad",
+  "india",
+  "kolkata",
+  "london",
+  "mumbai",
+  "netherlands",
+  "noida",
+  "onsite",
+  "on-site",
+  "pune",
+  "remote",
+  "singapore",
+  "uae",
+  "uk",
+  "usa",
+  "us",
+  "wfh",
+]);
+const ROLE_ABBREVIATIONS: Array<[RegExp, string]> = [
+  [/\bsr\.?\b/gi, "Senior"],
+  [/\bjr\.?\b/gi, "Junior"],
+  [/\bassoc\.?\b/gi, "Associate"],
+];
+
+function isRoleNoiseToken(token: string) {
+  return ROLE_NOISE_TOKENS.has(token.toLowerCase());
+}
+
+function standardizeRoleCasing(value: string) {
+  return value
+    .split(/\s+/)
+    .map((token) => {
+      if (/^[A-Z0-9]{2,}$/.test(token)) {
+        return token;
+      }
+
+      const lower = token.toLowerCase();
+      return lower.charAt(0).toUpperCase() + lower.slice(1);
+    })
+    .join(" ");
+}
+
+function scoreRoleSegment(segment: string) {
+  const tokens = normalizeText(segment).toLowerCase().split(/\s+/).filter(Boolean);
+
+  if (tokens.length === 0) {
+    return Number.NEGATIVE_INFINITY;
+  }
+
+  return tokens.reduce((score, token) => {
+    if (ROLE_KEYWORDS.some((keyword) => token.includes(keyword))) {
+      return score + 3;
+    }
+
+    if (isRoleNoiseToken(token)) {
+      return score - 3;
+    }
+
+    if (/shift|remote|hybrid|onsite|on-site/.test(token)) {
+      return score - 2;
+    }
+
+    return score + 1;
+  }, 0);
+}
+
+function cleanRoleTitle(value: string | null | undefined) {
+  let cleaned = normalizeText(value);
+
+  if (!cleaned) {
+    return null;
+  }
+
+  cleaned = cleaned.replace(
+    /\((?:[^)]*\b(?:remote|hybrid|onsite|on-site|wfh|work from home|shift|bangalore|bengaluru|holland|netherlands|india|uk|usa|us)\b[^)]*)\)/gi,
+    " "
+  );
+
+  for (const [pattern, replacement] of ROLE_ABBREVIATIONS) {
+    cleaned = cleaned.replace(pattern, replacement);
+  }
+
+  const segments = cleaned
+    .split(ROLE_SEGMENT_SPLIT)
+    .map((segment) => normalizeText(segment))
+    .filter(Boolean);
+
+  if (segments.length > 1) {
+    cleaned = [...segments].sort((left, right) => scoreRoleSegment(right) - scoreRoleSegment(left))[0];
+  }
+
+  cleaned = cleaned
+    .replace(/\b(remote|hybrid|onsite|on-site|work from home|wfh)\b/gi, " ")
+    .replace(
+      /\b(day|night|rotational|general|morning|evening|first|second|third|1st|2nd|3rd|us|uk|europe|emea|apac|ist)\s+shift\b/gi,
+      " "
+    )
+    .replace(/\bshift\s*[a-z0-9:+-]*\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  let tokens = cleaned.split(/\s+/).filter(Boolean);
+
+  while (tokens.length > 0 && isRoleNoiseToken(tokens[0])) {
+    tokens = tokens.slice(1);
+  }
+
+  while (tokens.length > 0 && isRoleNoiseToken(tokens[tokens.length - 1])) {
+    tokens = tokens.slice(0, -1);
+  }
+
+  cleaned = standardizeRoleCasing(tokens.join(" "));
+  return cleaned || null;
+}
+
 function normalizeQuestionText(value: string | null | undefined) {
   return normalizeText(value)
     .toLowerCase()
@@ -121,6 +278,142 @@ function tokenizeQuestion(value: string | null | undefined) {
 
 function uniqueStrings(values: Array<string | null | undefined>) {
   return [...new Set(values.map((value) => normalizeText(value)).filter(Boolean))];
+}
+
+function normalizeAnchorToken(value: string | null | undefined) {
+  return normalizeText(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function extractResponsibilityAnchors(value: string | null | undefined, limit = 6) {
+  const normalized = normalizeText(value);
+
+  if (!normalized) {
+    return [];
+  }
+
+  return uniqueStrings(
+    normalized
+      .split(/[.;\n\r]+/)
+      .map((segment) => normalizeText(segment))
+      .filter((segment) => {
+        const wordCount = segment.split(/\s+/).length;
+        return (
+          wordCount >= 4 &&
+          wordCount <= 18 &&
+          /\b(handle|manage|maintain|monitor|optimi[sz]e|troubleshoot|support|design|deliver|migrate|automate|secure|improve|own|lead)\b/i.test(
+            segment
+          )
+        );
+      })
+      .map((segment) => segment.replace(/^(responsibilities?|requirements?)\s*[:\-]\s*/i, ""))
+  ).slice(0, limit);
+}
+
+function extractClaimAnchors(values: Array<string | null | undefined>, limit = 6) {
+  const result: string[] = [];
+
+  for (const value of values) {
+    const normalized = normalizeText(value);
+    if (!normalized) {
+      continue;
+    }
+
+    const segments = normalized.split(/[.;,\n\r]+/);
+    for (const segment of segments) {
+      const claim = normalizeText(segment);
+      const wordCount = claim.split(/\s+/).length;
+      if (claim && wordCount >= 2 && wordCount <= 10 && !result.includes(claim)) {
+        result.push(claim);
+      }
+
+      if (result.length >= limit) {
+        return result;
+      }
+    }
+  }
+
+  return result;
+}
+
+function computeSkillOverlap(params: {
+  resumeSkills: string[];
+  resumeClaims: string[];
+  jobSkills: string[];
+}) {
+  const resumeAnchors = uniqueStrings([...params.resumeSkills, ...extractClaimAnchors(params.resumeClaims)]);
+  const jobSkills = uniqueStrings(params.jobSkills);
+  const jobSkillMap = new Map(jobSkills.map((skill) => [normalizeAnchorToken(skill), skill]));
+  const overlap: string[] = [];
+
+  for (const anchor of resumeAnchors) {
+    const normalized = normalizeAnchorToken(anchor);
+    const direct = jobSkillMap.get(normalized);
+
+    if (direct && !overlap.includes(direct)) {
+      overlap.push(direct);
+      continue;
+    }
+
+    const partial = jobSkills.find((jobSkill) => {
+      const normalizedJobSkill = normalizeAnchorToken(jobSkill);
+      return (
+        normalized.length >= 4 &&
+        normalizedJobSkill.length >= 4 &&
+        (normalized.includes(normalizedJobSkill) || normalizedJobSkill.includes(normalized))
+      );
+    });
+
+    if (partial && !overlap.includes(partial)) {
+      overlap.push(partial);
+    }
+  }
+
+  return overlap;
+}
+
+function pickQuestionAnchor(params: {
+  sourceType: QuestionSource;
+  overlapSkills: string[];
+  jobSkills: string[];
+  responsibilities: string[];
+  resumeSkills: string[];
+  resumeClaims: string[];
+  roleTitle: string | null;
+  index: number;
+}) {
+  const overlapSkill =
+    params.overlapSkills[params.index % Math.max(params.overlapSkills.length, 1)] ?? null;
+  const jobSkill =
+    params.jobSkills[params.index % Math.max(params.jobSkills.length, 1)] ?? null;
+  const responsibility =
+    params.responsibilities[params.index % Math.max(params.responsibilities.length, 1)] ?? null;
+  const resumeSkill =
+    params.resumeSkills[params.index % Math.max(params.resumeSkills.length, 1)] ?? null;
+  const claimAnchors = extractClaimAnchors(params.resumeClaims);
+  const resumeClaim =
+    claimAnchors[params.index % Math.max(claimAnchors.length, 1)] ?? null;
+
+  if (overlapSkill) {
+    return overlapSkill;
+  }
+
+  if (jobSkill) {
+    return jobSkill;
+  }
+
+  if (params.sourceType === "resume") {
+    return resumeSkill ?? resumeClaim ?? responsibility ?? params.roleTitle ?? "your recent experience";
+  }
+
+  if (params.sourceType === "behavioral") {
+    return responsibility ?? jobSkill ?? resumeSkill ?? params.roleTitle ?? "your work";
+  }
+
+  return jobSkill ?? responsibility ?? resumeSkill ?? resumeClaim ?? params.roleTitle ?? "the role requirements";
 }
 
 function deriveQuestionTargetFromDuration(durationMinutes: number | null | undefined) {
@@ -251,6 +544,10 @@ function isGenericQuestion(questionText: string) {
   return GENERIC_PATTERNS.some((pattern) => pattern.test(questionText));
 }
 
+function hasWeakLeadIn(questionText: string) {
+  return WEAK_LEAD_IN_PATTERNS.some((pattern) => pattern.test(normalizeText(questionText)));
+}
+
 function containsAnchor(questionText: string, anchors: string[]) {
   const normalized = normalizeQuestionText(questionText);
   return anchors.some((anchor) => {
@@ -261,19 +558,100 @@ function containsAnchor(questionText: string, anchors: string[]) {
 
 function buildContextAnchors(context: InterviewContext) {
   const resumeAnchors = uniqueStrings([
+    ...context.overlapSkills,
     ...context.resume.skills,
     ...context.resume.claims,
     context.resume.experienceYears ? `${context.resume.experienceYears} years` : null,
-    context.roleTitle,
   ]);
   const jobAnchors = uniqueStrings([
+    ...context.overlapSkills,
+    ...context.job.coreSkills,
+    ...context.job.responsibilities,
+    ...context.interviewSkills,
     context.roleTitle,
+  ]);
+  const behavioralAnchors = uniqueStrings([
+    ...context.overlapSkills,
+    ...context.job.responsibilities,
     ...context.job.coreSkills,
     ...context.interviewSkills,
+    context.roleTitle,
   ]);
-  const behavioralAnchors = uniqueStrings([context.roleTitle, ...context.job.coreSkills]);
 
   return { resumeAnchors, jobAnchors, behavioralAnchors };
+}
+
+function buildAllowedSkillAnchors(context: InterviewContext) {
+  return uniqueStrings([
+    ...context.overlapSkills,
+    ...context.job.coreSkills,
+    ...context.interviewSkills,
+    ...context.resume.skills,
+    ...extractClaimAnchors(context.resume.claims),
+  ]);
+}
+
+function resolveMappedSkill(question: GeneratedQuestion, context: InterviewContext) {
+  const allowedSkillAnchors = buildAllowedSkillAnchors(context);
+  const candidateAnchors = uniqueStrings([
+    question.mapped_skill ?? null,
+    typeof question.reference_context.anchor === "string"
+      ? question.reference_context.anchor
+      : null,
+    ...allowedSkillAnchors.filter((anchor) =>
+      normalizeQuestionText(question.question_text).includes(normalizeQuestionText(anchor))
+    ),
+  ]);
+
+  const exactMatch = candidateAnchors.find((candidate) =>
+    allowedSkillAnchors.some(
+      (allowed) => normalizeAnchorToken(allowed) === normalizeAnchorToken(candidate)
+    )
+  );
+
+  if (exactMatch) {
+    return exactMatch;
+  }
+
+  const partialMatch = candidateAnchors.find((candidate) =>
+    allowedSkillAnchors.some((allowed) => {
+      const normalizedAllowed = normalizeAnchorToken(allowed);
+      const normalizedCandidate = normalizeAnchorToken(candidate);
+
+      return (
+        normalizedAllowed.length >= 4 &&
+        normalizedCandidate.length >= 4 &&
+        (normalizedAllowed.includes(normalizedCandidate) ||
+          normalizedCandidate.includes(normalizedAllowed))
+      );
+    })
+  );
+
+  if (!partialMatch) {
+    return null;
+  }
+
+  return (
+    allowedSkillAnchors.find((allowed) => {
+      const normalizedAllowed = normalizeAnchorToken(allowed);
+      const normalizedCandidate = normalizeAnchorToken(partialMatch);
+      return (
+        normalizedAllowed.length >= 4 &&
+        normalizedCandidate.length >= 4 &&
+        (normalizedAllowed.includes(normalizedCandidate) ||
+          normalizedCandidate.includes(normalizedAllowed))
+      );
+    }) ?? null
+  );
+}
+
+function isSkillDrivenQuestion(question: GeneratedQuestion, context: InterviewContext) {
+  const mappedSkill = resolveMappedSkill(question, context);
+  return Boolean(mappedSkill) && containsAnchor(question.question_text, [mappedSkill]);
+}
+
+function getQuestionLeadKey(questionText: string) {
+  return tokenizeQuestion(questionText).slice(0, 3).join(" ");
 }
 
 function isContextualQuestion(question: GeneratedQuestion, context: InterviewContext) {
@@ -290,7 +668,10 @@ function isContextualQuestion(question: GeneratedQuestion, context: InterviewCon
   return containsAnchor(question.question_text, anchors.behavioralAnchors);
 }
 
-function normalizeQuestions(payload: Record<string, unknown>): GeneratedQuestion[] {
+function normalizeQuestions(
+  payload: Record<string, unknown>,
+  context: InterviewContext
+): GeneratedQuestion[] {
   const rawQuestions = Array.isArray(payload.questions) ? payload.questions : [];
 
   return rawQuestions
@@ -326,7 +707,7 @@ function normalizeQuestions(payload: Record<string, unknown>): GeneratedQuestion
         return null;
       }
 
-      return {
+      const normalizedQuestion = {
         question_text: questionText,
         source_type: sourceType,
         reference_context:
@@ -337,6 +718,17 @@ function normalizeQuestions(payload: Record<string, unknown>): GeneratedQuestion
         phase_hint: phaseHint,
         difficulty_level: difficultyLevel,
         allow_follow_up: record.allow_follow_up !== false,
+      } satisfies GeneratedQuestion;
+
+      const resolvedMappedSkill = resolveMappedSkill(normalizedQuestion, context);
+
+      if (!resolvedMappedSkill) {
+        return null;
+      }
+
+      return {
+        ...normalizedQuestion,
+        mapped_skill: resolvedMappedSkill,
       } satisfies GeneratedQuestion;
     })
     .filter((item): item is GeneratedQuestion => item !== null);
@@ -349,16 +741,21 @@ function isTooSimilar(
 ) {
   const newIntent = detectIntent(questionText);
   const newTokens = tokenizeQuestion(questionText);
+  const newLeadKey = getQuestionLeadKey(questionText);
 
   return acceptedQuestions.some((existing) => {
     const existingIntent = detectIntent(existing.question_text);
     const score = similarityScore(questionText, existing.question_text);
+    const existingLeadKey = getQuestionLeadKey(existing.question_text);
     const sharedLongTokens = newTokens.filter((token) =>
       tokenizeQuestion(existing.question_text).includes(token)
     );
 
     return (
       score >= 0.58 ||
+      (newLeadKey !== "" &&
+        newLeadKey === existingLeadKey &&
+        existing.source_type === sourceType) ||
       (newIntent === existingIntent &&
         sharedLongTokens.length >= 3 &&
         existing.source_type === sourceType)
@@ -387,11 +784,10 @@ function buildResumeQuestion(params: {
   index: number;
 }): GeneratedQuestion {
   const focus = normalizeText(params.skillOrClaim) || "your background";
-  const rolePrefix = params.roleTitle ? `For the ${params.roleTitle} role, ` : "";
   const templates = [
-    `${rolePrefix}you highlighted ${focus}. Can you walk me through a concrete project where you applied it and what result you achieved?`,
-    `${rolePrefix}your resume points to ${focus}. What was the most technically challenging part of that work, and how did you handle it?`,
-    `${rolePrefix}you mentioned ${focus}. How did you measure success in that work and what changed because of your contribution?`,
+    `You highlighted ${focus}. What was the most demanding piece of work around it, and how did you deliver the result?`,
+    `Your resume points to ${focus}. What problem forced you to go deepest technically, and what did you change?`,
+    `When ${focus} mattered most in your work, what outcome were you responsible for and how did you get there?`,
   ];
 
   return {
@@ -414,15 +810,18 @@ function buildResumeQuestion(params: {
 function buildJobQuestion(params: {
   roleTitle: string | null;
   skill: string;
+  responsibility?: string | null;
   index: number;
 }): GeneratedQuestion {
-  const skill = normalizeText(params.skill) || "the core responsibilities";
-  const rolePrefix = params.roleTitle ? `In the ${params.roleTitle} role, ` : "";
+  const focus =
+    normalizeText(params.skill) ||
+    normalizeText(params.responsibility) ||
+    "the core responsibilities";
   const templates = [
-    `${rolePrefix}how have you handled ${skill} in a production environment?`,
-    `${rolePrefix}what is your approach to solving a real problem involving ${skill}?`,
-    `${rolePrefix}can you walk me through a situation where ${skill} was critical to delivery or stability?`,
-    `${rolePrefix}what trade-offs do you consider when working on ${skill}?`,
+    `How do you troubleshoot ${focus} when it starts failing in production?`,
+    `If you had to improve ${focus} under real delivery pressure, what would you examine first?`,
+    `What signals tell you ${focus} is degrading, and what actions do you take next?`,
+    `Walk me through how you would execute ${focus} reliably in a live environment.`,
   ];
 
   return {
@@ -431,10 +830,10 @@ function buildJobQuestion(params: {
     reference_context: buildReferenceContext({
       sourceType: "job",
       roleTitle: params.roleTitle,
-      anchor: skill,
+      anchor: focus,
       intent: detectIntent(templates[params.index % templates.length]),
     }),
-    mapped_skill: skill,
+    mapped_skill: focus,
     phase_hint: params.index >= 2 ? "probe" : "core",
     difficulty_level: 3 + (params.index % 2),
     allow_follow_up: true,
@@ -447,11 +846,10 @@ function buildBehavioralQuestion(params: {
   index: number;
 }): GeneratedQuestion {
   const skill = normalizeText(params.skill) || "your work";
-  const rolePrefix = params.roleTitle ? `In your ${params.roleTitle} work, ` : "";
   const templates = [
-    `${rolePrefix}tell me about a time you had to make a difficult decision while working on ${skill}.`,
-    `${rolePrefix}describe a situation where you had to balance speed, quality, and stakeholder expectations around ${skill}.`,
-    `${rolePrefix}share an example of how you handled pressure or disagreement while delivering work related to ${skill}.`,
+    `When work around ${skill} started going off track, how did you regain control and align the team?`,
+    `Think of a time you had conflicting priorities around ${skill}. How did you decide what to protect first?`,
+    `When people pushed for speed on ${skill}, how did you defend quality, reliability, or risk controls?`,
   ];
 
   return {
@@ -476,11 +874,16 @@ function buildFallbackQuestion(
   index: number
 ): GeneratedQuestion {
   if (sourceType === "resume") {
-    const focus =
-      context.resume.claims[index % Math.max(context.resume.claims.length, 1)] ??
-      context.resume.skills[index % Math.max(context.resume.skills.length, 1)] ??
-      context.roleTitle ??
-      "your recent experience";
+    const focus = pickQuestionAnchor({
+      sourceType,
+      overlapSkills: context.overlapSkills,
+      jobSkills: [...context.job.coreSkills, ...context.interviewSkills],
+      responsibilities: context.job.responsibilities,
+      resumeSkills: context.resume.skills,
+      resumeClaims: context.resume.claims,
+      roleTitle: context.roleTitle,
+      index,
+    });
 
     return buildResumeQuestion({
       roleTitle: context.roleTitle,
@@ -490,24 +893,35 @@ function buildFallbackQuestion(
   }
 
   if (sourceType === "job") {
-    const focus =
-      context.job.coreSkills[index % Math.max(context.job.coreSkills.length, 1)] ??
-      context.interviewSkills[index % Math.max(context.interviewSkills.length, 1)] ??
-      context.roleTitle ??
-      "the role requirements";
+    const focus = pickQuestionAnchor({
+      sourceType,
+      overlapSkills: context.overlapSkills,
+      jobSkills: [...context.job.coreSkills, ...context.interviewSkills],
+      responsibilities: context.job.responsibilities,
+      resumeSkills: context.resume.skills,
+      resumeClaims: context.resume.claims,
+      roleTitle: context.roleTitle,
+      index,
+    });
 
     return buildJobQuestion({
       roleTitle: context.roleTitle,
       skill: focus,
+      responsibility: context.job.responsibilities[index % Math.max(context.job.responsibilities.length, 1)] ?? null,
       index,
     });
   }
 
-  const focus =
-    context.job.coreSkills[index % Math.max(context.job.coreSkills.length, 1)] ??
-    context.interviewSkills[index % Math.max(context.interviewSkills.length, 1)] ??
-    context.roleTitle ??
-    "your core responsibilities";
+  const focus = pickQuestionAnchor({
+    sourceType,
+    overlapSkills: context.overlapSkills,
+    jobSkills: [...context.job.coreSkills, ...context.interviewSkills],
+    responsibilities: context.job.responsibilities,
+    resumeSkills: context.resume.skills,
+    resumeClaims: context.resume.claims,
+    roleTitle: context.roleTitle,
+    index,
+  });
 
   return buildBehavioralQuestion({
     roleTitle: context.roleTitle,
@@ -533,7 +947,15 @@ function distributeQuestions(
       continue;
     }
 
+    if (hasWeakLeadIn(question.question_text)) {
+      continue;
+    }
+
     if (!isContextualQuestion(question, context)) {
+      continue;
+    }
+
+    if (!isSkillDrivenQuestion(question, context)) {
       continue;
     }
 
@@ -557,6 +979,8 @@ function distributeQuestions(
 
       if (
         !isGenericQuestion(fallback.question_text) &&
+        !hasWeakLeadIn(fallback.question_text) &&
+        isSkillDrivenQuestion(fallback, context) &&
         !isTooSimilar(fallback.question_text, fallback.source_type, accepted)
       ) {
         accepted.push(fallback);
@@ -663,7 +1087,7 @@ Deno.serve(async (request) => {
       ]);
 
     const context: InterviewContext = {
-      roleTitle: normalizeText(job?.job_title) || null,
+      roleTitle: cleanRoleTitle(job?.job_title) ?? null,
       resume: {
         rawResume: resume?.raw_resume ?? null,
         skills: uniqueStrings(asStringArray(resume?.extracted_skills)).slice(0, 12),
@@ -674,9 +1098,10 @@ Deno.serve(async (request) => {
             : null,
       },
       job: {
-        title: normalizeText(job?.job_title) || null,
+        title: cleanRoleTitle(job?.job_title) ?? null,
         description: normalizeText(job?.job_description) || null,
         coreSkills: uniqueStrings(asStringArray(job?.core_skills)).slice(0, 12),
+        responsibilities: extractResponsibilityAnchors(job?.job_description),
         difficultyProfile: normalizeText(job?.difficulty_profile) || null,
       },
       interviewSkills: uniqueStrings(
@@ -689,7 +1114,13 @@ Deno.serve(async (request) => {
           return [skill?.skill_name ?? null, skill?.skill_code ?? null];
         })
       ).slice(0, 12),
+      overlapSkills: [],
     };
+    context.overlapSkills = computeSkillOverlap({
+      resumeSkills: context.resume.skills,
+      resumeClaims: context.resume.claims,
+      jobSkills: [...context.job.coreSkills, ...context.interviewSkills],
+    });
 
     const targetQuestionCount = resolveEffectiveQuestionCount({
       configuredCount: interview.question_count,
@@ -713,9 +1144,17 @@ Deno.serve(async (request) => {
             `Question distribution must be: ${distribution.resume} resume, ${distribution.job} job, ${distribution.behavioral} behavioral.`,
             "Strict rules:",
             "- Do not ask generic questions such as 'tell me about yourself' or 'tell me about your experience'.",
+            "- Prefer job core skills and job responsibilities over job title when phrasing questions.",
+            "- First look for overlap between resume skills/claims and job-required skills. Use that overlap whenever possible.",
+            "- If there is no overlap, use job-required skills before any other context.",
+            "- Every question must be anchored to candidate skills, job-required skills, or both.",
+            "- mapped_skill must be a real skill from resume skills, job-required skills, or their overlap. Do not invent a skill label.",
+            "- Do not use job title as the primary anchor for any question.",
+            "- Use a diverse mix of scenario-based, tool-based, problem-solving, and real-world execution questions.",
+            "- Avoid repetitive lead-ins like 'describe a situation', 'share an example', and 'what trade-offs' unless there is no better phrasing.",
             "- Every resume question must reference a resume skill, resume claim, or claimed experience.",
-            "- Every job question must reference the job title, a required skill, or a job responsibility.",
-            "- Every behavioral question must still be anchored to the role or a relevant skill.",
+            "- Every job question must reference a required skill or a job responsibility. Use job title only as a last-resort fallback.",
+            "- Every behavioral question must still be anchored to a relevant skill or responsibility.",
             "- Do not repeat the same intent with different wording.",
             "- Vary intent across optimization, troubleshooting, design, migration, ownership, decision-making, and trade-offs.",
             "- Each question must be concise, specific, and interviewer-style.",
@@ -743,13 +1182,17 @@ Deno.serve(async (request) => {
                 job_title: context.job.title,
                 job_description: context.job.description,
                 core_skills: context.job.coreSkills,
+                responsibilities: context.job.responsibilities,
                 difficulty_profile: context.job.difficultyProfile,
               },
               interview_skills: context.interviewSkills,
+              overlap_skills: context.overlapSkills,
               generation_rules: {
+                prioritize_overlap_first: true,
                 reject_generic: true,
                 reject_repetition: true,
                 priority_order: [
+                  "resume-job skill overlap",
                   "uncovered job skills",
                   "unverified resume claims",
                   "behavioral fallback",
@@ -764,7 +1207,7 @@ Deno.serve(async (request) => {
       0.25
     );
 
-    const normalizedQuestions = normalizeQuestions(prompt);
+    const normalizedQuestions = normalizeQuestions(prompt, context);
     const questions = distributeQuestions(normalizedQuestions, distribution, context);
 
     if (questions.length === 0) {

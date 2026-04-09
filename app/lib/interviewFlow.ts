@@ -34,6 +34,306 @@ function normalizeText(value: string | null | undefined) {
   return value?.replace(/\s+/g, " ").trim() ?? "";
 }
 
+const ROLE_SEGMENT_SPLIT = /\s+\|\s+|\s+-\s+|\s+–\s+|\s+—\s+|,\s*/;
+const ROLE_KEYWORDS = [
+  "administrator",
+  "admin",
+  "architect",
+  "analyst",
+  "consultant",
+  "coordinator",
+  "database",
+  "developer",
+  "devops",
+  "engineer",
+  "lead",
+  "manager",
+  "officer",
+  "principal",
+  "specialist",
+  "staff",
+];
+const ROLE_NOISE_TOKENS = new Set([
+  "apac",
+  "asia",
+  "bangalore",
+  "bengaluru",
+  "blr",
+  "chennai",
+  "delhi",
+  "dubai",
+  "emea",
+  "europe",
+  "gurgaon",
+  "gurugram",
+  "holland",
+  "hybrid",
+  "hyderabad",
+  "india",
+  "kolkata",
+  "london",
+  "mumbai",
+  "netherlands",
+  "noida",
+  "onsite",
+  "on-site",
+  "pune",
+  "remote",
+  "singapore",
+  "uae",
+  "uk",
+  "usa",
+  "us",
+  "wfh",
+]);
+const ROLE_ABBREVIATIONS: Array<[RegExp, string]> = [
+  [/\bsr\.?\b/gi, "Senior"],
+  [/\bjr\.?\b/gi, "Junior"],
+  [/\bassoc\.?\b/gi, "Associate"],
+];
+
+function isRoleNoiseToken(token: string) {
+  const normalized = token.toLowerCase();
+
+  if (!normalized) {
+    return false;
+  }
+
+  return ROLE_NOISE_TOKENS.has(normalized);
+}
+
+function standardizeRoleCasing(value: string) {
+  return value
+    .split(/\s+/)
+    .map((token) => {
+      if (/^[A-Z0-9]{2,}$/.test(token)) {
+        return token;
+      }
+
+      const lower = token.toLowerCase();
+      return lower.charAt(0).toUpperCase() + lower.slice(1);
+    })
+    .join(" ");
+}
+
+function scoreRoleSegment(segment: string) {
+  const normalized = normalizeText(segment).toLowerCase();
+
+  if (!normalized) {
+    return Number.NEGATIVE_INFINITY;
+  }
+
+  const tokens = normalized.split(/\s+/);
+
+  return tokens.reduce((score, token) => {
+    if (ROLE_KEYWORDS.some((keyword) => token.includes(keyword))) {
+      return score + 3;
+    }
+
+    if (isRoleNoiseToken(token)) {
+      return score - 3;
+    }
+
+    if (/shift|remote|hybrid|onsite|on-site/.test(token)) {
+      return score - 2;
+    }
+
+    return score + 1;
+  }, 0);
+}
+
+export function cleanRoleTitle(value: string | null | undefined) {
+  let cleaned = normalizeText(value);
+
+  if (!cleaned) {
+    return null;
+  }
+
+  cleaned = cleaned.replace(
+    /\((?:[^)]*\b(?:remote|hybrid|onsite|on-site|wfh|work from home|shift|bangalore|bengaluru|holland|netherlands|india|uk|usa|us)\b[^)]*)\)/gi,
+    " "
+  );
+
+  for (const [pattern, replacement] of ROLE_ABBREVIATIONS) {
+    cleaned = cleaned.replace(pattern, replacement);
+  }
+
+  const segments = cleaned
+    .split(ROLE_SEGMENT_SPLIT)
+    .map((segment) => normalizeText(segment))
+    .filter(Boolean);
+
+  if (segments.length > 1) {
+    cleaned = [...segments].sort((left, right) => scoreRoleSegment(right) - scoreRoleSegment(left))[0];
+  }
+
+  cleaned = cleaned
+    .replace(/\b(remote|hybrid|onsite|on-site|work from home|wfh)\b/gi, " ")
+    .replace(
+      /\b(day|night|rotational|general|morning|evening|first|second|third|1st|2nd|3rd|us|uk|europe|emea|apac|ist)\s+shift\b/gi,
+      " "
+    )
+    .replace(/\bshift\s*[a-z0-9:+-]*\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  let tokens = cleaned.split(/\s+/).filter(Boolean);
+
+  while (tokens.length > 0 && isRoleNoiseToken(tokens[0])) {
+    tokens = tokens.slice(1);
+  }
+
+  while (tokens.length > 0 && isRoleNoiseToken(tokens[tokens.length - 1])) {
+    tokens = tokens.slice(0, -1);
+  }
+
+  cleaned = standardizeRoleCasing(tokens.join(" "));
+  return cleaned || null;
+}
+
+export function extractResponsibilityAnchors(
+  value: string | null | undefined,
+  limit = 4
+) {
+  const normalized = normalizeText(value);
+
+  if (!normalized) {
+    return [];
+  }
+
+  return [...new Set(
+    normalized
+      .split(/[.;\n\r]+/)
+      .map((segment) => normalizeText(segment))
+      .filter((segment) => {
+        const wordCount = segment.split(/\s+/).length;
+        return (
+          wordCount >= 4 &&
+          wordCount <= 18 &&
+          /\b(handle|manage|maintain|monitor|optimi[sz]e|troubleshoot|support|design|deliver|migrate|automate|secure|improve|own|lead)\b/i.test(
+            segment
+          )
+        );
+      })
+      .map((segment) => segment.replace(/^(responsibilities?|requirements?)\s*[:\-]\s*/i, ""))
+  )].slice(0, limit);
+}
+
+function normalizeAnchorToken(value: string | null | undefined) {
+  return normalizeText(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function extractClaimAnchors(
+  values: Array<string | null | undefined>,
+  limit = 6
+) {
+  const result: string[] = [];
+
+  for (const value of values) {
+    const normalized = normalizeText(value);
+    if (!normalized) {
+      continue;
+    }
+
+    const segments = normalized.split(/[.;,\n\r]+/);
+    for (const segment of segments) {
+      const claim = normalizeText(segment);
+      const wordCount = claim.split(/\s+/).length;
+      if (claim && wordCount >= 2 && wordCount <= 10 && !result.includes(claim)) {
+        result.push(claim);
+      }
+
+      if (result.length >= limit) {
+        return result;
+      }
+    }
+  }
+
+  return result;
+}
+
+export function computeSkillOverlap(params: {
+  resumeSkills?: Array<string | null | undefined>;
+  resumeClaims?: Array<string | null | undefined>;
+  jobSkills?: Array<string | null | undefined>;
+}) {
+  const resumeAnchors = [...new Set([
+    ...(params.resumeSkills ?? []).map((value) => normalizeText(value)).filter(Boolean),
+    ...extractClaimAnchors(params.resumeClaims ?? []),
+  ])];
+  const jobSkills = [...new Set((params.jobSkills ?? []).map((value) => normalizeText(value)).filter(Boolean))];
+  const jobSkillMap = new Map(jobSkills.map((skill) => [normalizeAnchorToken(skill), skill]));
+  const overlap: string[] = [];
+
+  for (const anchor of resumeAnchors) {
+    const normalized = normalizeAnchorToken(anchor);
+    const direct = jobSkillMap.get(normalized);
+
+    if (direct && !overlap.includes(direct)) {
+      overlap.push(direct);
+      continue;
+    }
+
+    const partial = jobSkills.find((jobSkill) => {
+      const normalizedJobSkill = normalizeAnchorToken(jobSkill);
+      return (
+        normalized.length >= 4 &&
+        normalizedJobSkill.length >= 4 &&
+        (normalized.includes(normalizedJobSkill) || normalizedJobSkill.includes(normalized))
+      );
+    });
+
+    if (partial && !overlap.includes(partial)) {
+      overlap.push(partial);
+    }
+  }
+
+  return {
+    overlapSkills: overlap,
+    resumeAnchors,
+    jobSkills,
+  };
+}
+
+export function pickQuestionAnchor(params: {
+  sourceType: InterviewQuestionSource;
+  overlapSkills?: Array<string | null | undefined>;
+  preferredJobSkill?: string | null;
+  resumeSkills?: Array<string | null | undefined>;
+  resumeClaims?: Array<string | null | undefined>;
+  responsibilities?: Array<string | null | undefined>;
+  fallbackRoleTitle?: string | null;
+}) {
+  const overlapSkills = (params.overlapSkills ?? []).map((value) => normalizeText(value)).filter(Boolean);
+  const preferredJobSkill = normalizeText(params.preferredJobSkill);
+  const resumeSkills = (params.resumeSkills ?? []).map((value) => normalizeText(value)).filter(Boolean);
+  const resumeClaims = extractClaimAnchors(params.resumeClaims ?? []);
+  const responsibilities = (params.responsibilities ?? []).map((value) => normalizeText(value)).filter(Boolean);
+  const fallbackRoleTitle = cleanRoleTitle(params.fallbackRoleTitle);
+
+  if (overlapSkills[0]) {
+    return overlapSkills[0];
+  }
+
+  if (preferredJobSkill) {
+    return preferredJobSkill;
+  }
+
+  if (params.sourceType === "resume") {
+    return resumeSkills[0] || resumeClaims[0] || responsibilities[0] || fallbackRoleTitle || "your recent work";
+  }
+
+  if (params.sourceType === "behavioral") {
+    return responsibilities[0] || preferredJobSkill || overlapSkills[0] || resumeSkills[0] || fallbackRoleTitle || "your work";
+  }
+
+  return preferredJobSkill || responsibilities[0] || resumeSkills[0] || resumeClaims[0] || fallbackRoleTitle || "this area";
+}
+
 function normalizePositiveInteger(value: number | null | undefined) {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return 0;
@@ -41,6 +341,19 @@ function normalizePositiveInteger(value: number | null | undefined) {
 
   const normalized = Math.floor(value);
   return normalized > 0 ? normalized : 0;
+}
+
+function stableTemplateIndex(value: string, modulo: number) {
+  if (modulo <= 0) {
+    return 0;
+  }
+
+  let hash = 0;
+  for (const char of value) {
+    hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  }
+
+  return hash % modulo;
 }
 
 function roundDownCounts(
@@ -358,26 +671,48 @@ export function selectNextCoreQuestion(params: {
 export function buildFallbackCoreQuestion(params: {
   sourceType: InterviewQuestionSource;
   skillName?: string | null;
+  contextAnchor?: string | null;
   roleTitle?: string | null;
   phase?: InterviewPhase;
 }) {
-  const skillName = normalizeText(params.skillName);
-  const roleTitle = normalizeText(params.roleTitle);
-  const roleContext = roleTitle ? ` for a ${roleTitle}` : "";
-  const skillContext = skillName || "this area";
+  const skillContext =
+    normalizeText(params.skillName) ||
+    normalizeText(params.contextAnchor) ||
+    cleanRoleTitle(params.roleTitle) ||
+    "this area";
+  const templateSeed = `${params.sourceType}:${params.phase ?? "core"}:${skillContext}`;
 
   if (params.phase === "closing") {
-    return `Before we wrap up, what is one decision you made recently${roleContext} that had the biggest impact, and why?`;
+    return `Before we wrap up, what is one recent decision you made while working on ${skillContext}, and why did it matter?`;
   }
 
   switch (params.sourceType) {
-    case "resume":
-      return `Can you walk me through a project from your background${roleContext} where you used ${skillContext} and the outcome you achieved?`;
-    case "behavioral":
-      return `Tell me about a time${roleContext} when you had to make a difficult decision while working on ${skillContext}. How did you handle it?`;
+    case "resume": {
+      const templates = [
+        `What was the hardest problem you solved using ${skillContext}, and how did you get it over the line?`,
+        `When you worked on ${skillContext}, what concrete result were you accountable for and how did you deliver it?`,
+        `Take me through a project where ${skillContext} became critical. What broke, what did you change, and what improved?`,
+      ];
+      return templates[stableTemplateIndex(templateSeed, templates.length)];
+    }
+    case "behavioral": {
+      const templates = [
+        `When work around ${skillContext} started going off track, how did you regain control and align the team?`,
+        `Think of a time you had conflicting priorities around ${skillContext}. How did you decide what to protect first?`,
+        `When stakeholders pushed for speed on ${skillContext}, how did you defend quality or risk controls?`,
+      ];
+      return templates[stableTemplateIndex(templateSeed, templates.length)];
+    }
     case "job":
-    default:
-      return `This role${roleContext} requires strong ${skillContext}. How would you approach a real-world problem in that area?`;
+    default: {
+      const templates = [
+        `How do you troubleshoot ${skillContext} when it starts failing in production?`,
+        `If you had to improve ${skillContext} under real delivery pressure, what would you look at first?`,
+        `What signals tell you ${skillContext} is degrading, and what actions do you take next?`,
+        `Walk me through the steps you would take to execute ${skillContext} reliably in production.`,
+      ];
+      return templates[stableTemplateIndex(templateSeed, templates.length)];
+    }
   }
 }
 

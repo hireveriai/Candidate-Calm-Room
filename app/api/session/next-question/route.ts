@@ -3,8 +3,12 @@ import {
   buildAskedQuestionState,
   buildFallbackCoreQuestion,
   buildInterviewBlueprint,
+  computeSkillOverlap,
+  extractResponsibilityAnchors,
+  extractClaimAnchors,
   deriveInterviewPhase,
   pickNextExpectedSource,
+  pickQuestionAnchor,
   selectNextCoreQuestion,
   shouldCompleteInterview,
 } from "@/app/lib/interviewFlow";
@@ -52,6 +56,13 @@ type AttemptContextRow = {
   required_follow_up_questions: number | null;
   experience_level: string | null;
   job_title: string | null;
+  job_description: string | null;
+  core_skills: string[] | null;
+};
+
+type ResumeSignalRow = {
+  extracted_skills: string[] | null;
+  extracted_claims: unknown;
 };
 
 type LatestAnswerRow = {
@@ -180,6 +191,33 @@ function cleanAnswerText(value: string | null | undefined) {
     );
 
   return normalizeText(cleaned);
+}
+
+function flattenClaimTexts(value: unknown): string[] {
+  const results: string[] = [];
+
+  const walk = (input: unknown) => {
+    if (!input) {
+      return;
+    }
+
+    if (typeof input === "string") {
+      results.push(input);
+      return;
+    }
+
+    if (Array.isArray(input)) {
+      input.forEach(walk);
+      return;
+    }
+
+    if (typeof input === "object") {
+      Object.values(input as Record<string, unknown>).forEach(walk);
+    }
+  };
+
+  walk(value);
+  return results;
 }
 
 function sanitizeRole(value: string | null | undefined) {
@@ -359,6 +397,8 @@ export async function POST(request: Request) {
           i.required_follow_up_questions,
           jp.experience_level,
           jp.job_title,
+          jp.job_description,
+          jp.core_skills,
           (
             select count(*)
             from public.interview_questions iq
@@ -386,6 +426,8 @@ export async function POST(request: Request) {
           ${null}::int as required_follow_up_questions,
           ${null}::text as experience_level,
           ${null}::text as job_title,
+          ${null}::text as job_description,
+          ${null}::text[] as core_skills,
           (
             select count(*)
             from public.interview_questions iq
@@ -501,6 +543,28 @@ export async function POST(request: Request) {
           on sm.skill_id = ism.skill_id
         where ism.interview_id = ${attempt.interview_id}::uuid
     `;
+    const resumeSignal = (
+      await prisma.$queryRaw<ResumeSignalRow[]>`
+        select
+          cra.extracted_skills,
+          cra.extracted_claims
+        from public.candidate_resume_ai cra
+        where cra.interview_id = ${attempt.interview_id}::uuid
+        order by cra.created_at desc nulls last, cra.resume_ai_id desc
+        limit 1
+      `
+    )[0] ?? null;
+    const resumeClaimValues = extractClaimAnchors(
+      flattenClaimTexts(resumeSignal?.extracted_claims)
+    );
+    const overlapSkills = computeSkillOverlap({
+      resumeSkills: resumeSignal?.extracted_skills ?? [],
+      resumeClaims: resumeClaimValues,
+      jobSkills: [
+        ...(attempt.core_skills ?? []),
+        ...requiredSkills.map((skill: RequiredSkillRow) => skill.skill_name),
+      ],
+    }).overlapSkills;
 
     const askedState = buildAskedQuestionState({
       askedQuestions: askedQuestions.map((question: AskedQuestionRow) => ({
@@ -710,6 +774,23 @@ export async function POST(request: Request) {
           askedTotal,
           totalQuestions: totalLimit,
         });
+        const responsibilityAnchor =
+          extractResponsibilityAnchors(attempt.job_description)[0] ??
+          attempt.core_skills?.[0] ??
+          null;
+        const anchor = pickQuestionAnchor({
+          sourceType: nextExpectedSource,
+          overlapSkills,
+          preferredJobSkill:
+            uncoveredSkill?.skill_name ??
+            plannedQuestions[0]?.skill_name ??
+            attempt.core_skills?.[0] ??
+            null,
+          resumeSkills: resumeSignal?.extracted_skills ?? [],
+          resumeClaims: resumeClaimValues,
+          responsibilities: extractResponsibilityAnchors(attempt.job_description),
+          fallbackRoleTitle: attempt.job_title,
+        });
         const createdQuestions = await prisma.$queryRaw<CreatedSessionQuestionRow[]>`
             insert into public.session_questions (
               attempt_id,
@@ -724,7 +805,8 @@ export async function POST(request: Request) {
               ${null}::uuid,
               ${buildFallbackCoreQuestion({
                 sourceType: nextExpectedSource,
-                skillName: uncoveredSkill?.skill_name ?? plannedQuestions[0]?.skill_name ?? null,
+                skillName: anchor,
+                contextAnchor: responsibilityAnchor,
                 roleTitle: attempt.job_title,
                 phase,
               })}::text,
