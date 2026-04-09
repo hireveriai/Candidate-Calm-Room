@@ -52,6 +52,15 @@ function hasMissingFunctionError(error: unknown, functionName: string) {
   );
 }
 
+function hasMissingDatabaseRoutineError(error: unknown) {
+  return (
+    error instanceof Error &&
+    error.message.includes("Raw query failed") &&
+    error.message.includes("does not exist") &&
+    error.message.includes("function public.")
+  );
+}
+
 export async function POST(request: Request) {
   const startedAt = Date.now();
 
@@ -100,7 +109,10 @@ export async function POST(request: Request) {
         } satisfies SessionQuestionRow);
       }
     } catch (error) {
-      if (!hasMissingFunctionError(error, "public.get_first_interview_question")) {
+      if (
+        !hasMissingFunctionError(error, "public.get_first_interview_question") &&
+        !hasMissingDatabaseRoutineError(error)
+      ) {
         throw error;
       }
     }

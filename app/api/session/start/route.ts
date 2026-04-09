@@ -23,6 +23,15 @@ function hasMissingFunctionError(error: unknown, functionName: string) {
   );
 }
 
+function hasMissingDatabaseRoutineError(error: unknown) {
+  return (
+    error instanceof Error &&
+    error.message.includes("Raw query failed") &&
+    error.message.includes("does not exist") &&
+    error.message.includes("function public.")
+  );
+}
+
 export async function POST(request: Request) {
   try {
     const body = (await request.json()) as RequestBody;
@@ -42,7 +51,10 @@ export async function POST(request: Request) {
 
       attempt = rows[0];
     } catch (error) {
-      if (!hasMissingFunctionError(error, "public.start_interview_session")) {
+      if (
+        !hasMissingFunctionError(error, "public.start_interview_session") &&
+        !hasMissingDatabaseRoutineError(error)
+      ) {
         throw error;
       }
 

@@ -65,6 +65,15 @@ function hasMissingFunctionError(error: unknown, functionName: string) {
   );
 }
 
+function hasMissingDatabaseRoutineError(error: unknown) {
+  return (
+    error instanceof Error &&
+    error.message.includes("Raw query failed") &&
+    error.message.includes("does not exist") &&
+    error.message.includes("function public.")
+  );
+}
+
 function normalizeText(value: string | null | undefined) {
   return value?.replace(/\s+/g, " ").trim() ?? "";
 }
@@ -149,7 +158,10 @@ export async function POST(request: Request) {
       `;
       sessionQuestion = rows[0];
     } catch (error) {
-      if (!hasMissingFunctionError(error, "public.get_next_interview_question")) {
+      if (
+        !hasMissingFunctionError(error, "public.get_next_interview_question") &&
+        !hasMissingDatabaseRoutineError(error)
+      ) {
         throw error;
       }
 
