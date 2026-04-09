@@ -1,3 +1,4 @@
+import { finalizeInterviewAttempt } from "@/app/lib/interviewCompletion";
 import { prisma } from "@/app/lib/prisma";
 import {
   buildAskedQuestionState,
@@ -935,18 +936,15 @@ export async function POST(request: Request) {
     }
 
     if (sessionQuestion.is_complete || !sessionQuestion.session_question_id) {
-      await prisma.interview_attempts.updateMany({
-        where: {
-          attempt_id: attemptId,
-        },
-        data: {
-          status: "completed",
-          ended_at: new Date(),
-        },
+      const completionResult = await finalizeInterviewAttempt({
+        attemptId,
+        earlyExit: false,
+        currentPhase: "closing",
       });
 
       return Response.json({
         complete: true,
+        ...completionResult,
       });
     }
 

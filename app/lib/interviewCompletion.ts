@@ -83,6 +83,33 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
 
+function hasMissingDatabaseColumnError(
+  error: unknown,
+  columnNames: string[] = []
+) {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  const message = error.message.toLowerCase();
+  const isMissingColumnError =
+    message.includes("raw query failed") &&
+    message.includes("column") &&
+    message.includes("does not exist");
+
+  if (!isMissingColumnError) {
+    return false;
+  }
+
+  if (!columnNames.length) {
+    return true;
+  }
+
+  return columnNames.some((columnName) =>
+    message.includes(columnName.toLowerCase())
+  );
+}
+
 function normalizePhase(value: string | null | undefined): string | null {
   if (!value) {
     return null;
@@ -163,6 +190,66 @@ function getRiskFlags(params: {
   return flags;
 }
 
+async function loadScoreAggregates(attemptId: string) {
+  try {
+    return await prisma.$queryRaw<ScoreAggregateRow[]>`
+      select
+        count(*) filter (
+          where ia.answer_text is not null
+            and nullif(trim(ia.answer_text), '') is not null
+            and lower(trim(ia.answer_text)) <> 'no response provided.'
+        )::int as questions_answered,
+        (
+          select count(*)
+          from public.session_questions sq
+          where sq.attempt_id = ${attemptId}::uuid
+        )::int as asked_questions,
+        coalesce(avg(iae.skill_score), 0) as avg_skill_score,
+        coalesce(avg((coalesce(iae.clarity_score, 0) + coalesce(iae.depth_score, 0) + coalesce(iae.confidence_score, 0)) / 3.0), 0) as avg_cognitive_score,
+        coalesce(avg(iae.fraud_score), 0) as avg_fraud_score
+      from public.interview_answers ia
+      left join public.interview_answer_evaluations iae
+        on iae.answer_id = ia.answer_id
+       and iae.evaluator_type = 'AI'
+      where ia.attempt_id = ${attemptId}::uuid
+    `;
+  } catch (error) {
+    if (
+      !hasMissingDatabaseColumnError(error, [
+        "skill_score",
+        "clarity_score",
+        "depth_score",
+        "confidence_score",
+        "fraud_score",
+      ])
+    ) {
+      throw error;
+    }
+
+    return prisma.$queryRaw<ScoreAggregateRow[]>`
+      select
+        count(*) filter (
+          where ia.answer_text is not null
+            and nullif(trim(ia.answer_text), '') is not null
+            and lower(trim(ia.answer_text)) <> 'no response provided.'
+        )::int as questions_answered,
+        (
+          select count(*)
+          from public.session_questions sq
+          where sq.attempt_id = ${attemptId}::uuid
+        )::int as asked_questions,
+        coalesce(avg(iae.score), 0) as avg_skill_score,
+        coalesce(avg(iae.score), 0) as avg_cognitive_score,
+        0::numeric as avg_fraud_score
+      from public.interview_answers ia
+      left join public.interview_answer_evaluations iae
+        on iae.answer_id = ia.answer_id
+       and iae.evaluator_type = 'AI'
+      where ia.attempt_id = ${attemptId}::uuid
+    `;
+  }
+}
+
 export async function finalizeInterviewAttempt(params: {
   attemptId: string;
   earlyExit: boolean;
@@ -212,27 +299,7 @@ export async function finalizeInterviewAttempt(params: {
   }
 
   const [aggregates, latestQuestions] = await Promise.all([
-    prisma.$queryRaw<ScoreAggregateRow[]>`
-      select
-        count(*) filter (
-          where ia.answer_text is not null
-            and nullif(trim(ia.answer_text), '') is not null
-            and lower(trim(ia.answer_text)) <> 'no response provided.'
-        )::int as questions_answered,
-        (
-          select count(*)
-          from public.session_questions sq
-          where sq.attempt_id = ${params.attemptId}::uuid
-        )::int as asked_questions,
-        coalesce(avg(iae.skill_score), 0) as avg_skill_score,
-        coalesce(avg((coalesce(iae.clarity_score, 0) + coalesce(iae.depth_score, 0) + coalesce(iae.confidence_score, 0)) / 3.0), 0) as avg_cognitive_score,
-        coalesce(avg(iae.fraud_score), 0) as avg_fraud_score
-      from public.interview_answers ia
-      left join public.interview_answer_evaluations iae
-        on iae.answer_id = ia.answer_id
-       and iae.evaluator_type = 'AI'
-      where ia.attempt_id = ${params.attemptId}::uuid
-    `,
+    loadScoreAggregates(params.attemptId),
     prisma.$queryRaw<LatestQuestionRow[]>`
       select question_kind, content
       from public.session_questions
@@ -302,7 +369,7 @@ export async function finalizeInterviewAttempt(params: {
         termination_type = ${params.terminationType ?? null}::text,
         termination_detected_at = case
           when ${params.earlyExit} then now()
-          else termination_detected_at
+          else null
         end,
         termination_phase = ${currentPhase}::text,
         time_elapsed_seconds = ${elapsedSeconds}::integer,
