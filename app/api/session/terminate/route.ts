@@ -1,4 +1,5 @@
 import { prisma } from "@/app/lib/prisma";
+import { resolveEffectiveQuestionCount } from "@/app/lib/interviewBudget";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -33,6 +34,9 @@ type AttemptContextRow = {
   ended_at: Date | null;
   status: string;
   expected_questions: number | null;
+  question_count: number | null;
+  duration_minutes: number | null;
+  planned_question_count: number | null;
   completion_percentage: string | number | null;
   reliability_score: string | number | null;
   termination_type: string | null;
@@ -295,6 +299,8 @@ export async function POST(request: Request) {
         ia.started_at,
         ia.ended_at,
         ia.status,
+        i.question_count,
+        i.duration_minutes,
         ia.completion_percentage,
         ia.reliability_score,
         ia.termination_type,
@@ -307,9 +313,15 @@ export async function POST(request: Request) {
             select count(*)
             from public.interview_questions iq
             where iq.interview_id = ia.interview_id
-          ),
+          )::int,
           0
         )::int as expected_questions
+        ,
+        (
+          select count(*)
+          from public.interview_questions iq
+          where iq.interview_id = ia.interview_id
+        )::int as planned_question_count
       from public.interview_attempts ia
       join public.interviews i
         on i.interview_id = ia.interview_id
@@ -366,7 +378,11 @@ export async function POST(request: Request) {
     };
     const latestQuestion = latestQuestions[0];
 
-    const expectedQuestions = Math.max(asNumber(attempt.expected_questions), 1);
+    const expectedQuestions = resolveEffectiveQuestionCount({
+      configuredCount: attempt.expected_questions ?? attempt.question_count,
+      durationMinutes: attempt.duration_minutes,
+      plannedQuestionCount: attempt.planned_question_count,
+    });
     const questionsAnswered = Math.max(aggregate.questions_answered ?? 0, 0);
     const askedQuestions = Math.max(aggregate.asked_questions ?? 0, 0);
     const completionPercentage = clamp(questionsAnswered / expectedQuestions, 0, 1);

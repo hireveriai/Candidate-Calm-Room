@@ -1,3 +1,64 @@
+create or replace function public.get_effective_duration_minutes(p_interview_id uuid)
+returns integer
+language plpgsql
+as $$
+declare
+  v_duration integer;
+begin
+  select coalesce(i.duration_minutes, 30)
+  into v_duration
+  from public.interviews i
+  where i.interview_id = p_interview_id;
+
+  return greatest(coalesce(v_duration, 30), 1);
+end;
+$$;
+
+create or replace function public.get_effective_question_count(p_interview_id uuid)
+returns integer
+language plpgsql
+as $$
+declare
+  v_configured_count integer := 0;
+  v_duration integer := public.get_effective_duration_minutes(p_interview_id);
+  v_planned_count integer := 0;
+  v_duration_target integer := 9;
+  v_effective_count integer := 1;
+begin
+  select coalesce(i.question_count, 0)
+  into v_configured_count
+  from public.interviews i
+  where i.interview_id = p_interview_id;
+
+  select count(*)
+  into v_planned_count
+  from public.interview_questions iq
+  where iq.interview_id = p_interview_id;
+
+  v_duration_target := case
+    when v_duration >= 60 then 17
+    when v_duration >= 45 then 13
+    when v_duration >= 30 then 9
+    when v_duration >= 20 then 7
+    when v_duration >= 15 then 5
+    when v_duration >= 10 then 4
+    else 3
+  end;
+
+  v_effective_count := greatest(v_configured_count, v_planned_count, 1);
+
+  if v_duration >= 25 and v_effective_count < 5 then
+    v_effective_count := greatest(v_effective_count, v_duration_target, v_planned_count);
+  end if;
+
+  if v_effective_count = 1 and v_planned_count = 0 then
+    v_effective_count := greatest(v_effective_count, v_duration_target);
+  end if;
+
+  return v_effective_count;
+end;
+$$;
+
 create or replace function public.build_follow_up_question(
   p_last_answer text,
   p_last_question text,

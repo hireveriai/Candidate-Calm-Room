@@ -13,6 +13,45 @@ type GeneratedQuestion = {
   allow_follow_up?: boolean;
 };
 
+function normalizePositiveInteger(value: number | null | undefined) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return 0;
+  }
+
+  const normalized = Math.floor(value);
+  return normalized > 0 ? normalized : 0;
+}
+
+function deriveQuestionTargetFromDuration(durationMinutes: number | null | undefined) {
+  const duration = normalizePositiveInteger(durationMinutes);
+
+  if (duration >= 60) return 17;
+  if (duration >= 45) return 13;
+  if (duration >= 30) return 9;
+  if (duration >= 20) return 7;
+  if (duration >= 15) return 5;
+  if (duration >= 10) return 4;
+  if (duration > 0) return 3;
+  return 9;
+}
+
+function resolveEffectiveQuestionCount(params: {
+  configuredCount?: number | null;
+  durationMinutes?: number | null;
+}) {
+  const configuredCount = normalizePositiveInteger(params.configuredCount);
+  const durationMinutes = normalizePositiveInteger(params.durationMinutes);
+  const durationTarget = deriveQuestionTargetFromDuration(durationMinutes);
+
+  let effectiveCount = Math.max(configuredCount, 1);
+
+  if (durationMinutes >= 25 && effectiveCount < 5) {
+    effectiveCount = Math.max(effectiveCount, durationTarget);
+  }
+
+  return effectiveCount;
+}
+
 function normalizeQuestions(payload: Record<string, unknown>): GeneratedQuestion[] {
   const rawQuestions = Array.isArray(payload.questions) ? payload.questions : [];
 
@@ -120,16 +159,13 @@ Deno.serve(async (request) => {
           .eq("interview_id", interviewId),
       ]);
 
-    const targetQuestionCount =
-      typeof interview.question_count === "number" && interview.question_count > 0
-        ? interview.question_count
-        : typeof templateConfig?.total_duration_minutes === "number" &&
-            templateConfig.total_duration_minutes >= 60
-          ? 17
-          : typeof templateConfig?.total_duration_minutes === "number" &&
-              templateConfig.total_duration_minutes >= 45
-            ? 13
-            : 9;
+    const targetQuestionCount = resolveEffectiveQuestionCount({
+      configuredCount: interview.question_count,
+      durationMinutes:
+        typeof interview.duration_minutes === "number"
+          ? interview.duration_minutes
+          : templateConfig?.total_duration_minutes,
+    });
 
     const prompt = await createJsonChatCompletion(
       [

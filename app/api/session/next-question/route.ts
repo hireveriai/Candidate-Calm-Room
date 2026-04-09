@@ -1,4 +1,5 @@
 import { prisma } from "@/app/lib/prisma";
+import { resolveEffectiveQuestionCount } from "@/app/lib/interviewBudget";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -36,6 +37,8 @@ type QuestionTypeRow = {
 type AttemptContextRow = {
   interview_id: string;
   question_count: number | null;
+  duration_minutes: number | null;
+  planned_question_count: number | null;
 };
 
 type LatestAnswerRow = {
@@ -330,7 +333,13 @@ export async function POST(request: Request) {
       const attempts = await prisma.$queryRaw<AttemptContextRow[]>`
         select
           ia.interview_id,
-          i.question_count
+          i.question_count,
+          i.duration_minutes,
+          (
+            select count(*)
+            from public.interview_questions iq
+            where iq.interview_id = ia.interview_id
+          )::int as planned_question_count
         from public.interview_attempts ia
         join public.interviews i
           on i.interview_id = ia.interview_id
@@ -359,7 +368,11 @@ export async function POST(request: Request) {
       `;
 
       const latestQuestion = askedQuestions.at(-1) ?? null;
-      const totalLimit = attempt.question_count ?? 9;
+      const totalLimit = resolveEffectiveQuestionCount({
+        configuredCount: attempt.question_count,
+        durationMinutes: attempt.duration_minutes,
+        plannedQuestionCount: attempt.planned_question_count,
+      });
       const askedTotal = askedQuestions.length;
       const askedFollowUps = askedQuestions.filter(
         (question: AskedQuestionRow) => !question.question_id
