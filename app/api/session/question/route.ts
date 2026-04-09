@@ -123,26 +123,53 @@ export async function POST(request: Request) {
       } satisfies SessionQuestionRow);
     }
 
-    const attempts = await prisma.$queryRaw<AttemptInterviewRow[]>`
-      select
-        ia.interview_id,
-        i.question_count,
-        i.duration_minutes,
-        jp.experience_level,
-        jp.job_title,
-        (
-          select count(*)
-          from public.interview_questions iq
-          where iq.interview_id = ia.interview_id
-        )::int as planned_question_count
-      from public.interview_attempts ia
-      join public.interviews i
-        on i.interview_id = ia.interview_id
-      left join public.job_positions jp
-        on jp.job_id = i.job_id
-      where ia.attempt_id = ${attemptId}::uuid
-      limit 1
-    `;
+    let attempts: AttemptInterviewRow[];
+
+    try {
+      attempts = await prisma.$queryRaw<AttemptInterviewRow[]>`
+        select
+          ia.interview_id,
+          i.question_count,
+          i.duration_minutes,
+          jp.experience_level,
+          jp.job_title,
+          (
+            select count(*)
+            from public.interview_questions iq
+            where iq.interview_id = ia.interview_id
+          )::int as planned_question_count
+        from public.interview_attempts ia
+        join public.interviews i
+          on i.interview_id = ia.interview_id
+        left join public.job_positions jp
+          on jp.job_id = i.job_id
+        where ia.attempt_id = ${attemptId}::uuid
+        limit 1
+      `;
+    } catch (error) {
+      if (!hasMissingDatabaseColumnError(error)) {
+        throw error;
+      }
+
+      attempts = await prisma.$queryRaw<AttemptInterviewRow[]>`
+        select
+          ia.interview_id,
+          i.question_count,
+          i.duration_minutes,
+          ${null}::text as experience_level,
+          ${null}::text as job_title,
+          (
+            select count(*)
+            from public.interview_questions iq
+            where iq.interview_id = ia.interview_id
+          )::int as planned_question_count
+        from public.interview_attempts ia
+        join public.interviews i
+          on i.interview_id = ia.interview_id
+        where ia.attempt_id = ${attemptId}::uuid
+        limit 1
+      `;
+    }
     const attempt = attempts[0];
 
     if (!attempt) {

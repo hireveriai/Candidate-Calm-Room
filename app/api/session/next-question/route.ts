@@ -384,8 +384,8 @@ export async function POST(request: Request) {
           i.question_count,
           i.duration_minutes,
           ${null}::int as required_follow_up_questions,
-          jp.experience_level,
-          jp.job_title,
+          ${null}::text as experience_level,
+          ${null}::text as job_title,
           (
             select count(*)
             from public.interview_questions iq
@@ -394,8 +394,6 @@ export async function POST(request: Request) {
         from public.interview_attempts ia
         join public.interviews i
           on i.interview_id = ia.interview_id
-        left join public.job_positions jp
-          on jp.job_id = i.job_id
         where ia.attempt_id = ${attemptId}::uuid
         limit 1
       `;
