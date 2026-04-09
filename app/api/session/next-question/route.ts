@@ -4,6 +4,7 @@ import {
   buildFallbackCoreQuestion,
   buildInterviewBlueprint,
   computeSkillOverlap,
+  estimateQuestionTimeSeconds,
   extractResponsibilityAnchors,
   extractClaimAnchors,
   deriveInterviewPhase,
@@ -472,6 +473,9 @@ export async function POST(request: Request) {
     });
     const totalLimit = blueprint.totalQuestions;
     const askedTotal = askedQuestions.length;
+    const coreAskedTotal = askedQuestions.filter(
+      (question: AskedQuestionRow) => question.question_kind === "core"
+    ).length;
     const askedFollowUps = askedQuestions.filter(
       (question: AskedQuestionRow) => question.question_kind === "follow_up"
     ).length;
@@ -591,12 +595,15 @@ export async function POST(request: Request) {
     });
 
     const completion = shouldCompleteInterview({
-      askedTotal,
+      askedCoreTotal: coreAskedTotal,
       totalQuestions: totalLimit,
       elapsedSeconds,
       durationMinutes: attempt.duration_minutes,
       requiredSkillIds: requiredSkills.map((skill: RequiredSkillRow) => skill.skill_id),
       coveredSkillIds: askedState.coveredSkillIds,
+      askedQuestions: askedQuestions.map((question: AskedQuestionRow) => ({
+        questionKind: question.question_kind,
+      })),
     });
 
     if (completion.complete) {
@@ -665,7 +672,13 @@ export async function POST(request: Request) {
         : 0;
       const skillScore = asNumber(latestEvaluation?.skill_score);
       const targetDifficulty =
-        skillScore >= 0.75 ? 4 : skillScore > 0 && skillScore <= 0.45 ? 2 : 3;
+        completion.shouldAvoidDeepQuestions
+          ? 3
+          : skillScore >= 0.75
+            ? 4
+            : skillScore > 0 && skillScore <= 0.45
+              ? 2
+              : 3;
       const nextCore = selectNextCoreQuestion({
         plannedQuestions: plannedQuestions.map((question: NextCoreQuestionRow) => ({
           questionId: question.question_id,
@@ -687,15 +700,24 @@ export async function POST(request: Request) {
         blueprint,
         targetDifficulty,
       });
+      const nextCoreEstimatedSeconds = estimateQuestionTimeSeconds({
+        questionKind: "core",
+        phase: nextCore?.phaseHint,
+        difficultyLevel: nextCore?.difficultyLevel,
+      });
+      const canFitPlannedCore =
+        completion.timeRemainingSeconds > nextCoreEstimatedSeconds + 45;
       const shouldPreferNextCore =
         Boolean(nextCore) &&
         isExperienceOverviewQuestion(latestQuestion?.content) &&
         answerAlreadyCoversExperienceOverview(effectiveLastAnswer);
 
       const shouldAskFollowUp =
-        latestQuestion?.question_kind === "core" &&
+        (latestQuestion?.question_kind === "core" ||
+          latestQuestion?.question_kind === "follow_up") &&
         !shouldPreferNextCore &&
         remainingFollowUps > 0 &&
+        completion.allowFollowUp &&
         Boolean(effectiveLastAnswer) &&
         (wordCount >= 25 ||
           skillScore <= 0.55 ||
@@ -704,7 +726,18 @@ export async function POST(request: Request) {
       let createdQuestion: CreatedSessionQuestionRow | null = null;
       let createdQuestionType: string | null = null;
 
-      if (shouldAskFollowUp) {
+      if (!completion.canFitCoreQuestion && !completion.allowFollowUp) {
+        sessionQuestion = {
+          session_question_id: null,
+          question_id: null,
+          content: null,
+          source: null,
+          question_kind: null,
+          question_order: null,
+          asked_at: null,
+          is_complete: true,
+        };
+      } else if (shouldAskFollowUp) {
         const createdQuestions = await prisma.$queryRaw<CreatedSessionQuestionRow[]>`
             insert into public.session_questions (
               attempt_id,
@@ -732,7 +765,7 @@ export async function POST(request: Request) {
           `;
         createdQuestion = createdQuestions[0] ?? null;
         createdQuestionType = "follow_up";
-      } else if (nextCore?.questionText) {
+      } else if (nextCore?.questionText && canFitPlannedCore) {
         const createdQuestions = await prisma.$queryRaw<CreatedSessionQuestionRow[]>`
             insert into public.session_questions (
               attempt_id,
@@ -771,7 +804,7 @@ export async function POST(request: Request) {
           ) ??
           null;
         const phase = deriveInterviewPhase({
-          askedTotal,
+          askedTotal: coreAskedTotal,
           totalQuestions: totalLimit,
         });
         const responsibilityAnchor =
@@ -808,7 +841,7 @@ export async function POST(request: Request) {
                 skillName: anchor,
                 contextAnchor: responsibilityAnchor,
                 roleTitle: attempt.job_title,
-                phase,
+                phase: completion.lowTime ? "closing" : phase,
               })}::text,
               ${"system"}::text,
               ${"core"}::text,
@@ -828,6 +861,18 @@ export async function POST(request: Request) {
       }
 
       if (!createdQuestion && remainingFollowUps > 0 && effectiveLastAnswer) {
+        if (!completion.allowFollowUp) {
+          sessionQuestion = {
+            session_question_id: null,
+            question_id: null,
+            content: null,
+            source: null,
+            question_kind: null,
+            question_order: null,
+            asked_at: null,
+            is_complete: true,
+          };
+        } else {
         const createdQuestions = await prisma.$queryRaw<CreatedSessionQuestionRow[]>`
             insert into public.session_questions (
               attempt_id,
@@ -855,9 +900,10 @@ export async function POST(request: Request) {
           `;
         createdQuestion = createdQuestions[0] ?? null;
         createdQuestionType = "follow_up";
+        }
       }
 
-      sessionQuestion = createdQuestion
+      sessionQuestion = sessionQuestion ?? (createdQuestion
         ? {
             ...createdQuestion,
             question_kind: createdQuestion.question_kind ?? "core",
@@ -874,7 +920,7 @@ export async function POST(request: Request) {
             question_order: null,
             asked_at: null,
             is_complete: true,
-          };
+          });
     }
 
     console.log(

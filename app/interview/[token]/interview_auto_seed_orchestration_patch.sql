@@ -103,6 +103,42 @@ begin
 end;
 $$;
 
+create or replace function public.clean_seed_anchor_text(p_value text)
+returns text
+language plpgsql
+immutable
+as $$
+declare
+  v_cleaned text := public.normalize_seed_text(p_value);
+begin
+  if v_cleaned is null then
+    return null;
+  end if;
+
+  v_cleaned := regexp_replace(v_cleaned, '[|_/]+', ' ', 'g');
+  v_cleaned := regexp_replace(v_cleaned, '[\(\)\[\]\{\}]+', ' ', 'g');
+  v_cleaned := regexp_replace(v_cleaned, '\m(he|she|him|his|her|hers)\M', ' ', 'gi');
+  v_cleaned := regexp_replace(
+    v_cleaned,
+    '\m(remote|hybrid|onsite|on-site|work from home|wfh|delhi|bangalore|bengaluru|blr|chennai|hyderabad|kolkata|mumbai|pune|noida|gurgaon|gurugram|dubai|singapore|holland|netherlands|india|uk|usa|us)\M',
+    ' ',
+    'gi'
+  );
+  v_cleaned := regexp_replace(
+    v_cleaned,
+    '\m(day|night|rotational|general|morning|evening|first|second|third|1st|2nd|3rd|ist)\M\s+\mshift\M',
+    ' ',
+    'gi'
+  );
+  v_cleaned := regexp_replace(v_cleaned, '\mshift\M\s*[a-z0-9:+-]*', ' ', 'gi');
+  v_cleaned := regexp_replace(v_cleaned, '\s+', ' ', 'g');
+  v_cleaned := regexp_replace(v_cleaned, '^[,;:.\-]+|[,;:.\-]+$', '', 'g');
+  v_cleaned := public.normalize_seed_text(v_cleaned);
+
+  return v_cleaned;
+end;
+$$;
+
 create or replace function public.dedupe_text_array(p_values text[])
 returns text[]
 language sql
@@ -460,7 +496,7 @@ language plpgsql
 immutable
 as $$
 declare
-  v_anchor text := public.normalize_seed_text(p_anchor);
+  v_anchor text := public.clean_seed_anchor_text(p_anchor);
 begin
   if p_source_type = 'resume' then
     return case mod(greatest(coalesce(p_variant, 0), 0), 3)

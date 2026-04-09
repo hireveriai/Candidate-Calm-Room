@@ -165,6 +165,7 @@ const ROLE_NOISE_TOKENS = new Set([
   "us",
   "wfh",
 ]);
+const GENDERED_TERMS = /\b(he|she|him|his|her|hers)\b/gi;
 const ROLE_ABBREVIATIONS: Array<[RegExp, string]> = [
   [/\bsr\.?\b/gi, "Senior"],
   [/\bjr\.?\b/gi, "Junior"],
@@ -187,6 +188,89 @@ function standardizeRoleCasing(value: string) {
       return lower.charAt(0).toUpperCase() + lower.slice(1);
     })
     .join(" ");
+}
+
+function cleanAnchorText(value: string | null | undefined) {
+  let cleaned = normalizeText(value);
+
+  if (!cleaned) {
+    return null;
+  }
+
+  cleaned = cleaned
+    .replace(/[|_/]+/g, " ")
+    .replace(/[()[\]{}]+/g, " ")
+    .replace(GENDERED_TERMS, " ")
+    .replace(
+      /\b(remote|hybrid|onsite|on-site|work from home|wfh|delhi|bangalore|bengaluru|blr|chennai|hyderabad|kolkata|mumbai|pune|noida|gurgaon|gurugram|dubai|singapore|holland|netherlands|india|uk|usa|us)\b/gi,
+      " "
+    )
+    .replace(
+      /\b(day|night|rotational|general|morning|evening|first|second|third|1st|2nd|3rd|ist)\s+shift\b/gi,
+      " "
+    )
+    .replace(/\bshift\s*[a-z0-9:+-]*\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .replace(/^[,;:.\-]+|[,;:.\-]+$/g, "")
+    .trim();
+
+  return cleaned || null;
+}
+
+function containsLocationNoise(value: string | null | undefined) {
+  const normalized = normalizeText(value);
+
+  if (!normalized) {
+    return false;
+  }
+
+  return /\b(delhi|bangalore|bengaluru|blr|chennai|hyderabad|kolkata|mumbai|pune|noida|gurgaon|gurugram|dubai|singapore|holland|netherlands|india|uk|usa|us|remote|hybrid|onsite|on-site|wfh)\b/i.test(
+    normalized
+  );
+}
+
+function containsGenderAssumption(value: string | null | undefined) {
+  return /\b(he|she|him|his|her|hers)\b/i.test(normalizeText(value));
+}
+
+function finalizeQuestionText(value: string | null | undefined) {
+  let cleaned = normalizeText(value);
+
+  if (!cleaned) {
+    return null;
+  }
+
+  cleaned = cleaned
+    .replace(/\b(he|she|him)\b/gi, "the candidate")
+    .replace(/\b(his|her|hers)\b/gi, "the candidate's")
+    .replace(/\s+/g, " ")
+    .replace(/\s+([?!.,;:])/g, "$1")
+    .trim();
+
+  if (!/[?.!]$/.test(cleaned)) {
+    cleaned = `${cleaned}?`;
+  }
+
+  return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+}
+
+function isReadableQuestion(value: string | null | undefined) {
+  const normalized = normalizeText(value);
+
+  if (!normalized) {
+    return false;
+  }
+
+  const words = normalized.split(/\s+/);
+
+  return (
+    words.length >= 6 &&
+    words.length <= 35 &&
+    /^[A-Z]/.test(normalized) &&
+    /[?.!]$/.test(normalized) &&
+    !/\b(\w+)\s+\1\b/i.test(normalized) &&
+    !/[|_]{2,}/.test(normalized)
+  );
 }
 
 function scoreRoleSegment(segment: string) {
@@ -298,8 +382,11 @@ function extractResponsibilityAnchors(value: string | null | undefined, limit = 
   return uniqueStrings(
     normalized
       .split(/[.;\n\r]+/)
-      .map((segment) => normalizeText(segment))
+      .map((segment) => cleanAnchorText(segment))
       .filter((segment) => {
+        if (!segment) {
+          return false;
+        }
         const wordCount = segment.split(/\s+/).length;
         return (
           wordCount >= 4 &&
@@ -324,7 +411,10 @@ function extractClaimAnchors(values: Array<string | null | undefined>, limit = 6
 
     const segments = normalized.split(/[.;,\n\r]+/);
     for (const segment of segments) {
-      const claim = normalizeText(segment);
+      const claim = cleanAnchorText(segment);
+      if (!claim) {
+        continue;
+      }
       const wordCount = claim.split(/\s+/).length;
       if (claim && wordCount >= 2 && wordCount <= 10 && !result.includes(claim)) {
         result.push(claim);
@@ -386,13 +476,19 @@ function pickQuestionAnchor(params: {
   index: number;
 }) {
   const overlapSkill =
-    params.overlapSkills[params.index % Math.max(params.overlapSkills.length, 1)] ?? null;
+    cleanAnchorText(
+      params.overlapSkills[params.index % Math.max(params.overlapSkills.length, 1)] ?? null
+    );
   const jobSkill =
-    params.jobSkills[params.index % Math.max(params.jobSkills.length, 1)] ?? null;
+    cleanAnchorText(params.jobSkills[params.index % Math.max(params.jobSkills.length, 1)] ?? null);
   const responsibility =
-    params.responsibilities[params.index % Math.max(params.responsibilities.length, 1)] ?? null;
+    cleanAnchorText(
+      params.responsibilities[params.index % Math.max(params.responsibilities.length, 1)] ?? null
+    );
   const resumeSkill =
-    params.resumeSkills[params.index % Math.max(params.resumeSkills.length, 1)] ?? null;
+    cleanAnchorText(
+      params.resumeSkills[params.index % Math.max(params.resumeSkills.length, 1)] ?? null
+    );
   const claimAnchors = extractClaimAnchors(params.resumeClaims);
   const resumeClaim =
     claimAnchors[params.index % Math.max(claimAnchors.length, 1)] ?? null;
@@ -419,14 +515,14 @@ function pickQuestionAnchor(params: {
 function deriveQuestionTargetFromDuration(durationMinutes: number | null | undefined) {
   const duration = normalizePositiveInteger(durationMinutes);
 
-  if (duration >= 60) return 17;
-  if (duration >= 45) return 13;
-  if (duration >= 30) return 9;
-  if (duration >= 20) return 7;
-  if (duration >= 15) return 5;
-  if (duration >= 10) return 4;
-  if (duration > 0) return 3;
-  return 9;
+  if (duration >= 60) return 11;
+  if (duration >= 45) return 8;
+  if (duration >= 30) return 6;
+  if (duration >= 20) return 4;
+  if (duration >= 15) return 3;
+  if (duration >= 10) return 2;
+  if (duration > 0) return 2;
+  return 6;
 }
 
 function resolveEffectiveQuestionCount(params: {
@@ -436,14 +532,24 @@ function resolveEffectiveQuestionCount(params: {
   const configuredCount = normalizePositiveInteger(params.configuredCount);
   const durationMinutes = normalizePositiveInteger(params.durationMinutes);
   const durationTarget = deriveQuestionTargetFromDuration(durationMinutes);
+  const durationFloor =
+    durationMinutes >= 60 ? 8 :
+    durationMinutes >= 45 ? 6 :
+    durationMinutes >= 30 ? 5 :
+    durationMinutes >= 20 ? 3 :
+    durationMinutes >= 15 ? 2 :
+    durationMinutes >= 10 ? 2 :
+    durationMinutes > 0 ? 1 : 1;
 
-  let effectiveCount = Math.max(configuredCount, 1);
-
-  if (durationMinutes >= 25 && effectiveCount < 5) {
-    effectiveCount = Math.max(effectiveCount, durationTarget);
+  if (durationMinutes === 0) {
+    return Math.max(configuredCount, 1);
   }
 
-  return effectiveCount;
+  if (configuredCount === 0) {
+    return durationTarget;
+  }
+
+  return Math.min(Math.max(configuredCount, durationFloor), durationTarget);
 }
 
 function buildDistribution(totalQuestions: number, hasResumeContext: boolean): Distribution {
@@ -703,18 +809,20 @@ function normalizeQuestions(
           ? Math.max(1, Math.min(5, Math.round(record.difficulty_level)))
           : 3;
 
-      if (!questionText || !sourceType) {
+      const cleanedQuestionText = finalizeQuestionText(questionText);
+
+      if (!cleanedQuestionText || !sourceType) {
         return null;
       }
 
       const normalizedQuestion = {
-        question_text: questionText,
+        question_text: cleanedQuestionText,
         source_type: sourceType,
         reference_context:
           record.reference_context && typeof record.reference_context === "object"
             ? (record.reference_context as Record<string, unknown>)
             : {},
-        mapped_skill: mappedSkill || undefined,
+        mapped_skill: cleanAnchorText(mappedSkill) || undefined,
         phase_hint: phaseHint,
         difficulty_level: difficultyLevel,
         allow_follow_up: record.allow_follow_up !== false,
@@ -784,10 +892,11 @@ function buildResumeQuestion(params: {
   index: number;
 }): GeneratedQuestion {
   const focus = normalizeText(params.skillOrClaim) || "your background";
+  const cleanedFocus = cleanAnchorText(focus) || "your background";
   const templates = [
-    `You highlighted ${focus}. What was the most demanding piece of work around it, and how did you deliver the result?`,
-    `Your resume points to ${focus}. What problem forced you to go deepest technically, and what did you change?`,
-    `When ${focus} mattered most in your work, what outcome were you responsible for and how did you get there?`,
+    `You highlighted ${cleanedFocus}. What was the most demanding piece of work around it, and how did you deliver the result?`,
+    `Your resume points to ${cleanedFocus}. What problem forced you to go deepest technically, and what did you change?`,
+    `When ${cleanedFocus} mattered most in your work, what outcome were you responsible for and how did you get there?`,
   ];
 
   return {
@@ -796,11 +905,11 @@ function buildResumeQuestion(params: {
     reference_context: buildReferenceContext({
       sourceType: "resume",
       roleTitle: params.roleTitle,
-      anchor: focus,
+      anchor: cleanedFocus,
       intent: detectIntent(templates[params.index % templates.length]),
-      claim: focus,
+      claim: cleanedFocus,
     }),
-    mapped_skill: focus,
+    mapped_skill: cleanedFocus,
     phase_hint: params.index === 0 ? "warmup" : "core",
     difficulty_level: 3,
     allow_follow_up: true,
@@ -814,8 +923,8 @@ function buildJobQuestion(params: {
   index: number;
 }): GeneratedQuestion {
   const focus =
-    normalizeText(params.skill) ||
-    normalizeText(params.responsibility) ||
+    cleanAnchorText(params.skill) ||
+    cleanAnchorText(params.responsibility) ||
     "the core responsibilities";
   const templates = [
     `How do you troubleshoot ${focus} when it starts failing in production?`,
@@ -846,10 +955,11 @@ function buildBehavioralQuestion(params: {
   index: number;
 }): GeneratedQuestion {
   const skill = normalizeText(params.skill) || "your work";
+  const cleanedSkill = cleanAnchorText(skill) || "your work";
   const templates = [
-    `When work around ${skill} started going off track, how did you regain control and align the team?`,
-    `Think of a time you had conflicting priorities around ${skill}. How did you decide what to protect first?`,
-    `When people pushed for speed on ${skill}, how did you defend quality, reliability, or risk controls?`,
+    `When work around ${cleanedSkill} started going off track, how did you regain control and align the team?`,
+    `Think of a time you had conflicting priorities around ${cleanedSkill}. How did you decide what to protect first?`,
+    `When people pushed for speed on ${cleanedSkill}, how did you defend quality, reliability, or risk controls?`,
   ];
 
   return {
@@ -858,10 +968,10 @@ function buildBehavioralQuestion(params: {
     reference_context: buildReferenceContext({
       sourceType: "behavioral",
       roleTitle: params.roleTitle,
-      anchor: skill,
+      anchor: cleanedSkill,
       intent: detectIntent(templates[params.index % templates.length]),
     }),
-    mapped_skill: skill,
+    mapped_skill: cleanedSkill,
     phase_hint: "probe",
     difficulty_level: 3,
     allow_follow_up: true,
@@ -951,6 +1061,14 @@ function distributeQuestions(
       continue;
     }
 
+    if (containsLocationNoise(question.question_text) || containsGenderAssumption(question.question_text)) {
+      continue;
+    }
+
+    if (!isReadableQuestion(question.question_text)) {
+      continue;
+    }
+
     if (!isContextualQuestion(question, context)) {
       continue;
     }
@@ -980,6 +1098,9 @@ function distributeQuestions(
       if (
         !isGenericQuestion(fallback.question_text) &&
         !hasWeakLeadIn(fallback.question_text) &&
+        !containsLocationNoise(fallback.question_text) &&
+        !containsGenderAssumption(fallback.question_text) &&
+        isReadableQuestion(fallback.question_text) &&
         isSkillDrivenQuestion(fallback, context) &&
         !isTooSimilar(fallback.question_text, fallback.source_type, accepted)
       ) {
@@ -1150,6 +1271,8 @@ Deno.serve(async (request) => {
             "- Every question must be anchored to candidate skills, job-required skills, or both.",
             "- mapped_skill must be a real skill from resume skills, job-required skills, or their overlap. Do not invent a skill label.",
             "- Do not use job title as the primary anchor for any question.",
+            "- Never include location words like Delhi, Bangalore, Remote, or shift information in the final question.",
+            "- Never use he/she/his/her. Use neutral language only.",
             "- Use a diverse mix of scenario-based, tool-based, problem-solving, and real-world execution questions.",
             "- Avoid repetitive lead-ins like 'describe a situation', 'share an example', and 'what trade-offs' unless there is no better phrasing.",
             "- Every resume question must reference a resume skill, resume claim, or claimed experience.",

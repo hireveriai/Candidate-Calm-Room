@@ -30,6 +30,8 @@ export type InterviewBlueprint = {
   distribution: Record<InterviewQuestionSource, number>;
 };
 
+export type InterviewQuestionKind = "core" | "follow_up" | "closing";
+
 function normalizeText(value: string | null | undefined) {
   return value?.replace(/\s+/g, " ").trim() ?? "";
 }
@@ -86,6 +88,7 @@ const ROLE_NOISE_TOKENS = new Set([
   "us",
   "wfh",
 ]);
+const GENDERED_TERMS = /\b(he|she|him|his|her|hers)\b/gi;
 const ROLE_ABBREVIATIONS: Array<[RegExp, string]> = [
   [/\bsr\.?\b/gi, "Senior"],
   [/\bjr\.?\b/gi, "Junior"],
@@ -114,6 +117,33 @@ function standardizeRoleCasing(value: string) {
       return lower.charAt(0).toUpperCase() + lower.slice(1);
     })
     .join(" ");
+}
+
+function cleanAnchorText(value: string | null | undefined) {
+  let cleaned = normalizeText(value);
+
+  if (!cleaned) {
+    return null;
+  }
+
+  cleaned = cleaned
+    .replace(/[|_/]+/g, " ")
+    .replace(/[()[\]{}]+/g, " ")
+    .replace(GENDERED_TERMS, " ")
+    .replace(
+      /\b(remote|hybrid|onsite|on-site|work from home|wfh|delhi|bangalore|bengaluru|blr|chennai|hyderabad|kolkata|mumbai|pune|noida|gurgaon|gurugram|dubai|singapore|holland|netherlands|india|uk|usa|us)\b/gi,
+      " "
+    )
+    .replace(
+      /\b(day|night|rotational|general|morning|evening|first|second|third|1st|2nd|3rd|ist)\s+shift\b/gi,
+      " "
+    )
+    .replace(/\bshift\s*[a-z0-9:+-]*\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .replace(/^[,;:.\-]+|[,;:.\-]+$/g, "")
+    .trim();
+
+  return cleaned || null;
 }
 
 function scoreRoleSegment(segment: string) {
@@ -204,8 +234,11 @@ export function extractResponsibilityAnchors(
   return [...new Set(
     normalized
       .split(/[.;\n\r]+/)
-      .map((segment) => normalizeText(segment))
-      .filter((segment) => {
+      .map((segment) => cleanAnchorText(segment))
+      .filter((segment): segment is string => {
+        if (!segment) {
+          return false;
+        }
         const wordCount = segment.split(/\s+/).length;
         return (
           wordCount >= 4 &&
@@ -241,7 +274,10 @@ export function extractClaimAnchors(
 
     const segments = normalized.split(/[.;,\n\r]+/);
     for (const segment of segments) {
-      const claim = normalizeText(segment);
+      const claim = cleanAnchorText(segment);
+      if (!claim) {
+        continue;
+      }
       const wordCount = claim.split(/\s+/).length;
       if (claim && wordCount >= 2 && wordCount <= 10 && !result.includes(claim)) {
         result.push(claim);
@@ -309,10 +345,10 @@ export function pickQuestionAnchor(params: {
   fallbackRoleTitle?: string | null;
 }) {
   const overlapSkills = (params.overlapSkills ?? []).map((value) => normalizeText(value)).filter(Boolean);
-  const preferredJobSkill = normalizeText(params.preferredJobSkill);
-  const resumeSkills = (params.resumeSkills ?? []).map((value) => normalizeText(value)).filter(Boolean);
+  const preferredJobSkill = cleanAnchorText(params.preferredJobSkill);
+  const resumeSkills = (params.resumeSkills ?? []).map((value) => cleanAnchorText(value)).filter(Boolean) as string[];
   const resumeClaims = extractClaimAnchors(params.resumeClaims ?? []);
-  const responsibilities = (params.responsibilities ?? []).map((value) => normalizeText(value)).filter(Boolean);
+  const responsibilities = (params.responsibilities ?? []).map((value) => cleanAnchorText(value)).filter(Boolean) as string[];
   const fallbackRoleTitle = cleanRoleTitle(params.fallbackRoleTitle);
 
   if (overlapSkills[0]) {
@@ -354,6 +390,10 @@ function stableTemplateIndex(value: string, modulo: number) {
   }
 
   return hash % modulo;
+}
+
+function sumUsedDistribution(usedDistribution: Record<InterviewQuestionSource, number>) {
+  return usedDistribution.resume + usedDistribution.job + usedDistribution.behavioral;
 }
 
 function roundDownCounts(
@@ -501,6 +541,58 @@ export function deriveInterviewPhase(params: {
   return "closing";
 }
 
+export function estimateQuestionTimeSeconds(params: {
+  questionKind: InterviewQuestionKind;
+  phase?: string | null;
+  difficultyLevel?: number | null;
+}) {
+  if (params.questionKind === "follow_up") {
+    return 60;
+  }
+
+  if (params.questionKind === "closing") {
+    return 90;
+  }
+
+  const phase = normalizeText(params.phase).toLowerCase();
+  const difficultyLevel = params.difficultyLevel ?? 3;
+
+  if (phase === "warmup") {
+    return 120;
+  }
+
+  if (phase === "probe" || difficultyLevel >= 4) {
+    return 240;
+  }
+
+  if (phase === "closing") {
+    return 90;
+  }
+
+  return 180;
+}
+
+export function countFollowUpsForCurrentCore(
+  askedQuestions: Array<{ questionKind: string | null }>
+) {
+  let followUpCount = 0;
+
+  for (let index = askedQuestions.length - 1; index >= 0; index -= 1) {
+    const questionKind = askedQuestions[index]?.questionKind ?? null;
+
+    if (questionKind === "follow_up") {
+      followUpCount += 1;
+      continue;
+    }
+
+    if (questionKind === "core" || questionKind === "closing") {
+      break;
+    }
+  }
+
+  return followUpCount;
+}
+
 export function buildAskedQuestionState(params: {
   askedQuestions: Array<{
     questionId: string | null;
@@ -627,7 +719,7 @@ export function selectNextCoreQuestion(params: {
     plannedQuestions: params.plannedQuestions,
   });
   const phase = deriveInterviewPhase({
-    askedTotal: params.askedQuestions.length,
+    askedTotal: sumUsedDistribution(state.usedDistribution),
     totalQuestions: params.blueprint.totalQuestions,
   });
   const deficit = getBlueprintDeficit(params.blueprint, state.usedDistribution);
@@ -717,24 +809,67 @@ export function buildFallbackCoreQuestion(params: {
 }
 
 export function shouldCompleteInterview(params: {
-  askedTotal: number;
+  askedCoreTotal: number;
   totalQuestions: number;
   elapsedSeconds: number;
   durationMinutes: number | null;
   requiredSkillIds: string[];
   coveredSkillIds: Set<string>;
+  askedQuestions: Array<{ questionKind: string | null }>;
 }) {
   const durationSeconds = normalizePositiveInteger(params.durationMinutes) * 60;
   const timeExceeded = durationSeconds > 0 && params.elapsedSeconds >= durationSeconds;
-  const enoughQuestions = params.askedTotal >= params.totalQuestions;
+  const timeRemainingSeconds =
+    durationSeconds > 0
+      ? Math.max(durationSeconds - params.elapsedSeconds, 0)
+      : Number.MAX_SAFE_INTEGER;
+  const enoughQuestions = params.askedCoreTotal >= params.totalQuestions;
   const coverageSatisfied =
     params.requiredSkillIds.length === 0 ||
     params.requiredSkillIds.every((skillId) => params.coveredSkillIds.has(skillId));
+  const followUpsForCurrentCore = countFollowUpsForCurrentCore(params.askedQuestions);
+  const maxFollowUpsPerCore = durationSeconds >= 30 * 60 ? 2 : 1;
+  const followUpSeconds = estimateQuestionTimeSeconds({
+    questionKind: "follow_up",
+  });
+  const nextCoreSeconds = estimateQuestionTimeSeconds({
+    questionKind: "core",
+    phase: coverageSatisfied ? "closing" : "core",
+    difficultyLevel: coverageSatisfied ? 2 : 3,
+  });
+  const deepCoreSeconds = estimateQuestionTimeSeconds({
+    questionKind: "core",
+    phase: "probe",
+    difficultyLevel: 4,
+  });
+  const wrapUpReserveSeconds = 60;
+  const lowTime = timeRemainingSeconds <= nextCoreSeconds + wrapUpReserveSeconds;
+  const shouldAvoidDeepQuestions =
+    timeRemainingSeconds <= deepCoreSeconds + wrapUpReserveSeconds;
+  const allowFollowUp =
+    !timeExceeded &&
+    timeRemainingSeconds > followUpSeconds + wrapUpReserveSeconds &&
+    followUpsForCurrentCore < maxFollowUpsPerCore;
+  const canFitCoreQuestion =
+    !timeExceeded && timeRemainingSeconds > nextCoreSeconds + wrapUpReserveSeconds;
+  const shouldWrapUp = coverageSatisfied && lowTime;
 
   return {
-    complete: timeExceeded || (enoughQuestions && coverageSatisfied),
+    complete:
+      timeExceeded ||
+      shouldWrapUp ||
+      (enoughQuestions && coverageSatisfied) ||
+      (!canFitCoreQuestion && coverageSatisfied),
     timeExceeded,
     coverageSatisfied,
     enoughQuestions,
+    timeRemainingSeconds,
+    lowTime,
+    allowFollowUp,
+    shouldAvoidDeepQuestions,
+    canFitCoreQuestion,
+    followUpsForCurrentCore,
+    maxFollowUpsPerCore,
+    shouldWrapUp,
   };
 }
