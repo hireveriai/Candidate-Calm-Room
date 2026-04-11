@@ -54,6 +54,21 @@ type TerminationResult = {
   termination_type: TerminationType;
 };
 
+type FocusMetrics = {
+  focusRatio: number;
+  lookAwayEvents: number;
+  maxLookAwayDuration: number;
+  totalAnswerTime: number;
+  assessment: string;
+};
+
+type BehaviorSignalPayload = {
+  type: string;
+  severity?: "low" | "medium" | "high";
+  meta?: unknown;
+  timestamp: number;
+};
+
 const CodeEditorModal = dynamic(
   () => import("@/app/components/calm/core/CodeEditorModal"),
   { ssr: false }
@@ -483,6 +498,29 @@ export default function Page() {
     };
   };
 
+  const collectBehaviorSignalsForCurrentQuestion = (): BehaviorSignalPayload[] => {
+    const startedAt = questionStartTimeRef.current ?? 0;
+    const relevantTypes = new Set([
+      "multi_face",
+      "no_face",
+      "attention_loss",
+      "long_gaze_away",
+      "tab_switch",
+    ]);
+
+    return events
+      .filter(
+        (event) =>
+          event.timestamp >= startedAt && relevantTypes.has(event.type)
+      )
+      .map((event) => ({
+        type: event.type,
+        severity: event.severity,
+        meta: event.meta,
+        timestamp: event.timestamp,
+      }));
+  };
+
   const enterFullscreen = async () => {
     setInterviewFinished(false);
     await document.documentElement.requestFullscreen();
@@ -725,22 +763,34 @@ export default function Page() {
 
   const submitAnswer = async () => {
     if (!sessionQuestionId || !attemptId) return;
+    const rawTranscript = transcriptRef.current.trim() || transcript.trim();
     const cleanedTranscript = cleanTranscript(
-      transcriptRef.current.trim() || transcript.trim()
+      rawTranscript
     );
     const safeTranscript = cleanedTranscript || "No response provided.";
     const answerDuration = questionStartTimeRef.current
       ? Math.max(1, Math.round((Date.now() - questionStartTimeRef.current) / 1000))
       : 0;
-    const focusMetrics = finalizeFocusMetrics();
+    const focusMetrics = finalizeFocusMetrics() satisfies FocusMetrics;
+    const behaviorSignals = collectBehaviorSignalsForCurrentQuestion();
 
-    await Promise.all([
-      postJson("/api/session/answer", {
+    const answer = await postJson<{
+      answer_id: string;
+      answer_text: string;
+    }>("/api/session/answer", {
         sessionQuestionId,
         transcript: safeTranscript,
         duration: answerDuration,
-      }),
-    ]);
+      });
+
+    await postJson("/api/session/evaluate-answer", {
+      answerId: answer.answer_id,
+      sessionQuestionId,
+      transcript: answer.answer_text || safeTranscript,
+      rawTranscript: rawTranscript || safeTranscript,
+      focusMetrics,
+      behaviorSignals,
+    });
 
     resetInactivityTimeout();
 

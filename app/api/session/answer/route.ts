@@ -27,6 +27,70 @@ type AnswerRecord = {
   answered_at: Date | null;
 };
 
+function normalizeTranscript(text: string) {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+async function cleanTranscriptForReadability(transcript: string) {
+  const normalized = normalizeTranscript(transcript);
+
+  if (!normalized || !process.env.OPENAI_API_KEY) {
+    return normalized;
+  }
+
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: "gpt-4o-mini",
+      temperature: 0.1,
+      messages: [
+        {
+          role: "system",
+          content: [
+            "Clean the following interview transcript for readability.",
+            "Rules:",
+            "- Remove filler words such as 'um', 'uh', and 'like' only when they are conversational fillers",
+            "- Fix grammar, punctuation, and sentence structure",
+            "- Keep the original meaning exactly the same",
+            "- Do not add new information",
+            "- Do not remove important details",
+            "- Do not change technical terms, tool names, product names, or domain-specific vocabulary",
+            "- Do not summarize",
+            "- Do not paraphrase beyond what is necessary for readability",
+            "- Preserve all concrete facts, examples, numbers, timelines, and responsibilities",
+            "Output requirements:",
+            "- Return only the cleaned transcript",
+            "- Keep it professional and natural",
+            "- If the transcript is already clean, return it with minimal changes",
+          ].join("\n"),
+        },
+        {
+          role: "user",
+          content: normalized,
+        },
+      ],
+    }),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Transcript cleanup failed: ${text}`);
+  }
+
+  const payload = await response.json();
+  const content = payload?.choices?.[0]?.message?.content;
+
+  if (typeof content !== "string" || !content.trim()) {
+    throw new Error("Transcript cleanup returned an empty response");
+  }
+
+  return normalizeTranscript(content);
+}
+
 function hasMissingFunctionError(error: unknown, functionName: string) {
   return (
     error instanceof Error &&
@@ -51,15 +115,34 @@ export async function POST(request: Request) {
       );
     }
 
+    let cleanedTranscript = normalizeTranscript(transcript);
+
+    try {
+      cleanedTranscript = await cleanTranscriptForReadability(transcript);
+    } catch (error) {
+      console.error("Transcript cleanup error:", error);
+    }
+
     const insertStartedAt = Date.now();
     let answer: AnswerRecord | undefined;
+    const answerPayload =
+      duration === undefined
+        ? ({
+            original_transcript: normalizeTranscript(transcript),
+            cleaned_transcript: cleanedTranscript,
+          } satisfies JsonValue)
+        : ({
+            duration,
+            original_transcript: normalizeTranscript(transcript),
+            cleaned_transcript: cleanedTranscript,
+          } satisfies JsonValue);
 
     try {
       const rows = await prisma.$queryRaw<AnswerRecord[]>`
         select *
         from public.submit_interview_answer(
           ${sessionQuestionId}::uuid,
-          ${transcript}::text,
+          ${cleanedTranscript}::text,
           ${duration ?? null}::integer
         )
       `;
@@ -87,9 +170,6 @@ export async function POST(request: Request) {
         );
       }
 
-      const answerPayload =
-        duration === undefined ? null : ({ duration } satisfies JsonValue);
-
       const existingAnswer = await prisma.interview_answers.findFirst({
         where: {
           session_question_id: sessionQuestionId,
@@ -102,7 +182,7 @@ export async function POST(request: Request) {
               answer_id: existingAnswer.answer_id,
             },
             data: {
-              answer_text: transcript,
+              answer_text: cleanedTranscript,
               answer_payload: answerPayload,
               answered_at: new Date(),
             },
@@ -112,7 +192,7 @@ export async function POST(request: Request) {
               attempt_id: sessionQuestion.attempt_id,
               question_id: sessionQuestion.question_id,
               session_question_id: sessionQuestion.session_question_id,
-              answer_text: transcript,
+              answer_text: cleanedTranscript,
               answer_payload: answerPayload,
             },
           })) as AnswerRecord);

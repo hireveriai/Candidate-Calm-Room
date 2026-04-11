@@ -34,6 +34,7 @@ type NextQuestionRow = {
   asked_at: Date | null;
   is_complete: boolean;
   question_type?: string | null;
+  follow_up_intent?: FollowUpIntent | null;
 };
 
 type AskedQuestionRow = {
@@ -95,6 +96,7 @@ type CreatedSessionQuestionRow = {
 
 type LatestEvaluationRow = {
   skill_score: string | number | null;
+  fraud_score?: string | number | null;
 };
 
 type RequiredSkillRow = {
@@ -109,6 +111,13 @@ type AnswerSummary = {
   experience: string | null;
   keyPoints: string[];
   cleanedText: string;
+};
+
+type FollowUpIntent = "clarification" | "probe" | "contradiction";
+
+type FollowUpGenerationResult = {
+  followUpQuestion: string;
+  intent: FollowUpIntent;
 };
 
 const SKILL_KEYWORDS = [
@@ -369,6 +378,188 @@ function buildFollowUpQuestion(lastAnswer: string | null | undefined) {
   return "Can you walk me through one recent project, your responsibilities, and the outcome?";
 }
 
+function normalizeIntent(value: unknown): FollowUpIntent {
+  if (value === "clarification" || value === "probe" || value === "contradiction") {
+    return value;
+  }
+
+  return "probe";
+}
+
+function deriveSkillType(params: {
+  sourceType: string | null | undefined;
+  skillName: string | null | undefined;
+}) {
+  if (params.sourceType === "behavioral") {
+    return "behavioral" as const;
+  }
+
+  const skillName = normalizeText(params.skillName).toLowerCase();
+
+  if (
+    /\b(sql|database|postgres|postgresql|mysql|oracle|python|java|typescript|javascript|react|node|api|etl|performance|backup|recovery|debug|coding|programming)\b/i.test(
+      skillName
+    )
+  ) {
+    return "technical" as const;
+  }
+
+  return "functional" as const;
+}
+
+function sanitizeFollowUpQuestion(
+  value: string | null | undefined,
+  fallbackQuestion: string,
+  lastQuestion: string | null | undefined
+) {
+  const candidate = normalizeText(value)
+    .replace(/^follow[-\s]?up[:\s-]*/i, "")
+    .replace(/^question[:\s-]*/i, "");
+
+  if (!candidate) {
+    return fallbackQuestion;
+  }
+
+  const normalizedCandidate = candidate.toLowerCase();
+  const normalizedLastQuestion = normalizeText(lastQuestion).toLowerCase();
+
+  if (!candidate.endsWith("?")) {
+    return `${candidate}?`;
+  }
+
+  if (
+    normalizedLastQuestion &&
+    normalizedCandidate === normalizedLastQuestion
+  ) {
+    return fallbackQuestion;
+  }
+
+  return candidate;
+}
+
+async function generateAiFollowUpQuestion(input: {
+  lastQuestion: string | null | undefined;
+  lastAnswer: string | null | undefined;
+  answerSummary: AnswerSummary;
+  jobRole: string | null | undefined;
+  skillBeingTested: string | null;
+  skillType: "technical" | "functional" | "behavioral";
+  skillScore: number;
+  fraudScore: number;
+}) {
+  const fallbackQuestion = buildFollowUpQuestion(input.lastAnswer);
+
+  if (!process.env.OPENAI_API_KEY) {
+    return {
+      followUpQuestion: fallbackQuestion,
+      intent: input.fraudScore >= 0.65 ? "contradiction" : "probe",
+    } satisfies FollowUpGenerationResult;
+  }
+
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: "gpt-4o-mini",
+      temperature: 0.45,
+      response_format: { type: "json_object" },
+      messages: [
+        {
+          role: "system",
+          content: [
+            "You are an expert interviewer conducting a real-time professional interview.",
+            "Your role is to generate one adaptive follow-up question based on the candidate's previous answer.",
+            "Generate exactly one high-quality follow-up question that probes deeper into the same topic.",
+            "Return only JSON with keys follow_up_question and intent.",
+            'intent must be one of: "clarification", "probe", "contradiction".',
+            "Adaptive behavior by skill type:",
+            "- technical: focus on tools, implementation details, performance trade-offs, debugging, or edge cases",
+            "- functional: focus on workflow, execution process, accuracy, controls, prioritization, or handling real scenarios",
+            "- behavioral: focus on ownership, judgment, decisions, collaboration, conflict handling, or measurable outcomes",
+            "Adapt based on answer quality:",
+            "- if the answer is vague, ask for one concrete example, step, tool, or metric",
+            "- if the answer is strong, ask deeper about trade-offs, complexity, edge cases, or impact",
+            "- if contradiction risk is detected, ask a verification question that checks ownership, specifics, sequence, or measurable outcome",
+            "Rules:",
+            "- do not repeat the previous question",
+            "- do not quote or restate the candidate answer",
+            "- do not use generic phrases like 'tell me more', 'describe a situation', or 'can you elaborate'",
+            "- ask only one question",
+            "- keep it to one sentence",
+            "- sound natural, professional, and human",
+            "The question must stay on the same topic and focus on exactly one of:",
+            "- real example",
+            "- tools or methods",
+            "- metrics or outcomes",
+            "- decision-making",
+            "- contradiction verification",
+          ].join("\n"),
+        },
+        {
+          role: "user",
+          content: JSON.stringify(
+            {
+              job_role: input.jobRole ?? "",
+              skill: input.skillBeingTested ?? "",
+              skill_type: input.skillType,
+              last_question: input.lastQuestion ?? "",
+              answer: input.lastAnswer ?? "",
+              extracted_role: input.answerSummary.role,
+              extracted_skills: input.answerSummary.skills,
+              extracted_tools: input.answerSummary.tools,
+              extracted_experience: input.answerSummary.experience,
+              extracted_key_points: input.answerSummary.keyPoints,
+              score: input.skillScore,
+              signals: [
+                input.skillScore <= 0.45 ? "vague" : null,
+                input.skillScore >= 0.75 ? "strong" : null,
+                input.fraudScore >= 0.65 ? "inconsistent" : null,
+                input.fraudScore >= 0.5 ? "contradiction_risk" : null,
+              ].filter(Boolean),
+            },
+            null,
+            2
+          ),
+        },
+      ],
+    }),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Follow-up generation failed: ${text}`);
+  }
+
+  const payload = await response.json();
+  const content = payload?.choices?.[0]?.message?.content;
+
+  if (typeof content !== "string" || !content.trim()) {
+    throw new Error("Follow-up generation returned an empty response");
+  }
+
+  let parsed: Record<string, unknown>;
+
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    throw new Error("Follow-up generation returned invalid JSON");
+  }
+
+  return {
+    followUpQuestion: sanitizeFollowUpQuestion(
+      typeof parsed.follow_up_question === "string"
+        ? parsed.follow_up_question
+        : null,
+      fallbackQuestion,
+      input.lastQuestion
+    ),
+    intent: normalizeIntent(parsed.intent),
+  } satisfies FollowUpGenerationResult;
+}
+
 export async function POST(request: Request) {
   const startedAt = Date.now();
 
@@ -617,6 +808,7 @@ export async function POST(request: Request) {
         question_order: null,
         asked_at: null,
         is_complete: true,
+        follow_up_intent: null,
       };
     } else {
       const latestAnswerRecord = latestQuestion
@@ -636,7 +828,9 @@ export async function POST(request: Request) {
         try {
           latestEvaluation = (
             await prisma.$queryRaw<LatestEvaluationRow[]>`
-              select iae.skill_score
+              select
+                iae.skill_score,
+                iae.fraud_score
               from public.interview_answers ia
               join public.interview_answer_evaluations iae
                 on iae.answer_id = ia.answer_id
@@ -653,7 +847,9 @@ export async function POST(request: Request) {
 
           latestEvaluation = (
             await prisma.$queryRaw<LatestEvaluationRow[]>`
-              select iae.score as skill_score
+              select
+                iae.score as skill_score,
+                ${null}::numeric as fraud_score
               from public.interview_answers ia
               join public.interview_answer_evaluations iae
                 on iae.answer_id = ia.answer_id
@@ -668,10 +864,12 @@ export async function POST(request: Request) {
 
       const effectiveLastAnswer =
         lastAnswer?.trim() || latestAnswerRecord?.answer_text || "";
+      const answerSummary = summarizeAnswer(effectiveLastAnswer);
       const wordCount = effectiveLastAnswer
         ? effectiveLastAnswer.trim().split(/\s+/).length
         : 0;
       const skillScore = asNumber(latestEvaluation?.skill_score);
+      const fraudScore = asNumber(latestEvaluation?.fraud_score);
       const targetDifficulty =
         completion.shouldAvoidDeepQuestions
           ? 3
@@ -726,6 +924,22 @@ export async function POST(request: Request) {
 
       let createdQuestion: CreatedSessionQuestionRow | null = null;
       let createdQuestionType: string | null = null;
+      let generatedFollowUp: FollowUpGenerationResult | null = null;
+      const latestPlannedQuestion =
+        plannedQuestions.find(
+          (question: NextCoreQuestionRow) =>
+            question.question_id === latestQuestion?.question_id
+        ) ?? null;
+      const followUpSkillBeingTested =
+        nextCore?.skillName ??
+        latestPlannedQuestion?.skill_name ??
+        answerSummary.skills[0] ??
+        answerSummary.tools[0] ??
+        null;
+      const followUpSkillType = deriveSkillType({
+        sourceType: latestPlannedQuestion?.source_type ?? nextCore?.sourceType,
+        skillName: followUpSkillBeingTested,
+      });
 
       if (!completion.canFitCoreQuestion && !completion.allowFollowUp) {
         sessionQuestion = {
@@ -737,8 +951,24 @@ export async function POST(request: Request) {
           question_order: null,
           asked_at: null,
           is_complete: true,
+          follow_up_intent: null,
         };
       } else if (shouldAskFollowUp) {
+        try {
+          generatedFollowUp = await generateAiFollowUpQuestion({
+            lastQuestion: latestQuestion?.content,
+            lastAnswer: effectiveLastAnswer,
+            answerSummary,
+            jobRole: attempt.job_title,
+            skillBeingTested: followUpSkillBeingTested,
+            skillType: followUpSkillType,
+            skillScore,
+            fraudScore,
+          });
+        } catch (error) {
+          console.error("AI follow-up generation failed:", error);
+        }
+
         const createdQuestions = await prisma.$queryRaw<CreatedSessionQuestionRow[]>`
             insert into public.session_questions (
               attempt_id,
@@ -751,7 +981,10 @@ export async function POST(request: Request) {
             values (
               ${attemptId}::uuid,
               ${null}::uuid,
-              ${buildFollowUpQuestion(effectiveLastAnswer)}::text,
+              ${
+                generatedFollowUp?.followUpQuestion ??
+                buildFollowUpQuestion(effectiveLastAnswer)
+              }::text,
               ${"ai"}::text,
               ${"follow_up"}::text,
               ${askedTotal + 1}::integer
@@ -872,8 +1105,24 @@ export async function POST(request: Request) {
             question_order: null,
             asked_at: null,
             is_complete: true,
+            follow_up_intent: null,
           };
         } else {
+        try {
+          generatedFollowUp = await generateAiFollowUpQuestion({
+            lastQuestion: latestQuestion?.content,
+            lastAnswer: effectiveLastAnswer,
+            answerSummary,
+            jobRole: attempt.job_title,
+            skillBeingTested: followUpSkillBeingTested,
+            skillType: followUpSkillType,
+            skillScore,
+            fraudScore,
+          });
+        } catch (error) {
+          console.error("AI follow-up fallback generation failed:", error);
+        }
+
         const createdQuestions = await prisma.$queryRaw<CreatedSessionQuestionRow[]>`
             insert into public.session_questions (
               attempt_id,
@@ -886,7 +1135,10 @@ export async function POST(request: Request) {
             values (
               ${attemptId}::uuid,
               ${null}::uuid,
-              ${buildFollowUpQuestion(effectiveLastAnswer)}::text,
+              ${
+                generatedFollowUp?.followUpQuestion ??
+                buildFollowUpQuestion(effectiveLastAnswer)
+              }::text,
               ${"ai"}::text,
               ${"follow_up"}::text,
               ${askedTotal + 1}::integer
@@ -911,6 +1163,10 @@ export async function POST(request: Request) {
             question_order: askedTotal + 1,
             is_complete: false,
             question_type: createdQuestionType,
+            follow_up_intent:
+              createdQuestion.question_kind === "follow_up"
+                ? generatedFollowUp?.intent ?? "probe"
+                : null,
           }
         : {
             session_question_id: null,
@@ -921,6 +1177,7 @@ export async function POST(request: Request) {
             question_order: null,
             asked_at: null,
             is_complete: true,
+            follow_up_intent: null,
           });
     }
 
@@ -964,6 +1221,7 @@ export async function POST(request: Request) {
       question_kind: sessionQuestion.question_kind,
       question_type:
         sessionQuestion.question_type ?? questionTypes[0]?.question_type ?? null,
+      follow_up_intent: sessionQuestion.follow_up_intent ?? null,
     });
   } catch (error) {
     const message =
