@@ -22,11 +22,18 @@ export default function TranscriptStream({ text }: Props) {
   }, [text]);
 
   return (
-    <div className="mt-3 h-[40px] flex items-center justify-center">
+    <div className="mt-5 min-h-[56px] px-4 flex items-start justify-center sm:min-h-[64px]">
       <div
-        className={`text-sm text-gray-300 text-center max-w-md px-4 tracking-wide transition-opacity duration-700 ${
+        className={`text-sm leading-5 text-gray-300 text-center max-w-[18rem] px-2 tracking-wide transition-opacity duration-700 sm:max-w-md sm:text-[15px] sm:leading-6 ${
           isVisible ? "opacity-100" : "opacity-0"
         }`}
+        style={{
+          display: "-webkit-box",
+          WebkitLineClamp: 2,
+          WebkitBoxOrient: "vertical",
+          overflow: "hidden",
+          textWrap: "balance",
+        }}
       >
         {displayText}
       </div>

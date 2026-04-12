@@ -379,13 +379,13 @@ export async function finalizeInterviewAttempt(params: {
         reliability_score = ${reliabilityScore},
         early_exit = ${params.earlyExit},
         termination_metadata = jsonb_build_object(
-          'asked_questions', ${askedQuestions},
-          'avg_skill_score', ${round(avgSkillScore, 4)},
-          'avg_cognitive_score', ${round(avgCognitiveScore, 4)},
-          'avg_fraud_score', ${round(avgFraudScore, 4)},
-          'completion_factor', ${completionFactor},
-          'base_score', ${baseScore},
-          'final_score', ${finalScore},
+          'asked_questions', ${askedQuestions}::integer,
+          'avg_skill_score', ${round(avgSkillScore, 4)}::numeric,
+          'avg_cognitive_score', ${round(avgCognitiveScore, 4)}::numeric,
+          'avg_fraud_score', ${round(avgFraudScore, 4)}::numeric,
+          'completion_factor', ${completionFactor}::numeric,
+          'base_score', ${baseScore}::numeric,
+          'final_score', ${finalScore}::numeric,
           'risk_flags', ${JSON.stringify(riskFlags)}::jsonb
         )
     where attempt_id = ${params.attemptId}::uuid
