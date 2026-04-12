@@ -408,7 +408,7 @@ export async function finalizeInterviewAttempt(params: {
       ${questionsAnswered}::integer,
       ${round(baseScore / 100, 4)},
       ${finalScore},
-      ${params.earlyExit ? "SYSTEM_TERMINATION" : "SYSTEM_COMPLETION"}::text,
+      ${"AI"}::text,
       now(),
       ${attempt.interview_id}::uuid
     )
