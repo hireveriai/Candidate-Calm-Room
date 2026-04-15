@@ -839,7 +839,6 @@ export default function Page() {
       question_type?: string | null;
     }>("/api/session/next-question", {
       attemptId,
-      lastQuestion: currentQuestion,
       lastAnswer: safeTranscript,
     });
 

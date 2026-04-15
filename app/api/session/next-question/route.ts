@@ -20,7 +20,6 @@ export const runtime = "nodejs";
 
 type RequestBody = {
   attemptId?: string;
-  lastQuestion?: string;
   lastAnswer?: string;
 };
 
