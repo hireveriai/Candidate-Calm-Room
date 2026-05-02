@@ -30,6 +30,8 @@ type ScoreAggregateRow = {
   asked_questions: number;
   avg_skill_score: string | number | null;
   avg_cognitive_score: string | number | null;
+  avg_clarity_score: string | number | null;
+  avg_depth_score: string | number | null;
   avg_fraud_score: string | number | null;
 };
 
@@ -44,21 +46,28 @@ type BestAttemptRow = {
 };
 
 export type InterviewCompletionResult = {
+  score: number;
+  risk_level: "LOW" | "MEDIUM" | "HIGH";
+  strengths: string[];
+  weaknesses: string[];
+  behavioral_flags: string[];
+  recommendation:
+    | "STRONG_HIRE"
+    | "HIRE"
+    | "HOLD"
+    | "WEAK_CANDIDATE"
+    | "NO_HIRE"
+    | "REVIEW_REQUIRED"
+    | "RISK";
+  reason: string;
   completed: true;
   early_exit: boolean;
   termination_type: TerminationType;
   time_elapsed: number;
   questions_answered: number;
   current_phase: string;
-  avg_skill_score: number;
-  avg_cognitive_score: number;
-  avg_fraud_score: number;
   completion_percentage: number;
-  completion_factor: number;
-  base_score: number;
-  final_score: number;
   reliability_score: number;
-  risk_flags: string[];
 };
 
 function asNumber(value: string | number | null | undefined): number {
@@ -81,6 +90,198 @@ function round(value: number, digits = 2) {
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
+}
+
+function normalizeScore(score: number) {
+  const normalized = score <= 10 ? score * 10 : score;
+  return clamp(round(normalized), 0, 100);
+}
+
+function getRiskLevel(riskScore: number): "LOW" | "MEDIUM" | "HIGH" {
+  if (riskScore >= 15) return "HIGH";
+  if (riskScore >= 8) return "MEDIUM";
+  return "LOW";
+}
+
+function mapEvents(events: string[]) {
+  const labelByEvent: Record<string, string> = {
+    manual_exit: "Early exit",
+    tab_switch: "Tab switching",
+    silence: "Long silence",
+    multi_voice: "Multiple voices",
+  };
+
+  const seen = new Set<string>();
+  const flags: string[] = [];
+
+  for (const event of events) {
+    const normalized = event.trim().toLowerCase();
+    const label = labelByEvent[normalized];
+    if (!label || seen.has(label)) {
+      continue;
+    }
+
+    seen.add(label);
+    flags.push(label);
+  }
+
+  return flags;
+}
+
+function ensureStrengths(strengths: string[]) {
+  const cleaned = strengths
+    .map((item) => item.trim())
+    .filter((item) => item && item !== "-");
+
+  if (!cleaned.length) {
+    return [
+      "Basic communication clarity",
+      "Attempted structured response",
+    ];
+  }
+
+  if (cleaned.length === 1) {
+    if (cleaned[0] !== "Basic communication clarity") {
+      cleaned.push("Basic communication clarity");
+    } else {
+      cleaned.push("Attempted structured response");
+    }
+  }
+
+  return cleaned.slice(0, 4);
+}
+
+function cleanWeaknesses(weaknesses: string[], behavioralFlags: string[]) {
+  const eventTokens = new Set(
+    [
+      "manual_exit",
+      "tab_switch",
+      "silence",
+      "multi_voice",
+      ...behavioralFlags.map((flag) => flag.toLowerCase()),
+    ]
+  );
+
+  return weaknesses
+    .map((item) => item.trim())
+    .filter(
+      (item, index, all) =>
+        item &&
+        !eventTokens.has(item.toLowerCase()) &&
+        all.findIndex((candidate) => candidate.toLowerCase() === item.toLowerCase()) ===
+          index
+    );
+}
+
+function getRecommendation(
+  score: number,
+  riskLevel: "LOW" | "MEDIUM" | "HIGH"
+):
+  | "STRONG_HIRE"
+  | "HIRE"
+  | "HOLD"
+  | "WEAK_CANDIDATE"
+  | "NO_HIRE"
+  | "REVIEW_REQUIRED"
+  | "RISK" {
+  if (riskLevel === "HIGH") return "RISK";
+
+  if (score >= 75) {
+    if (riskLevel === "LOW") return "STRONG_HIRE";
+    if (riskLevel === "MEDIUM") return "HIRE";
+  }
+
+  if (score >= 60) {
+    if (riskLevel === "LOW") return "HIRE";
+    if (riskLevel === "MEDIUM") return "HOLD";
+  }
+
+  if (score >= 40) {
+    return "HOLD";
+  }
+
+  if (score < 40) {
+    if (riskLevel === "LOW") return "WEAK_CANDIDATE";
+    return "NO_HIRE";
+  }
+
+  return "REVIEW_REQUIRED";
+}
+
+function mapRecommendationToEvaluationDecision(
+  recommendation:
+    | "STRONG_HIRE"
+    | "HIRE"
+    | "HOLD"
+    | "WEAK_CANDIDATE"
+    | "NO_HIRE"
+    | "REVIEW_REQUIRED"
+    | "RISK"
+): "HIRE" | "REVIEW" | "REJECT" {
+  switch (recommendation) {
+    case "STRONG_HIRE":
+    case "HIRE":
+      return "HIRE";
+    case "NO_HIRE":
+      return "REJECT";
+    case "HOLD":
+    case "WEAK_CANDIDATE":
+    case "REVIEW_REQUIRED":
+    case "RISK":
+    default:
+      return "REVIEW";
+  }
+}
+
+function generateReason(
+  score: number,
+  riskLevel: "LOW" | "MEDIUM" | "HIGH",
+  weaknesses: string[],
+  flags: string[]
+) {
+  void weaknesses;
+  void flags;
+
+  if (riskLevel === "HIGH") {
+    return "High risk signals detected including behavioral inconsistencies";
+  }
+
+  if (score >= 75) {
+    return "Strong capability with consistent behavioral signals";
+  }
+
+  if (score >= 60) {
+    return "Good performance with minor gaps in depth or clarity";
+  }
+
+  if (score >= 40) {
+    return "Moderate performance with noticeable gaps in capability";
+  }
+
+  return "Insufficient capability demonstrated despite stable behavior";
+}
+
+function validateEvaluation(result: {
+  score: number;
+  strengths: string[];
+  recommendation: string;
+  reason: string;
+}) {
+  if (result.score < 0 || result.score > 100) {
+    throw new Error("Final score must be within 0-100");
+  }
+
+  if (!result.strengths.length) {
+    throw new Error("Final strengths cannot be empty");
+  }
+
+  if (!result.recommendation) {
+    throw new Error("Final recommendation is required");
+  }
+
+  if (!result.reason) {
+    throw new Error("Final reason is required");
+  }
 }
 
 function hasMissingDatabaseColumnError(
@@ -206,6 +407,8 @@ async function loadScoreAggregates(attemptId: string) {
         )::int as asked_questions,
         coalesce(avg(iae.skill_score), 0) as avg_skill_score,
         coalesce(avg((coalesce(iae.clarity_score, 0) + coalesce(iae.depth_score, 0) + coalesce(iae.confidence_score, 0)) / 3.0), 0) as avg_cognitive_score,
+        coalesce(avg(iae.clarity_score), 0) as avg_clarity_score,
+        coalesce(avg(iae.depth_score), 0) as avg_depth_score,
         coalesce(avg(iae.fraud_score), 0) as avg_fraud_score
       from public.interview_answers ia
       left join public.interview_answer_evaluations iae
@@ -240,6 +443,8 @@ async function loadScoreAggregates(attemptId: string) {
         )::int as asked_questions,
         coalesce(avg(iae.score), 0) as avg_skill_score,
         coalesce(avg(iae.score), 0) as avg_cognitive_score,
+        coalesce(avg(iae.score), 0) as avg_clarity_score,
+        coalesce(avg(iae.score), 0) as avg_depth_score,
         0::numeric as avg_fraud_score
       from public.interview_answers ia
       left join public.interview_answer_evaluations iae
@@ -248,6 +453,19 @@ async function loadScoreAggregates(attemptId: string) {
       where ia.attempt_id = ${attemptId}::uuid
     `;
   }
+}
+
+async function loadSignalTypes(attemptId: string) {
+  const rows = await prisma.$queryRaw<{ type: string }[]>`
+    select type
+    from public.interview_signals
+    where attempt_id = ${attemptId}::uuid
+    order by created_at asc
+  `;
+
+  return rows
+    .map((row: { type: string }) => row.type?.trim().toLowerCase())
+    .filter((type: string | undefined): type is string => Boolean(type));
 }
 
 export async function finalizeInterviewAttempt(params: {
@@ -314,6 +532,8 @@ export async function finalizeInterviewAttempt(params: {
     asked_questions: 0,
     avg_skill_score: 0,
     avg_cognitive_score: 0,
+    avg_clarity_score: 0,
+    avg_depth_score: 0,
     avg_fraud_score: 0,
   };
   const latestQuestion = latestQuestions[0];
@@ -329,6 +549,8 @@ export async function finalizeInterviewAttempt(params: {
   const completionFactor = getCompletionFactor(completionPercentage);
   const avgSkillScore = clamp(asNumber(aggregate.avg_skill_score), 0, 1);
   const avgCognitiveScore = clamp(asNumber(aggregate.avg_cognitive_score), 0, 1);
+  const avgClarityScore = clamp(asNumber(aggregate.avg_clarity_score), 0, 1);
+  const avgDepthScore = clamp(asNumber(aggregate.avg_depth_score), 0, 1);
   const avgFraudScore = clamp(asNumber(aggregate.avg_fraud_score), 0, 1);
   const baseScore = round(
     clamp(
@@ -337,7 +559,7 @@ export async function finalizeInterviewAttempt(params: {
       100
     )
   );
-  const finalScore = round(baseScore * completionFactor);
+  const finalScore = normalizeScore(baseScore * completionFactor);
   const reliabilityScore = round(completionFactor * 100);
   const elapsedSeconds = Math.max(
     0,
@@ -355,12 +577,58 @@ export async function finalizeInterviewAttempt(params: {
     avgFraudScore,
     earlyExit: params.earlyExit,
   });
-  const weaknessText = params.earlyExit
-    ? `early exit (${params.terminationType ?? "manual_exit"})`
-    : "completed interview";
-  const evaluationSummary = params.earlyExit
-    ? `Interview ended early via ${params.terminationType ?? "manual_exit"}. Score generated from partial responses.`
-    : "Interview completed successfully. Score generated from completed responses.";
+  const rawEvents = [
+    ...(params.terminationType === "manual_exit" ? ["manual_exit"] : []),
+    ...(await loadSignalTypes(params.attemptId)),
+  ];
+  const behavioralFlags = mapEvents(rawEvents);
+  const riskScore = clamp(
+    Math.round(
+      avgFraudScore * 20 +
+        (behavioralFlags.includes("Early exit") ? 4 : 0) +
+        (behavioralFlags.includes("Tab switching") ? 5 : 0) +
+        (behavioralFlags.includes("Long silence") ? 3 : 0) +
+        (behavioralFlags.includes("Multiple voices") ? 6 : 0)
+    ),
+    0,
+    20
+  );
+  const riskLevel = getRiskLevel(riskScore);
+
+  const strengths = ensureStrengths(
+    [
+      avgSkillScore >= 0.7 ? "Demonstrated relevant capability" : "",
+      avgClarityScore >= 0.65 ? "Basic communication clarity" : "",
+      avgDepthScore >= 0.65 ? "Attempted structured response" : "",
+      avgCognitiveScore >= 0.7 ? "Consistent response organization" : "",
+    ].filter(Boolean)
+  );
+
+  const weaknesses = cleanWeaknesses(
+    [
+      avgDepthScore < 0.55 ? "lack of depth" : "",
+      avgClarityScore < 0.55 ? "unclear answers" : "",
+      avgSkillScore < 0.55 ? "weak problem solving" : "",
+    ].filter(Boolean),
+    behavioralFlags
+  );
+
+  const recommendation = getRecommendation(finalScore, riskLevel);
+  const evaluationDecision =
+    mapRecommendationToEvaluationDecision(recommendation);
+  const reason = generateReason(
+    finalScore,
+    riskLevel,
+    weaknesses,
+    behavioralFlags
+  );
+
+  validateEvaluation({
+    score: finalScore,
+    strengths,
+    recommendation,
+    reason,
+  });
 
   await prisma.$executeRaw`
     update public.interview_attempts
@@ -386,7 +654,11 @@ export async function finalizeInterviewAttempt(params: {
           'completion_factor', ${completionFactor}::numeric,
           'base_score', ${baseScore}::numeric,
           'final_score', ${finalScore}::numeric,
-          'risk_flags', ${JSON.stringify(riskFlags)}::jsonb
+          'risk_flags', ${JSON.stringify(riskFlags)}::jsonb,
+          'risk_score', ${riskScore}::integer,
+          'risk_level', ${riskLevel}::text,
+          'behavioral_flags', ${JSON.stringify(behavioralFlags)}::jsonb,
+          'reason', ${reason}::text
         )
     where attempt_id = ${params.attemptId}::uuid
   `;
@@ -436,22 +708,10 @@ export async function finalizeInterviewAttempt(params: {
     values (
       ${params.attemptId}::uuid,
       ${Math.round(finalScore)}::integer,
-      ${
-        riskFlags.includes("EXIT_DURING_PROBE_PHASE") || avgFraudScore >= 0.7
-          ? "HIGH"
-          : avgFraudScore >= 0.5
-            ? "MEDIUM"
-            : "LOW"
-      }::text,
-      ${questionsAnswered > 0 && avgSkillScore >= 0.65 ? "partial demonstrated skill" : null}::text,
-      ${weaknessText}::text,
-      ${
-        finalScore >= 75 && completionPercentage >= 0.8
-          ? "STRONG_HIRE"
-          : finalScore >= 50
-            ? "REVIEW_REQUIRED"
-            : "NO_HIRE"
-      }::text,
+      ${riskLevel}::text,
+      ${strengths.join(", ")}::text,
+      ${weaknesses.join(", ")}::text,
+      ${recommendation}::text,
       now()
     )
     on conflict (attempt_id)
@@ -476,8 +736,8 @@ export async function finalizeInterviewAttempt(params: {
     values (
       ${params.attemptId}::uuid,
       ${finalScore},
-      ${finalScore >= 50 ? "REVIEW_REQUIRED" : "NO_HIRE"}::text,
-      ${evaluationSummary}::text,
+      ${evaluationDecision}::text,
+      ${reason}::text,
       now(),
       true
     )
@@ -528,20 +788,20 @@ export async function finalizeInterviewAttempt(params: {
   }
 
   return {
+    score: finalScore,
+    risk_level: riskLevel,
+    strengths,
+    weaknesses,
+    behavioral_flags: behavioralFlags,
+    recommendation,
+    reason,
     completed: true,
     early_exit: params.earlyExit,
     termination_type: params.terminationType ?? null,
     time_elapsed: elapsedSeconds,
     questions_answered: questionsAnswered,
     current_phase: currentPhase,
-    avg_skill_score: round(avgSkillScore * 100),
-    avg_cognitive_score: round(avgCognitiveScore * 100),
-    avg_fraud_score: round(avgFraudScore * 100),
     completion_percentage: round(completionPercentage * 100),
-    completion_factor: completionFactor,
-    base_score: baseScore,
-    final_score: finalScore,
     reliability_score: reliabilityScore,
-    risk_flags: riskFlags,
   } satisfies InterviewCompletionResult;
 }

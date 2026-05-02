@@ -45,11 +45,29 @@ type TerminationPayload = {
   currentPhase?: string;
 };
 
+type CompletionPayload = {
+  attemptId: string;
+  currentPhase?: string;
+};
+
 type TerminationResult = {
+  score: number;
+  risk_level: "LOW" | "MEDIUM" | "HIGH";
+  strengths: string[];
+  weaknesses: string[];
+  behavioral_flags: string[];
+  recommendation:
+    | "STRONG_HIRE"
+    | "HIRE"
+    | "HOLD"
+    | "WEAK_CANDIDATE"
+    | "NO_HIRE"
+    | "REVIEW_REQUIRED"
+    | "RISK";
+  reason: string;
   completed: true;
   early_exit: true;
   completion_percentage: number;
-  final_score: number;
   reliability_score: number;
   termination_type: TerminationType;
 };
@@ -83,6 +101,7 @@ const INACTIVITY_TIMEOUT_MS = 5 * 60 * 1000;
 const DISCONNECT_GRACE_MS = 15 * 1000;
 const STRICT_TAB_TERMINATION = false;
 const PENDING_TERMINATION_STORAGE_KEY = "hireveri.pendingTermination";
+const PENDING_COMPLETION_STORAGE_KEY = "hireveri.pendingCompletion";
 
 function isCodingQuestionType(questionType: string | null | undefined) {
   return /code|coding|programming/i.test(questionType ?? "");
@@ -146,6 +165,7 @@ function getCurrentPhaseFromState(
 export default function Page() {
   const params = useParams<{ token: string }>();
   const inviteToken = typeof params?.token === "string" ? params.token : "";
+  const [candidateName, setCandidateName] = useState("");
 
   const [started, setStarted] = useState(false);
   const [interviewFinished, setInterviewFinished] = useState(false);
@@ -205,6 +225,16 @@ export default function Page() {
   const [, setTabViolations] = useState(0);
   const [showCoding, setShowCoding] = useState(false);
 
+  useEffect(() => {
+    if (typeof document === "undefined") {
+      return;
+    }
+
+    document.title = candidateName
+      ? `Interview Room — ${candidateName}`
+      : "Interview Room";
+  }, [candidateName]);
+
   const persistPendingTermination = (payload: TerminationPayload) => {
     if (typeof window === "undefined") {
       return;
@@ -222,6 +252,25 @@ export default function Page() {
     }
 
     window.localStorage.removeItem(PENDING_TERMINATION_STORAGE_KEY);
+  };
+
+  const persistPendingCompletion = (payload: CompletionPayload) => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.localStorage.setItem(
+      PENDING_COMPLETION_STORAGE_KEY,
+      JSON.stringify(payload)
+    );
+  };
+
+  const clearPendingCompletion = () => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.localStorage.removeItem(PENDING_COMPLETION_STORAGE_KEY);
   };
 
   const postJson = async <T,>(path: string, body: unknown): Promise<T> => {
@@ -326,6 +375,25 @@ export default function Page() {
       const payload = JSON.parse(raw) as TerminationPayload;
       await postTerminationPayload(payload);
       clearPendingTermination();
+    } catch {
+      // Keep the payload for the next retry opportunity.
+    }
+  };
+
+  const flushPendingCompletion = async () => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const raw = window.localStorage.getItem(PENDING_COMPLETION_STORAGE_KEY);
+    if (!raw) {
+      return;
+    }
+
+    try {
+      const payload = JSON.parse(raw) as CompletionPayload;
+      await postJson("/api/session/complete", payload);
+      clearPendingCompletion();
     } catch {
       // Keep the payload for the next retry opportunity.
     }
@@ -580,6 +648,7 @@ export default function Page() {
 
   useEffect(() => {
     void flushPendingTermination();
+    void flushPendingCompletion();
   }, []);
 
   useEffect(() => {
@@ -726,11 +795,13 @@ export default function Page() {
         interviewId: string;
         attemptNumber?: number;
         reused: boolean;
+        candidateName?: string | null;
       }>("/api/session/start", {
         token: inviteToken,
       });
 
       setAttemptId(session.attemptId);
+      setCandidateName(session.candidateName?.trim() ?? "");
 
       const data = await postJson<{
         content: string;
@@ -843,6 +914,18 @@ export default function Page() {
     });
 
     if (data.complete || !data.question || !data.session_question_id) {
+      const completionPayload = {
+        attemptId,
+        currentPhase: getCurrentPhaseFromState(verisState, showCoding),
+      } satisfies CompletionPayload;
+
+      try {
+        await postJson("/api/session/complete", completionPayload);
+        clearPendingCompletion();
+      } catch {
+        persistPendingCompletion(completionPayload);
+      }
+
       await endInterview({
         completed: true,
         message:

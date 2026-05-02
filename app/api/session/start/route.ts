@@ -12,6 +12,7 @@ type SessionStartRow = {
   interview_id: string;
   attempt_number: number;
   reused: boolean;
+  candidate_name?: string | null;
 };
 
 function hasMissingFunctionError(error: unknown, functionName: string) {
@@ -70,6 +71,15 @@ export async function POST(request: Request) {
           expires_at: true,
           max_attempts: true,
           attempts_used: true,
+          interviews: {
+            select: {
+              candidates: {
+                select: {
+                  full_name: true,
+                },
+              },
+            },
+          },
         },
       });
 
@@ -111,6 +121,7 @@ export async function POST(request: Request) {
           interview_id: latestAttempt.interview_id,
           attempt_number: latestAttempt.attempt_number,
           reused: true,
+          candidate_name: invite.interviews.candidates.full_name,
         };
       } else {
         const attemptsUsed = invite.attempts_used ?? 0;
@@ -159,6 +170,7 @@ export async function POST(request: Request) {
           interview_id: createdAttempt.interview_id,
           attempt_number: createdAttempt.attempt_number,
           reused: false,
+          candidate_name: invite.interviews.candidates.full_name,
         };
       }
     }
@@ -170,11 +182,35 @@ export async function POST(request: Request) {
       );
     }
 
+    let candidateName = attempt.candidate_name ?? null;
+
+    if (!candidateName) {
+      const inviteWithCandidate = await prisma.interview_invites.findUnique({
+        where: {
+          token,
+        },
+        select: {
+          interviews: {
+            select: {
+              candidates: {
+                select: {
+                  full_name: true,
+                },
+              },
+            },
+          },
+        },
+      });
+
+      candidateName = inviteWithCandidate?.interviews.candidates.full_name ?? null;
+    }
+
     return Response.json({
       attemptId: attempt.attempt_id,
       interviewId: attempt.interview_id,
       attemptNumber: attempt.attempt_number,
       reused: attempt.reused,
+      candidateName,
     });
   } catch (error) {
     const message =
