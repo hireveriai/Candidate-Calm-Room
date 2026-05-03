@@ -427,6 +427,7 @@ model interview_answers {
   answer_text                  String?
   answer_payload               Json?
   answered_at                  DateTime                       @default(now()) @db.Timestamptz(6)
+  status                       String                         @default("completed")
   session_question_id          String?                        @unique(map: "uq_interview_answers_session_question") @db.Uuid
   answer_evaluations           answer_evaluations[]
   interview_answer_evaluations interview_answer_evaluations[]
@@ -463,6 +464,7 @@ model interview_attempts {
   attempt_number              Int
   started_at                  DateTime                     @default(now()) @db.Timestamptz(6)
   ended_at                    DateTime?                    @db.Timestamptz(6)
+  ends_at                     DateTime?                    @default(dbgenerated("(now() + '00:30:00'::interval)")) @db.Timestamptz(6)
   status                      String                       @default("started")
   current_phase               String                       @default("warmup")
   difficulty_level            Int                          @default(3)

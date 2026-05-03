@@ -1,4 +1,5 @@
 import { finalizeInterviewAttempt } from "@/app/lib/interviewCompletion";
+import { canAskNextQuestion } from "@/app/lib/calmTiming";
 import { prisma } from "@/app/lib/prisma";
 import {
   buildAskedQuestionState,
@@ -20,7 +21,6 @@ export const runtime = "nodejs";
 
 type RequestBody = {
   attemptId?: string;
-  lastAnswer?: string;
 };
 
 type NextQuestionRow = {
@@ -52,6 +52,7 @@ type QuestionTypeRow = {
 type AttemptContextRow = {
   interview_id: string;
   started_at: Date;
+  ends_at: Date | null;
   question_count: number | null;
   duration_minutes: number | null;
   planned_question_count: number | null;
@@ -565,7 +566,7 @@ export async function POST(request: Request) {
   try {
     console.log("[session/next-question] request:start");
     const body = (await request.json()) as RequestBody;
-    const { attemptId, lastAnswer } = body;
+    const { attemptId } = body;
 
     if (!attemptId) {
       return Response.json(
@@ -584,6 +585,7 @@ export async function POST(request: Request) {
         select
           ia.interview_id,
           ia.started_at,
+          ia.ends_at,
           i.question_count,
           i.duration_minutes,
           i.required_follow_up_questions,
@@ -613,6 +615,7 @@ export async function POST(request: Request) {
         select
           ia.interview_id,
           ia.started_at,
+          ia.ends_at,
           i.question_count,
           i.duration_minutes,
           ${null}::int as required_follow_up_questions,
@@ -640,6 +643,21 @@ export async function POST(request: Request) {
         { error: "Interview attempt not found" },
         { status: 404 }
       );
+    }
+
+    if (!canAskNextQuestion({ ends_at: attempt.ends_at })) {
+      const completionResult = await finalizeInterviewAttempt({
+        attemptId,
+        earlyExit: false,
+        currentPhase: "closing",
+      });
+
+      return Response.json({
+        complete: true,
+        ...completionResult,
+        reason: "session_time_ended",
+        message: "Session time has ended. No new questions can be asked.",
+      });
     }
 
     const askedQuestions = await prisma.$queryRaw<AskedQuestionRow[]>`
@@ -816,6 +834,9 @@ export async function POST(request: Request) {
                 select answer_text
                 from public.interview_answers
                 where session_question_id = ${latestQuestion.session_question_id}::uuid
+                  and status = 'completed'
+                  and answer_text is not null
+                  and nullif(trim(answer_text), '') is not null
                 order by answered_at desc nulls last
                 limit 1
             `
@@ -861,8 +882,7 @@ export async function POST(request: Request) {
         }
       }
 
-      const effectiveLastAnswer =
-        lastAnswer?.trim() || latestAnswerRecord?.answer_text || "";
+      const effectiveLastAnswer = latestAnswerRecord?.answer_text || "";
       const answerSummary = summarizeAnswer(effectiveLastAnswer);
       const wordCount = effectiveLastAnswer
         ? effectiveLastAnswer.trim().split(/\s+/).length
@@ -1216,6 +1236,7 @@ export async function POST(request: Request) {
     return Response.json({
       complete: false,
       question: sessionQuestion.content,
+      question_id: sessionQuestion.question_id,
       session_question_id: sessionQuestion.session_question_id,
       question_kind: sessionQuestion.question_kind,
       question_type:

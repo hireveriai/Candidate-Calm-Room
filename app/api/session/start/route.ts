@@ -13,6 +13,14 @@ type SessionStartRow = {
   attempt_number: number;
   reused: boolean;
   candidate_name?: string | null;
+  candidate_id?: string | null;
+  ends_at?: Date | string | null;
+};
+
+type AttemptTimingRow = {
+  attempt_id: string;
+  ends_at: Date | null;
+  duration_minutes: number | null;
 };
 
 function hasMissingFunctionError(error: unknown, functionName: string) {
@@ -73,6 +81,8 @@ export async function POST(request: Request) {
           attempts_used: true,
           interviews: {
             select: {
+              candidate_id: true,
+              duration_minutes: true,
               candidates: {
                 select: {
                   full_name: true,
@@ -122,6 +132,7 @@ export async function POST(request: Request) {
           attempt_number: latestAttempt.attempt_number,
           reused: true,
           candidate_name: invite.interviews.candidates.full_name,
+          candidate_id: invite.interviews.candidate_id,
         };
       } else {
         const attemptsUsed = invite.attempts_used ?? 0;
@@ -171,7 +182,21 @@ export async function POST(request: Request) {
           attempt_number: createdAttempt.attempt_number,
           reused: false,
           candidate_name: invite.interviews.candidates.full_name,
+          candidate_id: invite.interviews.candidate_id,
         };
+
+        const endsAt = new Date(
+          now.getTime() +
+            Math.max(invite.interviews.duration_minutes ?? 30, 1) * 60 * 1000
+        );
+
+        await prisma.$executeRaw`
+          update public.interview_attempts
+          set ends_at = ${endsAt}::timestamptz
+          where attempt_id = ${createdAttempt.attempt_id}::uuid
+        `;
+
+        attempt.ends_at = endsAt;
       }
     }
 
@@ -182,9 +207,42 @@ export async function POST(request: Request) {
       );
     }
 
-    let candidateName = attempt.candidate_name ?? null;
+    const timingRows = await prisma.$queryRaw<AttemptTimingRow[]>`
+      select
+        ia.attempt_id,
+        ia.ends_at,
+        i.duration_minutes
+      from public.interview_attempts ia
+      join public.interviews i
+        on i.interview_id = ia.interview_id
+      where ia.attempt_id = ${attempt.attempt_id}::uuid
+      limit 1
+    `;
+    const timing = timingRows[0] ?? null;
 
-    if (!candidateName) {
+    if (!attempt.ends_at && timing?.ends_at) {
+      attempt.ends_at = timing.ends_at;
+    }
+
+    if (!attempt.ends_at && timing) {
+      const endsAt = new Date(
+        Date.now() + Math.max(timing.duration_minutes ?? 30, 1) * 60 * 1000
+      );
+
+      await prisma.$executeRaw`
+        update public.interview_attempts
+        set ends_at = ${endsAt}::timestamptz
+        where attempt_id = ${attempt.attempt_id}::uuid
+          and ends_at is null
+      `;
+
+      attempt.ends_at = endsAt;
+    }
+
+    let candidateName = attempt.candidate_name ?? null;
+    let candidateId = attempt.candidate_id ?? null;
+
+    if (!candidateName || !candidateId) {
       const inviteWithCandidate = await prisma.interview_invites.findUnique({
         where: {
           token,
@@ -192,6 +250,7 @@ export async function POST(request: Request) {
         select: {
           interviews: {
             select: {
+              candidate_id: true,
               candidates: {
                 select: {
                   full_name: true,
@@ -202,7 +261,11 @@ export async function POST(request: Request) {
         },
       });
 
-      candidateName = inviteWithCandidate?.interviews.candidates.full_name ?? null;
+      candidateName =
+        candidateName ??
+        inviteWithCandidate?.interviews.candidates.full_name ??
+        null;
+      candidateId = candidateId ?? inviteWithCandidate?.interviews.candidate_id ?? null;
     }
 
     return Response.json({
@@ -210,6 +273,8 @@ export async function POST(request: Request) {
       interviewId: attempt.interview_id,
       attemptNumber: attempt.attempt_number,
       reused: attempt.reused,
+      endsAt: attempt.ends_at,
+      candidateId,
       candidateName,
     });
   } catch (error) {

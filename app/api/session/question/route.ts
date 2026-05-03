@@ -1,4 +1,5 @@
 import { prisma } from "@/app/lib/prisma";
+import { canAskNextQuestion } from "@/app/lib/calmTiming";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -32,6 +33,7 @@ type ExistingSessionQuestionRow = {
 
 type AttemptInterviewRow = {
   interview_id: string;
+  ends_at: Date | null;
 };
 
 type QuestionTypeRow = {
@@ -92,7 +94,7 @@ export async function POST(request: Request) {
     }
 
     const attempts = await prisma.$queryRaw<AttemptInterviewRow[]>`
-      select ia.interview_id
+      select ia.interview_id, ia.ends_at
       from public.interview_attempts ia
       where ia.attempt_id = ${attemptId}::uuid
       limit 1
@@ -103,6 +105,16 @@ export async function POST(request: Request) {
       return Response.json(
         { error: "Interview attempt not found" },
         { status: 404 }
+      );
+    }
+
+    if (!canAskNextQuestion({ ends_at: attempt.ends_at })) {
+      return Response.json(
+        {
+          error: "Session time has ended. Finish your current answer.",
+          complete: true,
+        },
+        { status: 409 }
       );
     }
 

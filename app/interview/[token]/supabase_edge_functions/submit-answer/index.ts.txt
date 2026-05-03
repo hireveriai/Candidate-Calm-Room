@@ -2,6 +2,62 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
 import { CORS_HEADERS, createSupabase, jsonResponse } from "../_shared/common.ts";
 
+type SessionQuestionContext = {
+  session_question_id: string;
+  attempt_id: string;
+  question_id: string | null;
+  content: string;
+  interview_attempts:
+    | {
+        interviews:
+          | {
+              candidate_id: string;
+            }
+          | Array<{ candidate_id: string }>;
+      }
+    | Array<{
+        interviews:
+          | {
+              candidate_id: string;
+            }
+          | Array<{ candidate_id: string }>;
+      }>;
+};
+
+function normalizeText(value: string | null | undefined) {
+  return value?.replace(/\s+/g, " ").trim() ?? "";
+}
+
+function getCandidateId(context: SessionQuestionContext) {
+  const attempt = Array.isArray(context.interview_attempts)
+    ? context.interview_attempts[0]
+    : context.interview_attempts;
+  const interview = Array.isArray(attempt?.interviews)
+    ? attempt?.interviews[0]
+    : attempt?.interviews;
+
+  return interview?.candidate_id ?? null;
+}
+
+function getLogicalQuestionId(context: SessionQuestionContext) {
+  return context.question_id ?? context.session_question_id;
+}
+
+function validateAnswer(answer: string, question: string) {
+  if (answer.length < 20) {
+    return false;
+  }
+
+  const keywords = question
+    .toLowerCase()
+    .split(/[^a-z0-9+#.]+/i)
+    .filter((word) => word.length > 2);
+
+  return keywords.length === 0
+    ? true
+    : keywords.some((word) => answer.toLowerCase().includes(word));
+}
+
 Deno.serve(async (request) => {
   if (request.method === "OPTIONS") {
     return new Response("ok", { headers: CORS_HEADERS });
@@ -14,36 +70,148 @@ Deno.serve(async (request) => {
   try {
     const {
       session_question_id: sessionQuestionId,
+      question_id: questionId,
+      attempt_id: attemptId,
+      candidate_id: candidateId,
       transcript,
       duration_seconds: durationSeconds,
       signals,
     } = (await request.json()) as {
       session_question_id?: string;
+      question_id?: string;
+      attempt_id?: string;
+      candidate_id?: string;
       transcript?: string;
       duration_seconds?: number;
       signals?: Record<string, unknown>;
     };
 
-    if (!sessionQuestionId?.trim()) {
-      return jsonResponse({ success: false, error: "session_question_id is required" }, 400);
+    const finalAnswer = normalizeText(transcript);
+
+    if (!sessionQuestionId?.trim() || !questionId?.trim() || !attemptId?.trim() || !candidateId?.trim()) {
+      return jsonResponse(
+        {
+          success: false,
+          error: "session_question_id, question_id, attempt_id, and candidate_id are required",
+        },
+        400
+      );
+    }
+
+    if (!finalAnswer) {
+      return jsonResponse({ success: false, error: "transcript is required" }, 400);
     }
 
     const supabase = createSupabase();
-    const { data, error } = await supabase.rpc("submit_interview_answer", {
-      p_session_question_id: sessionQuestionId.trim(),
-      p_transcript: transcript ?? null,
-      p_duration_seconds:
+    const { data: context, error: contextError } = await supabase
+      .from("session_questions")
+      .select(
+        `
+          session_question_id,
+          attempt_id,
+          question_id,
+          content,
+          interview_attempts (
+            interviews (
+              candidate_id
+            )
+          )
+        `
+      )
+      .eq("session_question_id", sessionQuestionId.trim())
+      .single<SessionQuestionContext>();
+
+    if (contextError || !context) {
+      return jsonResponse({ success: false, error: "Session question not found" }, 404);
+    }
+
+    const logicalQuestionId = getLogicalQuestionId(context);
+    const contextCandidateId = getCandidateId(context);
+
+    if (
+      attemptId.trim() !== context.attempt_id ||
+      questionId.trim() !== logicalQuestionId ||
+      candidateId.trim() !== contextCandidateId
+    ) {
+      return jsonResponse({ success: false, error: "Answer context mismatch" }, 400);
+    }
+
+    if (!validateAnswer(finalAnswer, context.content)) {
+      return jsonResponse({ success: false, error: "Answer failed relevance validation" }, 422);
+    }
+
+    const payload = {
+      answer_mode: "spoken",
+      candidate_id: candidateId.trim(),
+      question_id: logicalQuestionId,
+      session_question_id: sessionQuestionId.trim(),
+      duration:
         typeof durationSeconds === "number" ? Math.max(0, Math.round(durationSeconds)) : null,
-      p_signals: signals ?? null,
-    });
+      signals: signals ?? null,
+      validation: {
+        relevant: true,
+        checked_at: new Date().toISOString(),
+      },
+    };
+
+    const { data: existing } = await supabase
+      .from("interview_answers")
+      .select("answer_id, answer_text, status")
+      .eq("session_question_id", sessionQuestionId.trim())
+      .maybeSingle();
+
+    let answerId = existing?.answer_id as string | undefined;
+
+    if (existing?.status === "completed" && normalizeText(existing.answer_text) === finalAnswer) {
+      return jsonResponse({ success: true, data: existing });
+    }
+
+    if (!answerId) {
+      const { data: created, error: createError } = await supabase
+        .from("interview_answers")
+        .insert({
+          attempt_id: context.attempt_id,
+          question_id: context.question_id,
+          session_question_id: sessionQuestionId.trim(),
+          answer_text: null,
+          answer_payload: { answer_mode: "spoken" },
+          status: "generating",
+        })
+        .select("answer_id")
+        .single();
+
+      if (createError || !created?.answer_id) {
+        throw new Error(createError?.message ?? "Failed to create answer");
+      }
+
+      answerId = created.answer_id as string;
+    }
+
+    const { data, error } = await supabase
+      .from("interview_answers")
+      .update({
+        answer_text: finalAnswer,
+        answer_payload: payload,
+        answered_at: new Date().toISOString(),
+        status: "completed",
+      })
+      .eq("answer_id", answerId)
+      .select()
+      .single();
 
     if (error) {
       throw new Error(error.message);
     }
 
+    console.log({
+      question_id: logicalQuestionId,
+      question_text: context.content,
+      answer: finalAnswer,
+    });
+
     return jsonResponse({
       success: true,
-      data: Array.isArray(data) ? data[0] ?? null : data,
+      data,
     });
   } catch (error) {
     console.error("[submit-answer]", error);

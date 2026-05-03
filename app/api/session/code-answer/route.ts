@@ -1,36 +1,25 @@
+import {
+  assertAnswerContextMatches,
+  generateAnswer,
+  getLogicalQuestionId,
+  getSessionQuestionContext,
+  type JsonValue,
+} from "@/app/lib/calmAnswerPipeline";
+import { canSubmitAnswer } from "@/app/lib/calmTiming";
 import { prisma } from "@/app/lib/prisma";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-type JsonValue =
-  | string
-  | number
-  | boolean
-  | null
-  | { [key: string]: JsonValue }
-  | JsonValue[];
-
 type RequestBody = {
   sessionQuestionId?: string;
+  questionId?: string;
+  candidateId?: string;
+  attemptId?: string;
   code?: string;
   language?: string;
   duration?: number;
   prompt?: string;
-};
-
-type AnswerRecord = {
-  answer_id: string;
-  attempt_id: string;
-  question_id: string | null;
-  session_question_id: string | null;
-  answer_text: string;
-  answer_payload: JsonValue | null;
-  answered_at: Date | null;
-};
-
-type QuestionContextRow = {
-  content: string | null;
 };
 
 type CodeReviewResult = {
@@ -69,6 +58,7 @@ async function reviewCodeSubmission(input: {
     body: JSON.stringify({
       model: "gpt-4o-mini",
       temperature: 0.2,
+      stream: false,
       response_format: { type: "json_object" },
       messages: [
         {
@@ -121,54 +111,106 @@ async function reviewCodeSubmission(input: {
 export async function POST(request: Request) {
   try {
     const body = (await request.json()) as RequestBody;
-    const { sessionQuestionId, code, language, duration, prompt } = body;
+    const sessionQuestionId = body.sessionQuestionId?.trim();
+    const code = body.code?.trim();
+    const language = body.language?.trim();
 
-    if (!sessionQuestionId || !code?.trim() || !language?.trim()) {
+    if (!sessionQuestionId || !code || !language) {
       return Response.json(
         { error: "sessionQuestionId, code, and language are required" },
         { status: 400 }
       );
     }
 
-    const answerRows = await prisma.$queryRaw<AnswerRecord[]>`
-      select *
-      from public.submit_coding_answer(
-        ${sessionQuestionId}::uuid,
-        ${code.trim()}::text,
-        ${language.trim()}::text,
-        ${duration ?? null}::integer
+    const context = await getSessionQuestionContext({ sessionQuestionId });
+
+    if (!context) {
+      return Response.json({ error: "session question not found" }, { status: 400 });
+    }
+
+    assertAnswerContextMatches({
+      context,
+      attemptId: body.attemptId?.trim(),
+      candidateId: body.candidateId?.trim(),
+      questionId: body.questionId?.trim(),
+    });
+
+    if (
+      !canSubmitAnswer(
+        { ends_at: context.ends_at },
+        { asked_at: context.asked_at }
       )
-    `;
-
-    const answer = answerRows[0];
-
-    if (!answer) {
+    ) {
       return Response.json(
-        { error: "Failed to save coding answer" },
-        { status: 500 }
+        { error: "Answer window has expired" },
+        { status: 409 }
       );
     }
+
+    const logicalQuestionId = getLogicalQuestionId(context);
+    const result = await generateAnswer({
+      question_id: logicalQuestionId,
+      question_text: context.question_text,
+      candidate_id: context.candidate_id,
+      attempt_id: context.attempt_id,
+      session_question_id: context.session_question_id,
+      candidate_answer: code,
+      duration: body.duration,
+      answer_mode: "coding",
+      answer_payload: {
+        answer_mode: "coding",
+        language,
+        submitted_question_text: body.prompt?.trim() || null,
+      },
+      skip_llm: true,
+      skip_relevance_validation: true,
+    });
+
+    await prisma.$executeRaw`
+      insert into public.interview_code_submissions (
+        answer_id,
+        attempt_id,
+        session_question_id,
+        question_id,
+        language,
+        code_text,
+        review_status,
+        review_payload,
+        updated_at
+      )
+      values (
+        ${result.record.answer_id}::uuid,
+        ${context.attempt_id}::uuid,
+        ${context.session_question_id}::uuid,
+        ${context.question_id ?? null}::uuid,
+        ${language}::text,
+        ${code}::text,
+        ${"pending"}::text,
+        ${JSON.stringify({})}::jsonb,
+        now()
+      )
+      on conflict (answer_id)
+      do update
+      set language = excluded.language,
+          code_text = excluded.code_text,
+          review_status = 'pending',
+          review_payload = '{}'::jsonb,
+          updated_at = now()
+    `;
 
     let review: CodeReviewResult | null = null;
 
     try {
-      const questionRows = await prisma.$queryRaw<QuestionContextRow[]>`
-        select content
-        from public.session_questions
-        where session_question_id = ${sessionQuestionId}::uuid
-        limit 1
-      `;
-
       review = await reviewCodeSubmission({
-        prompt: prompt?.trim() || questionRows[0]?.content || "Coding question",
-        language: language.trim(),
-        code: code.trim(),
+        prompt: body.prompt?.trim() || context.question_text || "Coding question",
+        language,
+        code,
       });
 
       if (review) {
         await prisma.$queryRaw`
           select public.record_coding_review(
-            ${answer.answer_id}::uuid,
+            ${result.record.answer_id}::uuid,
             ${review.code_quality_score}::numeric,
             ${review.correctness_score}::numeric,
             ${review.problem_solving_score}::numeric,
@@ -184,13 +226,15 @@ export async function POST(request: Request) {
     }
 
     return Response.json({
-      ...answer,
+      ...result.record,
       review,
     });
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Failed to submit coding answer";
+    const status =
+      message.includes("required") || message.includes("does not match") ? 400 : 500;
 
-    return Response.json({ error: message }, { status: 500 });
+    return Response.json({ error: message }, { status });
   }
 }

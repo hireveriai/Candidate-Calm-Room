@@ -39,9 +39,6 @@ type TerminationType =
 type TerminationPayload = {
   attemptId: string;
   terminationType: TerminationType;
-  sessionQuestionId?: string;
-  transcript?: string;
-  duration?: number;
   currentPhase?: string;
 };
 
@@ -99,12 +96,26 @@ const VerisOrb = dynamic(
 
 const INACTIVITY_TIMEOUT_MS = 5 * 60 * 1000;
 const DISCONNECT_GRACE_MS = 15 * 1000;
+const MAX_ANSWER_TIME_MS = 3 * 60 * 1000;
 const STRICT_TAB_TERMINATION = false;
 const PENDING_TERMINATION_STORAGE_KEY = "hireveri.pendingTermination";
 const PENDING_COMPLETION_STORAGE_KEY = "hireveri.pendingCompletion";
 
-function isCodingQuestionType(questionType: string | null | undefined) {
-  return /code|coding|programming/i.test(questionType ?? "");
+function isCodingQuestionType(
+  questionType: string | null | undefined,
+  questionText?: string | null
+) {
+  const normalizedType = (questionType ?? "").replace(/[_-]+/g, " ");
+  const normalizedQuestion = questionText ?? "";
+
+  return (
+    /\b(code|coding|programming|live coding|debugging|backend logic|dsa|algorithm|sql)\b/i.test(
+      normalizedType
+    ) ||
+    /\b(write|implement|debug|fix|query|sql|function|algorithm|code)\b/i.test(
+      normalizedQuestion
+    )
+  );
 }
 
 function cleanTranscript(text: string) {
@@ -177,10 +188,15 @@ export default function Page() {
   const [verisState, setVerisState] = useState<VerisState>("idle");
   const [currentQuestion, setCurrentQuestion] = useState("");
   const [sessionQuestionId, setSessionQuestionId] = useState("");
+  const [questionId, setQuestionId] = useState("");
   const [transcript, setTranscript] = useState("");
   const [timeLeft, setTimeLeft] = useState(0);
   const [isTransitioning, setIsTransitioning] = useState(false);
   const [attemptId, setAttemptId] = useState("");
+  const [candidateId, setCandidateId] = useState("");
+  const [sessionEndsAt, setSessionEndsAt] = useState<number | null>(null);
+  const [sessionTimeEnded, setSessionTimeEnded] = useState(false);
+  const [answerWindowEnded, setAnswerWindowEnded] = useState(false);
 
   const [audioLevel, setAudioLevel] = useState(0);
 
@@ -318,19 +334,9 @@ export default function Page() {
       return null;
     }
 
-    const cleanedTranscript = cleanTranscript(
-      transcriptRef.current.trim() || transcript.trim()
-    );
-    const duration = questionStartTimeRef.current
-      ? Math.max(1, Math.round((Date.now() - questionStartTimeRef.current) / 1000))
-      : undefined;
-
     return {
       attemptId,
       terminationType,
-      sessionQuestionId: sessionQuestionId || undefined,
-      transcript: cleanedTranscript || undefined,
-      duration,
       currentPhase: getCurrentPhaseFromState(verisState, showCoding),
     };
   };
@@ -618,6 +624,10 @@ export default function Page() {
     setVerisState("idle");
     setCurrentQuestion("");
     setSessionQuestionId("");
+    setQuestionId("");
+    setSessionEndsAt(null);
+    setSessionTimeEnded(false);
+    setAnswerWindowEnded(false);
     setTranscript("");
     transcriptRef.current = "";
     isAdvancingRef.current = false;
@@ -746,6 +756,7 @@ export default function Page() {
   const askQuestion = async (
     question: string,
     nextSessionQuestionId: string,
+    nextQuestionId?: string | null,
     questionType?: string | null
   ) => {
     stopAll();
@@ -755,6 +766,7 @@ export default function Page() {
     setTranscript("");
     transcriptRef.current = "";
     setSessionQuestionId(nextSessionQuestionId);
+    setQuestionId(nextQuestionId || nextSessionQuestionId);
     setCurrentQuestion(question);
     setVerisState("thinking");
     setShowCoding(false);
@@ -764,10 +776,11 @@ export default function Page() {
     await speak(question);
 
     questionStartTimeRef.current = Date.now();
+    setAnswerWindowEnded(false);
     resetFocusMetrics();
     startQuestionTimer();
 
-    if (isCodingQuestionType(questionType)) {
+    if (isCodingQuestionType(questionType, question)) {
       addEvent({
         type: "coding_start",
         severity: "low",
@@ -795,16 +808,21 @@ export default function Page() {
         interviewId: string;
         attemptNumber?: number;
         reused: boolean;
+        endsAt?: string | Date | null;
+        candidateId?: string | null;
         candidateName?: string | null;
       }>("/api/session/start", {
         token: inviteToken,
       });
 
       setAttemptId(session.attemptId);
+      setSessionEndsAt(session.endsAt ? new Date(session.endsAt).getTime() : null);
+      setCandidateId(session.candidateId?.trim() ?? "");
       setCandidateName(session.candidateName?.trim() ?? "");
 
       const data = await postJson<{
         content: string;
+        question_id?: string | null;
         session_question_id: string;
         question_type?: string | null;
       }>("/api/session/question", {
@@ -817,6 +835,7 @@ export default function Page() {
       await askQuestion(
         data.content,
         data.session_question_id,
+        data.question_id ?? data.session_question_id,
         data.question_type
       );
     } catch (error) {
@@ -833,7 +852,7 @@ export default function Page() {
   };
 
   const submitAnswer = async () => {
-    if (!sessionQuestionId || !attemptId) return;
+    if (!sessionQuestionId || !attemptId || !candidateId || !questionId) return;
     const rawTranscript = transcriptRef.current.trim() || transcript.trim();
     const cleanedTranscript = cleanTranscript(
       rawTranscript
@@ -850,7 +869,12 @@ export default function Page() {
       answer_text: string;
     }>("/api/session/answer", {
         sessionQuestionId,
+        questionId,
+        questionText: currentQuestion,
+        candidateId,
+        attemptId,
         transcript: safeTranscript,
+        rawTranscript: rawTranscript || safeTranscript,
         duration: answerDuration,
       });
 
@@ -876,7 +900,7 @@ export default function Page() {
   };
 
   const submitCodeAnswer = async (code: string, language: string) => {
-    if (!sessionQuestionId || !attemptId) return;
+    if (!sessionQuestionId || !attemptId || !candidateId || !questionId) return;
 
     const answerDuration = questionStartTimeRef.current
       ? Math.max(1, Math.round((Date.now() - questionStartTimeRef.current) / 1000))
@@ -884,6 +908,9 @@ export default function Page() {
 
     await postJson("/api/session/code-answer", {
       sessionQuestionId,
+      questionId,
+      candidateId,
+      attemptId,
       code,
       language,
       duration: answerDuration,
@@ -898,19 +925,15 @@ export default function Page() {
       throw new Error("Interview session is not initialized.");
     }
 
-    const cleanedTranscript = cleanTranscript(
-      transcriptRef.current.trim() || transcript.trim()
-    );
-    const safeTranscript = cleanedTranscript || "No response provided.";
-
     const data = await postJson<{
       complete: boolean;
+      message?: string;
       question?: string;
+      question_id?: string | null;
       session_question_id?: string;
       question_type?: string | null;
     }>("/api/session/next-question", {
       attemptId,
-      lastAnswer: safeTranscript,
     });
 
     if (data.complete || !data.question || !data.session_question_id) {
@@ -929,6 +952,7 @@ export default function Page() {
       await endInterview({
         completed: true,
         message:
+          data.message ??
           "Interview complete. Your responses, including follow-up questions, have been recorded.",
       });
       return;
@@ -937,8 +961,33 @@ export default function Page() {
     await askQuestion(
       data.question,
       data.session_question_id,
+      data.question_id ?? data.session_question_id,
       data.question_type
     );
+  };
+
+  const completeAfterFinalAnswer = async () => {
+    if (!attemptId) {
+      return;
+    }
+
+    const completionPayload = {
+      attemptId,
+      currentPhase: "closing",
+    } satisfies CompletionPayload;
+
+    try {
+      await postJson("/api/session/complete", completionPayload);
+      clearPendingCompletion();
+    } catch {
+      persistPendingCompletion(completionPayload);
+    }
+
+    await endInterview({
+      completed: true,
+      message:
+        "Interview time ended. Your final answer has been recorded and the session is complete.",
+    });
   };
 
   const handleCodingSubmit = async (payload: {
@@ -946,6 +995,14 @@ export default function Page() {
     language: string;
   }) => {
     if (isAdvancingRef.current) return;
+    if (answerWindowEnded) {
+      setWarning({
+        type: "hard",
+        message: "Answer window has expired.",
+        visible: true,
+      });
+      return;
+    }
     isAdvancingRef.current = true;
 
     stopAll();
@@ -962,7 +1019,11 @@ export default function Page() {
 
     try {
       await submitCodeAnswer(payload.code, payload.language);
-      await getNextQuestion();
+      if (sessionTimeEnded) {
+        await completeAfterFinalAnswer();
+      } else {
+        await getNextQuestion();
+      }
       setIsTransitioning(false);
     } catch (error) {
       isAdvancingRef.current = false;
@@ -1061,6 +1122,14 @@ export default function Page() {
 
   const handleAutoNext = async () => {
     if (isAdvancingRef.current) return;
+    if (answerWindowEnded) {
+      setWarning({
+        type: "hard",
+        message: "Answer window has expired.",
+        visible: true,
+      });
+      return;
+    }
     isAdvancingRef.current = true;
 
     stopAll();
@@ -1079,7 +1148,11 @@ export default function Page() {
 
     try {
       await submitAnswer();
-      await getNextQuestion();
+      if (sessionTimeEnded) {
+        await completeAfterFinalAnswer();
+      } else {
+        await getNextQuestion();
+      }
       setIsTransitioning(false);
     } catch (error) {
       isAdvancingRef.current = false;
@@ -1312,6 +1385,31 @@ export default function Page() {
     focusSampleAtRef.current = now;
   }, [attention, faceDetected, sessionQuestionId, started]);
 
+  useEffect(() => {
+    if (!started) {
+      setSessionTimeEnded(false);
+      setAnswerWindowEnded(false);
+      return;
+    }
+
+    const tick = () => {
+      const now = Date.now();
+
+      setSessionTimeEnded(Boolean(sessionEndsAt && now >= sessionEndsAt));
+      setAnswerWindowEnded(
+        Boolean(
+          questionStartTimeRef.current &&
+            now - questionStartTimeRef.current >= MAX_ANSWER_TIME_MS
+        )
+      );
+    };
+
+    tick();
+    const timer = window.setInterval(tick, 1000);
+
+    return () => window.clearInterval(timer);
+  }, [sessionEndsAt, sessionQuestionId, started]);
+
   if (interviewFinished) {
     return (
       <div className="flex h-screen w-screen flex-col items-center justify-center bg-[#0B0F1A] px-6 text-white">
@@ -1360,6 +1458,16 @@ export default function Page() {
 
         <InterviewControls
           disabled={isTransitioning}
+          nextDisabled={answerWindowEnded}
+          skipDisabled={sessionTimeEnded}
+          primaryLabel={sessionTimeEnded ? "Finish Answer" : "Next Question"}
+          message={
+            answerWindowEnded
+              ? "Answer window expired"
+              : sessionTimeEnded
+                ? "Finish your current answer"
+                : undefined
+          }
           onNext={() => void handleAutoNext()}
           onSkip={() => void handleAutoNext()}
         />
