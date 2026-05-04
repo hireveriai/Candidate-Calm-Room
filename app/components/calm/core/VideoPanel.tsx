@@ -1,15 +1,40 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { Room, Track } from "livekit-client";
+import type { RefObject } from "react";
 
 type Props = {
+  attemptId?: string;
   timeLeft?: number;
-  onVideoReady?: (ref: any) => void;
+  onVideoReady?: (ref: RefObject<HTMLVideoElement | null>) => void;
 };
 
-export default function VideoPanel({ timeLeft, onVideoReady }: Props) {
+async function fetchLiveKitPublisherToken(attemptId: string) {
+  const searchParams = new URLSearchParams({
+    room: attemptId,
+    userId: `candidate-publisher-${attemptId}`,
+    role: "publisher",
+  });
+
+  const response = await fetch(`/api/livekit/token?${searchParams.toString()}`);
+
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as
+      | { error?: string }
+      | null;
+
+    throw new Error(payload?.error ?? "Failed to fetch LiveKit token");
+  }
+
+  const payload = (await response.json()) as { token: string };
+  return payload.token;
+}
+
+export default function VideoPanel({ attemptId, timeLeft, onVideoReady }: Props) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const onVideoReadyRef = useRef(onVideoReady);
+  const cameraStreamRef = useRef<MediaStream | null>(null);
   const elapsedSeconds = timeLeft ?? 0;
   const minutes = Math.floor(elapsedSeconds / 60)
     .toString()
@@ -21,7 +46,7 @@ export default function VideoPanel({ timeLeft, onVideoReady }: Props) {
   }, [onVideoReady]);
 
   useEffect(() => {
-    let activeStream: MediaStream | null = null;
+    const videoElement = videoRef.current;
 
     async function startCamera() {
       try {
@@ -29,7 +54,7 @@ export default function VideoPanel({ timeLeft, onVideoReady }: Props) {
           video: true,
           audio: false,
         });
-        activeStream = stream;
+        cameraStreamRef.current = stream;
 
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
@@ -51,13 +76,70 @@ export default function VideoPanel({ timeLeft, onVideoReady }: Props) {
     startCamera();
 
     return () => {
-      if (videoRef.current) {
-        videoRef.current.srcObject = null;
+      if (videoElement) {
+        videoElement.srcObject = null;
       }
 
-      activeStream?.getTracks().forEach((track) => track.stop());
+      cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
+      cameraStreamRef.current = null;
     };
   }, []);
+
+  useEffect(() => {
+    if (!attemptId) {
+      return;
+    }
+
+    const liveKitUrl = process.env.NEXT_PUBLIC_LIVEKIT_URL;
+
+    if (!liveKitUrl) {
+      console.error("NEXT_PUBLIC_LIVEKIT_URL is not configured");
+      return;
+    }
+
+    let cancelled = false;
+    const room = new Room();
+
+    async function publishCamera() {
+      try {
+        const token = await fetchLiveKitPublisherToken(attemptId!);
+        await room.connect(liveKitUrl!, token);
+
+        const stream =
+          cameraStreamRef.current ??
+          (await navigator.mediaDevices.getUserMedia({
+            video: true,
+            audio: false,
+          }));
+
+        cameraStreamRef.current = stream;
+
+        if (cancelled) {
+          room.disconnect();
+          return;
+        }
+
+        const [videoTrack] = stream.getVideoTracks();
+
+        if (!videoTrack) {
+          throw new Error("Camera track is not available");
+        }
+
+        await room.localParticipant.publishTrack(videoTrack, {
+          source: Track.Source.Camera,
+        });
+      } catch (error) {
+        console.error("Unable to publish LiveKit camera feed:", error);
+      }
+    }
+
+    void publishCamera();
+
+    return () => {
+      cancelled = true;
+      room.disconnect();
+    };
+  }, [attemptId]);
 
   return (
     <div className="mt-10 flex w-full justify-center">

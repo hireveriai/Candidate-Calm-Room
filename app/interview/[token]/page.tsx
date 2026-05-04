@@ -150,6 +150,15 @@ function roundMetric(value: number, digits = 2) {
   return Number(value.toFixed(digits));
 }
 
+function extractFirstName(fullName: string | null | undefined) {
+  const trimmed = (fullName ?? "").trim();
+  if (!trimmed) {
+    return "";
+  }
+
+  return trimmed.split(/\s+/)[0] ?? "";
+}
+
 function getCurrentPhaseFromState(
   verisState: VerisState,
   showCoding: boolean
@@ -246,10 +255,12 @@ export default function Page() {
       return;
     }
 
-    document.title = candidateName
-      ? `Interview Room — ${candidateName}`
-      : "Interview Room";
-  }, [candidateName]);
+    const firstName = extractFirstName(candidateName);
+
+    document.title = firstName
+      ? `${firstName} • Interview Session | HireVeri`
+      : "Interview Session • HireVeri";
+  }, [candidateName, interviewFinished, started, verisState]);
 
   const persistPendingTermination = (payload: TerminationPayload) => {
     if (typeof window === "undefined") {
@@ -1440,6 +1451,7 @@ export default function Page() {
         <WarningOverlay {...warning} />
 
         <VideoPanel
+          attemptId={attemptId}
           timeLeft={timeLeft}
           onVideoReady={(ref) => (videoRef.current = ref.current)}
         />
