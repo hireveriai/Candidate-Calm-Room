@@ -1,4 +1,9 @@
 import { prisma } from "@/app/lib/prisma";
+import {
+  assertUuid,
+  logInterviewEvent,
+} from "@/app/lib/interviewReliability";
+import { startRecoveryAttemptFromToken } from "@/app/lib/interviewRecovery";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -52,7 +57,29 @@ export async function POST(request: Request) {
 
     let attempt: SessionStartRow | undefined;
 
+    const recoveryInvite = await prisma.interview_invites.findUnique({
+      where: { token },
+      select: { access_type: true },
+    });
+
+    if (String(recoveryInvite?.access_type ?? "").toUpperCase() === "RECOVERY") {
+      const recoveryAttempt = await startRecoveryAttemptFromToken(token);
+      attempt = {
+        attempt_id: recoveryAttempt.attempt_id,
+        interview_id: recoveryAttempt.interview_id,
+        attempt_number: recoveryAttempt.attempt_number,
+        reused: recoveryAttempt.reused,
+        candidate_name: recoveryAttempt.candidate_name,
+        candidate_id: recoveryAttempt.candidate_id,
+        ends_at: recoveryAttempt.ends_at,
+      };
+    }
+
     try {
+      if (attempt) {
+        throw new Error("__RECOVERY_ATTEMPT_READY__");
+      }
+
       const rows = await prisma.$queryRaw<SessionStartRow[]>`
         select *
         from public.start_interview_session(${token}::text)
@@ -60,12 +87,15 @@ export async function POST(request: Request) {
 
       attempt = rows[0];
     } catch (error) {
+      if (error instanceof Error && error.message === "__RECOVERY_ATTEMPT_READY__") {
+        // Continue with the recovery attempt created above.
+      } else
       if (
         !hasMissingFunctionError(error, "public.start_interview_session") &&
         !hasMissingDatabaseRoutineError(error)
       ) {
         throw error;
-      }
+      } else {
 
       const now = new Date();
       const invite = await prisma.interview_invites.findUnique({
@@ -125,7 +155,12 @@ export async function POST(request: Request) {
         },
       });
 
-      if (latestAttempt && latestAttempt.status === "started") {
+      if (
+        latestAttempt &&
+        !["completed", "COMPLETED", "COMPLETING", "TIME_EXPIRED"].includes(
+          latestAttempt.status
+        )
+      ) {
         attempt = {
           attempt_id: latestAttempt.attempt_id,
           interview_id: latestAttempt.interview_id,
@@ -152,7 +187,13 @@ export async function POST(request: Request) {
             data: {
               interview_id: invite.interview_id,
               attempt_number: nextAttemptNumber,
-              status: "started",
+              status: "READY",
+              ends_at: new Date(
+                now.getTime() +
+                  Math.max(invite.interviews.duration_minutes ?? 30, 1) *
+                    60 *
+                    1000
+              ),
             },
             select: {
               attempt_id: true,
@@ -185,18 +226,15 @@ export async function POST(request: Request) {
           candidate_id: invite.interviews.candidate_id,
         };
 
-        const endsAt = new Date(
-          now.getTime() +
-            Math.max(invite.interviews.duration_minutes ?? 30, 1) * 60 * 1000
-        );
-
-        await prisma.$executeRaw`
-          update public.interview_attempts
-          set ends_at = ${endsAt}::timestamptz
+        const timingRows = await prisma.$queryRaw<AttemptTimingRow[]>`
+          select attempt_id, ends_at, ${invite.interviews.duration_minutes ?? 30}::int as duration_minutes
+          from public.interview_attempts
           where attempt_id = ${createdAttempt.attempt_id}::uuid
+          limit 1
         `;
 
-        attempt.ends_at = endsAt;
+        attempt.ends_at = timingRows[0]?.ends_at ?? null;
+      }
       }
     }
 
@@ -206,6 +244,8 @@ export async function POST(request: Request) {
         { status: 500 }
       );
     }
+
+    assertUuid(attempt.attempt_id, "attemptId");
 
     const timingRows = await prisma.$queryRaw<AttemptTimingRow[]>`
       select
@@ -274,12 +314,17 @@ export async function POST(request: Request) {
       attemptNumber: attempt.attempt_number,
       reused: attempt.reused,
       endsAt: attempt.ends_at,
+      serverNow: new Date().toISOString(),
       candidateId,
       candidateName,
     });
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Failed to start interview session";
+
+    logInterviewEvent("error", "session.start_failed", {
+      prismaFailure: error,
+    });
 
     return Response.json({ error: message }, { status: 500 });
   }

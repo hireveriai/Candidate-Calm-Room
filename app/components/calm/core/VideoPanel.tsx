@@ -31,10 +31,50 @@ async function fetchLiveKitPublisherToken(attemptId: string) {
   return payload.token;
 }
 
+async function startServerRecording(attemptId: string) {
+  const response = await fetch("/api/livekit/start-recording", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ attemptId }),
+  });
+
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as
+      | { error?: string }
+      | null;
+
+    throw new Error(payload?.error ?? "Failed to start recording");
+  }
+
+  const payload = (await response.json()) as { egressId?: string };
+
+  if (!payload.egressId) {
+    throw new Error("Recording API did not return an egress id");
+  }
+
+  return payload.egressId;
+}
+
+async function stopServerRecording(egressId: string) {
+  await fetch("/api/livekit/stop-recording", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ egressId }),
+    keepalive: true,
+  });
+}
+
 export default function VideoPanel({ attemptId, timeLeft, onVideoReady }: Props) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const onVideoReadyRef = useRef(onVideoReady);
   const cameraStreamRef = useRef<MediaStream | null>(null);
+  const recordingEgressIdRef = useRef<string | null>(null);
+  const recordingStartedRef = useRef(false);
+  const stopRequestedRef = useRef(false);
   const elapsedSeconds = timeLeft ?? 0;
   const minutes = Math.floor(elapsedSeconds / 60)
     .toString()
@@ -100,6 +140,41 @@ export default function VideoPanel({ attemptId, timeLeft, onVideoReady }: Props)
     let cancelled = false;
     const room = new Room();
 
+    async function ensureRecordingStarted() {
+      if (!attemptId || recordingStartedRef.current) {
+        return;
+      }
+
+      recordingStartedRef.current = true;
+      stopRequestedRef.current = false;
+
+      try {
+        recordingEgressIdRef.current = await startServerRecording(attemptId);
+      } catch (error) {
+        recordingStartedRef.current = false;
+        console.error("Unable to start LiveKit recording:", error);
+      }
+    }
+
+    async function ensureRecordingStopped() {
+      const egressId = recordingEgressIdRef.current;
+
+      if (!egressId || stopRequestedRef.current) {
+        return;
+      }
+
+      stopRequestedRef.current = true;
+      recordingEgressIdRef.current = null;
+
+      try {
+        await stopServerRecording(egressId);
+      } catch (error) {
+        console.error("Unable to stop LiveKit recording:", error);
+      } finally {
+        recordingStartedRef.current = false;
+      }
+    }
+
     async function publishCamera() {
       try {
         const token = await fetchLiveKitPublisherToken(attemptId!);
@@ -128,6 +203,8 @@ export default function VideoPanel({ attemptId, timeLeft, onVideoReady }: Props)
         await room.localParticipant.publishTrack(videoTrack, {
           source: Track.Source.Camera,
         });
+
+        await ensureRecordingStarted();
       } catch (error) {
         console.error("Unable to publish LiveKit camera feed:", error);
       }
@@ -137,6 +214,7 @@ export default function VideoPanel({ attemptId, timeLeft, onVideoReady }: Props)
 
     return () => {
       cancelled = true;
+      void ensureRecordingStopped();
       room.disconnect();
     };
   }, [attemptId]);

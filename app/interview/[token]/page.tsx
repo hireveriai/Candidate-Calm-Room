@@ -100,6 +100,7 @@ const MAX_ANSWER_TIME_MS = 3 * 60 * 1000;
 const STRICT_TAB_TERMINATION = false;
 const PENDING_TERMINATION_STORAGE_KEY = "hireveri.pendingTermination";
 const PENDING_COMPLETION_STORAGE_KEY = "hireveri.pendingCompletion";
+const PENDING_RECOVERY_EVENT_STORAGE_KEY = "hireveri.pendingRecoveryEvent";
 
 function isCodingQuestionType(
   questionType: string | null | undefined,
@@ -189,6 +190,7 @@ export default function Page() {
 
   const [started, setStarted] = useState(false);
   const [interviewFinished, setInterviewFinished] = useState(false);
+  const [interviewInterrupted, setInterviewInterrupted] = useState(false);
   const [completionMessage, setCompletionMessage] = useState(
     "Interview complete. Thank you for your time."
   );
@@ -216,6 +218,7 @@ export default function Page() {
   const inactivityTimeoutRef = useRef<any>(null);
   const disconnectTimeoutRef = useRef<any>(null);
   const interviewStartTimeRef = useRef<number | null>(null);
+  const serverClockOffsetMsRef = useRef(0);
   const questionStartTimeRef = useRef<number | null>(null);
   const focusTimeMsRef = useRef(0);
   const focusTotalMsRef = useRef(0);
@@ -230,6 +233,7 @@ export default function Page() {
   const terminationInFlightRef = useRef(false);
   const lastSignalSentRef = useRef<Record<string, number>>({});
   const lastSignalPayloadRef = useRef<Record<string, string>>({});
+  const lastWarRoomSyncAtRef = useRef<string | null>(null);
 
   const videoRef = useRef<any>(null);
 
@@ -298,6 +302,25 @@ export default function Page() {
     }
 
     window.localStorage.removeItem(PENDING_COMPLETION_STORAGE_KEY);
+  };
+
+  const persistPendingRecoveryEvent = (payload: unknown) => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.localStorage.setItem(
+      PENDING_RECOVERY_EVENT_STORAGE_KEY,
+      JSON.stringify(payload)
+    );
+  };
+
+  const clearPendingRecoveryEvent = () => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.localStorage.removeItem(PENDING_RECOVERY_EVENT_STORAGE_KEY);
   };
 
   const postJson = async <T,>(path: string, body: unknown): Promise<T> => {
@@ -378,6 +401,54 @@ export default function Page() {
     return data as TerminationResult;
   };
 
+  const postCompletionPayload = async (payload: CompletionPayload) => {
+    const url =
+      typeof window === "undefined"
+        ? "/api/session/complete"
+        : new URL("/api/session/complete", window.location.origin).toString();
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+      keepalive: true,
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error || "Failed to complete interview");
+    }
+
+    return data;
+  };
+
+  const postRecoveryEventPayload = async (payload: Record<string, unknown>) => {
+    const url =
+      typeof window === "undefined"
+        ? "/api/session/recovery-event"
+        : new URL("/api/session/recovery-event", window.location.origin).toString();
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+      keepalive: true,
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error || "Failed to record recovery event");
+    }
+
+    return data;
+  };
+
   const flushPendingTermination = async () => {
     if (typeof window === "undefined") {
       return;
@@ -413,6 +484,25 @@ export default function Page() {
       clearPendingCompletion();
     } catch {
       // Keep the payload for the next retry opportunity.
+    }
+  };
+
+  const flushPendingRecoveryEvent = async () => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const raw = window.localStorage.getItem(PENDING_RECOVERY_EVENT_STORAGE_KEY);
+    if (!raw) {
+      return;
+    }
+
+    try {
+      const payload = JSON.parse(raw) as Record<string, unknown>;
+      await postRecoveryEventPayload(payload);
+      clearPendingRecoveryEvent();
+    } catch {
+      // Keep the forensic recovery event queued for the next reconnect.
     }
   };
 
@@ -508,6 +598,56 @@ export default function Page() {
 
       terminationInFlightRef.current = false;
     }
+  };
+
+  const markInterviewInterrupted = async (
+    classifier: string,
+    reason: string,
+    options: { useBeacon?: boolean } = {}
+  ) => {
+    if (!attemptId || terminationInFlightRef.current) {
+      return;
+    }
+
+    const payload = {
+      attemptId,
+      classifier,
+      reason,
+      source: "candidate_calm_room",
+      idempotencyKey: `${attemptId}:${classifier}:${sessionQuestionId || "no-question"}`,
+      metadata: {
+        sessionQuestionId: sessionQuestionId || null,
+        questionId: questionId || null,
+        currentQuestion: currentQuestion || null,
+        transcriptBuffer: transcriptRef.current.trim() || transcript.trim() || null,
+        currentPhase: getCurrentPhaseFromState(verisState, showCoding),
+        serverEndsAt: sessionEndsAt ? new Date(sessionEndsAt).toISOString() : null,
+        browserOnline: typeof navigator !== "undefined" ? navigator.onLine : null,
+        userAgent: typeof navigator !== "undefined" ? navigator.userAgent : null,
+      },
+    };
+
+    try {
+      if (options.useBeacon && typeof navigator !== "undefined" && navigator.sendBeacon) {
+        const blob = new Blob([JSON.stringify(payload)], { type: "application/json" });
+        const accepted = navigator.sendBeacon("/api/session/recovery-event", blob);
+        if (!accepted) {
+          persistPendingRecoveryEvent(payload);
+        }
+      } else {
+        await postRecoveryEventPayload(payload);
+        clearPendingRecoveryEvent();
+      }
+    } catch {
+      persistPendingRecoveryEvent(payload);
+    }
+
+    setInterviewInterrupted(true);
+    await endInterview({
+      completed: false,
+      message:
+        "Your interview was interrupted. A recovery attempt may be issued by recruiter.",
+    });
   };
 
   const resetInactivityTimeout = () => {
@@ -670,6 +810,7 @@ export default function Page() {
   useEffect(() => {
     void flushPendingTermination();
     void flushPendingCompletion();
+    void flushPendingRecoveryEvent();
   }, []);
 
   useEffect(() => {
@@ -714,16 +855,18 @@ export default function Page() {
     const handleOffline = () => {
       clearTimeout(disconnectTimeoutRef.current);
       disconnectTimeoutRef.current = setTimeout(() => {
-        void terminateInterview("disconnect", {
-          message:
-            "Interview ended because the connection was lost for too long. A partial evaluation has been generated.",
-        });
+        void markInterviewInterrupted(
+          "NETWORK_ISSUE",
+          "Network disconnect detected"
+        );
       }, DISCONNECT_GRACE_MS);
     };
 
     const handleOnline = () => {
       clearTimeout(disconnectTimeoutRef.current);
       void flushPendingTermination();
+      void flushPendingCompletion();
+      void flushPendingRecoveryEvent();
     };
 
     window.addEventListener("offline", handleOffline);
@@ -751,8 +894,22 @@ export default function Page() {
         return;
       }
 
-      persistPendingTermination(payload);
-      void terminateInterview("tab_close", { useBeacon: true });
+      persistPendingRecoveryEvent({
+        attemptId: payload.attemptId,
+        classifier: "BROWSER_CRASH",
+        reason: "Browser page closed or refreshed",
+        source: "candidate_calm_room",
+        idempotencyKey: `${payload.attemptId}:BROWSER_CRASH:${sessionQuestionId || "no-question"}`,
+        metadata: {
+          sessionQuestionId: sessionQuestionId || null,
+          transcriptBuffer: transcriptRef.current.trim() || transcript.trim() || null,
+          currentPhase: payload.currentPhase,
+          pageLifecycle: "pagehide",
+        },
+      });
+      void markInterviewInterrupted("BROWSER_CRASH", "Browser page closed or refreshed", {
+        useBeacon: true,
+      });
     };
 
     window.addEventListener("pagehide", handlePageHide);
@@ -763,6 +920,47 @@ export default function Page() {
       window.removeEventListener("beforeunload", handlePageHide);
     };
   }, [attemptId, started, transcript, sessionQuestionId, verisState, showCoding]);
+
+  useEffect(() => {
+    if (!interviewFinished || !attemptId) {
+      return;
+    }
+
+    const handleCompletedPageHide = () => {
+      const payload = {
+        attemptId,
+        currentPhase: "closing",
+      } satisfies CompletionPayload;
+
+      persistPendingCompletion(payload);
+
+      if (typeof navigator !== "undefined" && navigator.sendBeacon) {
+        const body = JSON.stringify(payload);
+        const blob = new Blob([body], { type: "application/json" });
+        const accepted = navigator.sendBeacon("/api/session/complete", blob);
+
+        if (accepted) {
+          clearPendingCompletion();
+        }
+
+        return;
+      }
+
+      void postCompletionPayload(payload)
+        .then(() => {
+          clearPendingCompletion();
+        })
+        .catch(() => undefined);
+    };
+
+    window.addEventListener("pagehide", handleCompletedPageHide);
+    window.addEventListener("beforeunload", handleCompletedPageHide);
+
+    return () => {
+      window.removeEventListener("pagehide", handleCompletedPageHide);
+      window.removeEventListener("beforeunload", handleCompletedPageHide);
+    };
+  }, [attemptId, interviewFinished]);
 
   const askQuestion = async (
     question: string,
@@ -820,6 +1018,7 @@ export default function Page() {
         attemptNumber?: number;
         reused: boolean;
         endsAt?: string | Date | null;
+        serverNow?: string | null;
         candidateId?: string | null;
         candidateName?: string | null;
       }>("/api/session/start", {
@@ -827,6 +1026,9 @@ export default function Page() {
       });
 
       setAttemptId(session.attemptId);
+      serverClockOffsetMsRef.current = session.serverNow
+        ? new Date(session.serverNow).getTime() - Date.now()
+        : 0;
       setSessionEndsAt(session.endsAt ? new Date(session.endsAt).getTime() : null);
       setCandidateId(session.candidateId?.trim() ?? "");
       setCandidateName(session.candidateName?.trim() ?? "");
@@ -988,7 +1190,7 @@ export default function Page() {
     } satisfies CompletionPayload;
 
     try {
-      await postJson("/api/session/complete", completionPayload);
+      await postCompletionPayload(completionPayload);
       clearPendingCompletion();
     } catch {
       persistPendingCompletion(completionPayload);
@@ -1006,7 +1208,7 @@ export default function Page() {
     language: string;
   }) => {
     if (isAdvancingRef.current) return;
-    if (answerWindowEnded) {
+    if (answerWindowEnded && !sessionTimeEnded) {
       setWarning({
         type: "hard",
         message: "Answer window has expired.",
@@ -1077,7 +1279,8 @@ export default function Page() {
       const startTime = interviewStartTimeRef.current;
       if (!startTime) return;
 
-      setTimeLeft(Math.max(0, Math.floor((Date.now() - startTime) / 1000)));
+      const serverNow = Date.now() + serverClockOffsetMsRef.current;
+      setTimeLeft(Math.max(0, Math.floor((serverNow - startTime) / 1000)));
     }, 1000);
   };
 
@@ -1133,7 +1336,7 @@ export default function Page() {
 
   const handleAutoNext = async () => {
     if (isAdvancingRef.current) return;
-    if (answerWindowEnded) {
+    if (answerWindowEnded && !sessionTimeEnded) {
       setWarning({
         type: "hard",
         message: "Answer window has expired.",
@@ -1404,7 +1607,7 @@ export default function Page() {
     }
 
     const tick = () => {
-      const now = Date.now();
+      const now = Date.now() + serverClockOffsetMsRef.current;
 
       setSessionTimeEnded(Boolean(sessionEndsAt && now >= sessionEndsAt));
       setAnswerWindowEnded(
@@ -1421,6 +1624,59 @@ export default function Page() {
     return () => window.clearInterval(timer);
   }, [sessionEndsAt, sessionQuestionId, started]);
 
+  useEffect(() => {
+    if (!started || !attemptId) {
+      return;
+    }
+
+    let stopped = false;
+
+    const syncActions = async () => {
+      try {
+        const data = await postJson<{
+          actions: Array<{
+            actionId: string;
+            actionType: string;
+            recommendation: string | null;
+            note: string | null;
+            createdAt: string;
+          }>;
+          syncedAt: string;
+        }>("/api/session/war-room-actions", {
+          attemptId,
+          since: lastWarRoomSyncAtRef.current,
+        });
+
+        if (data.actions.length > 0) {
+          lastWarRoomSyncAtRef.current =
+            data.actions[data.actions.length - 1]?.createdAt ?? data.syncedAt;
+
+          const latest = data.actions[data.actions.length - 1];
+          addEvent({
+            type: "war_room_action",
+            severity:
+              latest.actionType === "flag_candidate" ? "high" : "medium",
+            meta: latest,
+          });
+        }
+      } catch {
+        // War-room sync is opportunistic; the next poll or reconnect will retry.
+      }
+    };
+
+    void syncActions();
+    const interval = window.setInterval(() => {
+      if (!stopped) {
+        void syncActions();
+      }
+    }, 5000);
+
+    return () => {
+      stopped = true;
+      window.clearInterval(interval);
+    };
+  }, [attemptId, started]);
+
   if (interviewFinished) {
     return (
       <div className="flex h-screen w-screen flex-col items-center justify-center bg-[#0B0F1A] px-6 text-white">
@@ -1433,6 +1689,24 @@ export default function Page() {
           </h1>
           <p className="text-sm leading-7 text-white/72 md:text-base">
             {completionMessage}
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (interviewInterrupted) {
+    return (
+      <div className="flex h-screen w-screen flex-col items-center justify-center bg-[#0B0F1A] px-6 text-white">
+        <div className="max-w-xl text-center">
+          <p className="mb-4 text-xs uppercase tracking-[0.28em] text-cyan-300/70">
+            Session Interrupted
+          </p>
+          <h1 className="mb-4 text-3xl font-medium tracking-[0.04em]">
+            Your interview was interrupted.
+          </h1>
+          <p className="text-sm leading-7 text-white/72 md:text-base">
+            A recovery attempt may be issued by recruiter.
           </p>
         </div>
       </div>
@@ -1470,7 +1744,7 @@ export default function Page() {
 
         <InterviewControls
           disabled={isTransitioning}
-          nextDisabled={answerWindowEnded}
+          nextDisabled={answerWindowEnded && !sessionTimeEnded}
           skipDisabled={sessionTimeEnded}
           primaryLabel={sessionTimeEnded ? "Finish Answer" : "Next Question"}
           message={

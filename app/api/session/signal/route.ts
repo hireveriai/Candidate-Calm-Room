@@ -1,4 +1,5 @@
 import { prisma } from "@/app/lib/prisma";
+import { assertUuid, logInterviewEvent } from "@/app/lib/interviewReliability";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -37,11 +38,18 @@ export async function POST(request: Request) {
       );
     }
 
+    assertUuid(attemptId, "attemptId");
+
     const [signal] = await prisma.$queryRaw<InterviewSignalRecord[]>`
       insert into interview_signals (attempt_id, type, value)
       values (${attemptId}::uuid, ${type}, ${JSON.stringify(value)}::jsonb)
       returning signal_id, attempt_id, type, value, created_at
     `;
+
+    logInterviewEvent("info", "signal.recorded", {
+      attemptId,
+      eventType: type,
+    });
 
     return Response.json(signal);
   } catch (error) {

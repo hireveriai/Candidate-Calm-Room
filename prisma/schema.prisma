@@ -462,6 +462,20 @@ model interview_attempts {
   attempt_id                  String                       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   interview_id                String                       @db.Uuid
   attempt_number              Int
+  interruption_reason         String?
+  interruption_detected_at    DateTime?                    @db.Timestamptz(6)
+  transcript_status           String                       @default("PENDING")
+  recording_status            String                       @default("PENDING")
+  timer_remaining_seconds     Int?
+  inherited_from_attempt_id   String?                      @db.Uuid
+  recovery_link_issued_at     DateTime?                    @db.Timestamptz(6)
+  recovery_link_expires_at    DateTime?                    @db.Timestamptz(6)
+  recovery_decision           String?
+  recovery_decided_by         String?                      @db.Uuid
+  recovery_decided_at         DateTime?                    @db.Timestamptz(6)
+  recovery_token_hash         String?
+  recovery_token_used_at      DateTime?                    @db.Timestamptz(6)
+  recovery_policy             Json                         @default("{}")
   started_at                  DateTime                     @default(now()) @db.Timestamptz(6)
   ended_at                    DateTime?                    @db.Timestamptz(6)
   ends_at                     DateTime?                    @default(dbgenerated("(now() + '00:30:00'::interval)")) @db.Timestamptz(6)
@@ -486,6 +500,10 @@ model interview_attempts {
   candidate_resume_ai         candidate_resume_ai[]
   interview_answers           interview_answers[]
   interview_attempt_scores    interview_attempt_scores?
+  recovery_parent             interview_attempts?          @relation("attempt_recovery_parent", fields: [inherited_from_attempt_id], references: [attempt_id], onDelete: NoAction, onUpdate: NoAction)
+  recovery_attempts           interview_attempts[]         @relation("attempt_recovery_parent")
+  interview_recovery_events   interview_recovery_events[]
+  inherited_recovery_events   interview_recovery_events[]  @relation("recovery_event_inherited_from")
   interviews                  interviews                   @relation(fields: [interview_id], references: [interview_id], onDelete: Cascade, onUpdate: NoAction)
   interview_mission_snapshots interview_mission_snapshots? @relation(fields: [mission_snapshot_id], references: [snapshot_id], onDelete: NoAction, onUpdate: NoAction)
   interview_evaluations       interview_evaluations?
@@ -496,6 +514,26 @@ model interview_attempts {
   @@unique([interview_id, attempt_number], map: "uq_interview_attempt")
   @@unique([interview_id, attempt_number], map: "uq_interview_attempts_interview_attempt")
   @@index([interview_id, status], map: "idx_attempt_interview_status")
+}
+
+model interview_recovery_events {
+  recovery_event_id        String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  interview_id             String              @db.Uuid
+  attempt_id               String?             @db.Uuid
+  inherited_from_attempt_id String?             @db.Uuid
+  event_type               String
+  classifier               String?
+  reason                   String?
+  source                   String              @default("system")
+  idempotency_key          String?
+  occurred_at              DateTime            @default(now()) @db.Timestamptz(6)
+  actor_id                 String?             @db.Uuid
+  metadata                 Json                @default("{}")
+  interviews               interviews          @relation(fields: [interview_id], references: [interview_id], onDelete: Cascade, onUpdate: NoAction)
+  interview_attempts       interview_attempts? @relation(fields: [attempt_id], references: [attempt_id], onDelete: NoAction, onUpdate: NoAction)
+  inherited_from_attempt   interview_attempts? @relation("recovery_event_inherited_from", fields: [inherited_from_attempt_id], references: [attempt_id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([interview_id, occurred_at], map: "idx_recovery_events_interview_time")
 }
 
 model interview_blueprints {
@@ -592,10 +630,17 @@ model interview_recordings {
   recording_id   String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   attempt_id     String?   @db.Uuid
   audio_url      String?
+  room_name      String?
+  egress_id      String?   @unique(map: "idx_interview_recordings_egress_id")
+  status         String?   @default("recording")
+  video_url      String?
+  file_path      String?
   transcript     String?
   retention_days Int?      @default(30)
   expires_at     DateTime? @db.Timestamptz(6)
   created_at     DateTime? @default(now()) @db.Timestamptz(6)
+  started_at     DateTime? @default(now()) @db.Timestamptz(6)
+  ended_at       DateTime? @db.Timestamptz(6)
 }
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
@@ -660,7 +705,11 @@ model interviews {
   required_follow_up_questions Int                            @default(2)
   ai_strictness                String?                        @default("MEDIUM")
   resume_ai_enabled            Boolean?                       @default(true)
-  max_attempts                 Int?                           @default(1)
+  max_attempts                 Int?                           @default(2)
+  recovery_allowed             Boolean                        @default(true)
+  recovery_used                Boolean                        @default(false)
+  final_status                 String?
+  forensic_timeline_id         String?                        @db.Uuid
   proctoring_enabled           Boolean?                       @default(true)
   candidate_resume_ai          candidate_resume_ai[]
   identity_verification_assets identity_verification_assets[]
@@ -670,6 +719,7 @@ model interviews {
   interview_question_map       interview_question_map[]
   interview_questions          interview_questions[]
   interview_results            interview_results?
+  interview_recovery_events    interview_recovery_events[]
   interview_skill_map          interview_skill_map[]
   candidates                   candidates                     @relation(fields: [candidate_id], references: [candidate_id], onDelete: NoAction, onUpdate: NoAction)
   users                        users?                         @relation(fields: [created_by], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
@@ -871,6 +921,7 @@ model session_questions {
   skill_master              skill_master?       @relation(fields: [mapped_skill_id], references: [skill_id], onDelete: NoAction, onUpdate: NoAction)
 
   @@index([attempt_id, question_order], map: "idx_session_questions_attempt_order")
+  @@unique([attempt_id, question_order], map: "uq_session_questions_attempt_order")
   @@index([parent_session_question_id], map: "idx_session_questions_parent")
 }
 

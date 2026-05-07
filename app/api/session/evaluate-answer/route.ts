@@ -1,4 +1,5 @@
 import { prisma } from "@/app/lib/prisma";
+import { assertUuid, logInterviewEvent } from "@/app/lib/interviewReliability";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -65,6 +66,15 @@ function clamp01(value: unknown) {
 
 function normalizeText(value: string | null | undefined) {
   return value?.replace(/\s+/g, " ").trim() ?? "";
+}
+
+function hasMissingRecordEvaluationFunction(error: unknown) {
+  return (
+    error instanceof Error &&
+    error.message.includes("Raw query failed") &&
+    error.message.includes("record_answer_evaluation") &&
+    error.message.includes("does not exist")
+  );
 }
 
 function deriveSkillType(
@@ -292,6 +302,9 @@ export async function POST(request: Request) {
       );
     }
 
+    assertUuid(answerId, "answerId");
+    assertUuid(sessionQuestionId, "sessionQuestionId");
+
     const contextRows = await prisma.$queryRaw<QuestionContextRow[]>`
       select
         ia.answer_id,
@@ -378,20 +391,53 @@ export async function POST(request: Request) {
       },
     };
 
-    await prisma.$queryRaw`
-      select *
-      from public.record_answer_evaluation(
-        ${answerId}::uuid,
-        ${evaluation.skill_score}::numeric,
-        ${evaluation.clarity_score}::numeric,
-        ${evaluation.depth_score}::numeric,
-        ${evaluation.confidence_score}::numeric,
-        ${evaluation.fraud_score}::numeric,
-        ${evaluation.reasoning}::text,
-        ${context.skill_id}::uuid,
-        ${JSON.stringify(evaluation.evaluation_json)}::jsonb
-      )
-    `;
+    try {
+      await prisma.$queryRaw`
+        select *
+        from public.record_answer_evaluation(
+          ${answerId}::uuid,
+          ${evaluation.skill_score}::numeric,
+          ${evaluation.clarity_score}::numeric,
+          ${evaluation.depth_score}::numeric,
+          ${evaluation.confidence_score}::numeric,
+          ${evaluation.fraud_score}::numeric,
+          ${evaluation.reasoning}::text,
+          ${context.skill_id}::uuid,
+          ${JSON.stringify(evaluation.evaluation_json)}::jsonb
+        )
+      `;
+    } catch (error) {
+      if (!hasMissingRecordEvaluationFunction(error)) {
+        throw error;
+      }
+
+      await prisma.$executeRaw`
+        insert into public.interview_answer_evaluations (
+          answer_id,
+          evaluator_type,
+          score,
+          feedback,
+          evaluated_at
+        )
+        values (
+          ${answerId}::uuid,
+          ${"AI"}::text,
+          ${evaluation.skill_score}::numeric,
+          ${evaluation.reasoning}::text,
+          now()
+        )
+        on conflict do nothing
+      `;
+    }
+
+    logInterviewEvent("info", "answer.evaluated", {
+      attemptId: context.attempt_id,
+      aiLatencyMs: null,
+      score: evaluation.skill_score,
+      clarityScore: evaluation.clarity_score,
+      confidenceScore: evaluation.confidence_score,
+      fraudScore: evaluation.fraud_score,
+    });
 
     return Response.json({
       answer_id: answerId,

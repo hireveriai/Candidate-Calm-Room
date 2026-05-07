@@ -1,4 +1,5 @@
 export const MAX_ANSWER_TIME = 3 * 60 * 1000;
+export const FINAL_ANSWER_GRACE_MS = 8 * 60 * 1000;
 
 type SessionTiming = {
   ends_at: Date | string | null;
@@ -14,7 +15,8 @@ export function canAskNextQuestion(session: SessionTiming) {
 
 export function canSubmitAnswer(
   session: SessionTiming,
-  sessionQuestion: SessionQuestionTiming
+  sessionQuestion: SessionQuestionTiming,
+  options: { allowFinalGrace?: boolean } = {}
 ) {
   if (!session.ends_at || !sessionQuestion.asked_at) {
     return false;
@@ -24,7 +26,11 @@ export function canSubmitAnswer(
   const askedAt = new Date(sessionQuestion.asked_at);
   const endsAt = new Date(session.ends_at);
 
-  return askedAt <= endsAt && now.getTime() - askedAt.getTime() <= MAX_ANSWER_TIME;
+  const answerLimitMs = options.allowFinalGrace
+    ? Math.max(MAX_ANSWER_TIME, FINAL_ANSWER_GRACE_MS)
+    : MAX_ANSWER_TIME;
+
+  return askedAt <= endsAt && now.getTime() - askedAt.getTime() <= answerLimitMs;
 }
 
 export function getRemainingSessionMs(session: SessionTiming) {

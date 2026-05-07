@@ -7,6 +7,7 @@ import {
   type JsonValue,
 } from "@/app/lib/calmAnswerPipeline";
 import { canSubmitAnswer } from "@/app/lib/calmTiming";
+import { assertUuid, logInterviewEvent } from "@/app/lib/interviewReliability";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -63,6 +64,8 @@ export async function POST(request: Request) {
       );
     }
 
+    assertUuid(sessionQuestionId, "sessionQuestionId");
+
     const context = await getSessionQuestionContext({ sessionQuestionId });
 
     if (!context) {
@@ -82,7 +85,8 @@ export async function POST(request: Request) {
     if (
       !canSubmitAnswer(
         { ends_at: context.ends_at },
-        { asked_at: context.asked_at }
+        { asked_at: context.asked_at },
+        { allowFinalGrace: true }
       )
     ) {
       return Response.json(
@@ -112,6 +116,14 @@ export async function POST(request: Request) {
     console.log(
       `[session/answer] final-save ${Date.now() - startedAt}ms status=completed`
     );
+    logInterviewEvent("info", "answer.completed", {
+      attemptId: context.attempt_id,
+      candidateId: context.candidate_id,
+      questionSequence: null,
+      aiLatencyMs: Date.now() - startedAt,
+      state: "ANSWER_PROCESSING",
+      nextState: "FOLLOWUP_GENERATING",
+    });
 
     return Response.json(result.record satisfies AnswerRecord);
   } catch (error) {

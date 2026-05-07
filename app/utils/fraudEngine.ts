@@ -13,6 +13,7 @@ export function calculateFraudScore(events: TimelineEvent[]) {
     coding_end: 0,
     coding_copy: 25,
     coding_paste: 25,
+    war_room_action: 0,
   };
 
   events.forEach((e) => {

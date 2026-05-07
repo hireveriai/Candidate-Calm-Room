@@ -346,6 +346,20 @@ async function ensureGeneratingAnswer(input: GenerateAnswerInput) {
       ${JSON.stringify(startingPayload)}::jsonb,
       ${"generating"}::text
     )
+    on conflict (session_question_id)
+    do update
+    set status = case
+          when public.interview_answers.status = 'completed'
+            and nullif(trim(coalesce(public.interview_answers.answer_text, '')), '') is not null
+          then public.interview_answers.status
+          else excluded.status
+        end,
+        answer_payload = case
+          when public.interview_answers.status = 'completed'
+            and nullif(trim(coalesce(public.interview_answers.answer_text, '')), '') is not null
+          then public.interview_answers.answer_payload
+          else excluded.answer_payload
+        end
     returning
       answer_id,
       attempt_id,
@@ -360,6 +374,13 @@ async function ensureGeneratingAnswer(input: GenerateAnswerInput) {
 
   if (!record) {
     throw new Error("Answer creation failed");
+  }
+
+  if (record.status === "completed" && normalizeText(record.answer_text)) {
+    return {
+      record,
+      alreadyCompleted: true,
+    };
   }
 
   return {

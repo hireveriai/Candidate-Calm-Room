@@ -1,5 +1,6 @@
 import { prisma } from "@/app/lib/prisma";
 import { resolveEffectiveQuestionCount } from "@/app/lib/interviewBudget";
+import { assertUuid, logInterviewEvent } from "@/app/lib/interviewReliability";
 
 type TerminationType =
   | "manual_exit"
@@ -474,6 +475,29 @@ export async function finalizeInterviewAttempt(params: {
   terminationType?: TerminationType;
   currentPhase?: string | null;
 }) {
+  const attemptId = assertUuid(params.attemptId, "attemptId");
+  const transitionRows = await prisma.$queryRaw<Array<{ status: string }>>`
+    update public.interview_attempts
+    set status = case
+          when upper(status) = 'COMPLETED' then status
+          else ${params.terminationType === "timeout" ? "TIME_EXPIRED" : "COMPLETING"}::text
+        end
+    where attempt_id = ${attemptId}::uuid
+    returning status
+  `;
+
+  if (!transitionRows[0]) {
+    throw new Error("Interview attempt not found");
+  }
+
+  logInterviewEvent("info", "interview.completion_started", {
+    attemptId,
+    state: transitionRows[0].status,
+    nextState: "COMPLETED",
+    terminationType: params.terminationType ?? null,
+    earlyExit: params.earlyExit,
+  });
+
   const attempts = await prisma.$queryRaw<AttemptContextRow[]>`
     select
       ia.attempt_id,
@@ -506,7 +530,7 @@ export async function finalizeInterviewAttempt(params: {
     from public.interview_attempts ia
     join public.interviews i
       on i.interview_id = ia.interview_id
-    where ia.attempt_id = ${params.attemptId}::uuid
+    where ia.attempt_id = ${attemptId}::uuid
     limit 1
   `;
 
@@ -517,11 +541,11 @@ export async function finalizeInterviewAttempt(params: {
   }
 
   const [aggregates, latestQuestions] = await Promise.all([
-    loadScoreAggregates(params.attemptId),
+    loadScoreAggregates(attemptId),
     prisma.$queryRaw<LatestQuestionRow[]>`
       select question_kind, content
       from public.session_questions
-      where attempt_id = ${params.attemptId}::uuid
+      where attempt_id = ${attemptId}::uuid
       order by question_order desc, asked_at desc nulls last
       limit 1
     `,
@@ -579,7 +603,7 @@ export async function finalizeInterviewAttempt(params: {
   });
   const rawEvents = [
     ...(params.terminationType === "manual_exit" ? ["manual_exit"] : []),
-    ...(await loadSignalTypes(params.attemptId)),
+    ...(await loadSignalTypes(attemptId)),
   ];
   const behavioralFlags = mapEvents(rawEvents);
   const riskScore = clamp(
@@ -660,7 +684,7 @@ export async function finalizeInterviewAttempt(params: {
           'behavioral_flags', ${JSON.stringify(behavioralFlags)}::jsonb,
           'reason', ${reason}::text
         )
-    where attempt_id = ${params.attemptId}::uuid
+    where attempt_id = ${attemptId}::uuid
   `;
 
   await prisma.$executeRaw`
@@ -675,7 +699,7 @@ export async function finalizeInterviewAttempt(params: {
       interview_id
     )
     values (
-      ${params.attemptId}::uuid,
+      ${attemptId}::uuid,
       ${expectedQuestions}::integer,
       ${questionsAnswered}::integer,
       ${round(baseScore / 100, 4)},
@@ -706,7 +730,7 @@ export async function finalizeInterviewAttempt(params: {
       created_at
     )
     values (
-      ${params.attemptId}::uuid,
+      ${attemptId}::uuid,
       ${Math.round(finalScore)}::integer,
       ${riskLevel}::text,
       ${strengths.join(", ")}::text,
@@ -734,7 +758,7 @@ export async function finalizeInterviewAttempt(params: {
       is_locked
     )
     values (
-      ${params.attemptId}::uuid,
+      ${attemptId}::uuid,
       ${finalScore},
       ${evaluationDecision}::text,
       ${reason}::text,
@@ -786,6 +810,21 @@ export async function finalizeInterviewAttempt(params: {
           decided_at = excluded.decided_at
     `;
   }
+
+  logInterviewEvent("info", "interview.completed", {
+    attemptId,
+    interviewId: attempt.interview_id,
+    state: "COMPLETING",
+    nextState: "COMPLETED",
+    timerState: {
+      elapsedSeconds,
+      durationMinutes: attempt.duration_minutes,
+    },
+    score: finalScore,
+    riskLevel,
+    questionsAnswered,
+    expectedQuestions,
+  });
 
   return {
     score: finalScore,

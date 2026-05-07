@@ -11,7 +11,8 @@ export type EventType =
   | "coding_start"
   | "coding_end"
   | "coding_copy"
-  | "coding_paste";
+  | "coding_paste"
+  | "war_room_action";
 
 export type TimelineEvent = {
   type: EventType;

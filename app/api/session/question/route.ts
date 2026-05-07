@@ -1,5 +1,6 @@
 import { prisma } from "@/app/lib/prisma";
 import { canAskNextQuestion } from "@/app/lib/calmTiming";
+import { assertUuid, logInterviewEvent } from "@/app/lib/interviewReliability";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -29,6 +30,7 @@ type ExistingSessionQuestionRow = {
   source: string;
   asked_at: Date | null;
   question_kind?: string | null;
+  question_order?: number | null;
 };
 
 type AttemptInterviewRow = {
@@ -59,6 +61,8 @@ export async function POST(request: Request) {
       );
     }
 
+    assertUuid(attemptId, "attemptId");
+
     const fallbackStartedAt = Date.now();
     const existingQuestions = await prisma.$queryRaw<ExistingSessionQuestionRow[]>`
       select
@@ -67,7 +71,8 @@ export async function POST(request: Request) {
         content,
         source,
         asked_at,
-        question_kind
+        question_kind,
+        question_order
       from public.session_questions
       where attempt_id = ${attemptId}::uuid
       order by question_order desc nulls last, asked_at desc nulls last, session_question_id desc
@@ -88,7 +93,7 @@ export async function POST(request: Request) {
       return Response.json({
         ...existingQuestion,
         question_kind: existingQuestion.question_kind ?? "core",
-        question_order: 1,
+        question_order: existingQuestion.question_order ?? 1,
         question_type: questionTypes[0]?.question_type ?? null,
       } satisfies SessionQuestionRow);
     }
@@ -139,19 +144,40 @@ export async function POST(request: Request) {
         ${"core"}::text,
         ${1}::integer
       )
+      on conflict (attempt_id, question_order)
+      do update
+      set content = public.session_questions.content
       returning
         session_question_id,
         question_id,
         content,
         source,
         asked_at,
-        question_kind
+        question_kind,
+        question_order
     `;
     const createdQuestion = createdQuestions[0];
+
+    await prisma.$executeRaw`
+      update public.interview_attempts
+      set status = ${"QUESTION_ACTIVE"}::text,
+          current_phase = ${"warmup"}::text
+      where attempt_id = ${attemptId}::uuid
+        and upper(status) not in ('COMPLETED', 'COMPLETING', 'TIME_EXPIRED')
+    `;
 
     console.log(
       `[session/question] fallback:create ${Date.now() - fallbackStartedAt}ms total=${Date.now() - startedAt}ms`
     );
+    logInterviewEvent("info", "question.initial_ready", {
+      attemptId,
+      interviewId: attempt.interview_id,
+      questionSequence: createdQuestion.question_order ?? 1,
+      aiLatencyMs: Date.now() - fallbackStartedAt,
+      state: "QUESTION_GENERATING",
+      nextState: "QUESTION_ACTIVE",
+      timerState: { endsAt: attempt.ends_at },
+    });
 
     return Response.json({
       ...createdQuestion,

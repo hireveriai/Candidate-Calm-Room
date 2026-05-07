@@ -2,6 +2,13 @@ import { finalizeInterviewAttempt } from "@/app/lib/interviewCompletion";
 import { canAskNextQuestion } from "@/app/lib/calmTiming";
 import { prisma } from "@/app/lib/prisma";
 import {
+  assertUuid,
+  getTimerState,
+  logInterviewEvent,
+  retryWithFallback,
+} from "@/app/lib/interviewReliability";
+import { syncWarRoomActionsToCalm } from "@/app/lib/warRoomSync";
+import {
   buildAskedQuestionState,
   buildFallbackCoreQuestion,
   buildInterviewBlueprint,
@@ -96,6 +103,8 @@ type CreatedSessionQuestionRow = {
 
 type LatestEvaluationRow = {
   skill_score: string | number | null;
+  clarity_score?: string | number | null;
+  confidence_score?: string | number | null;
   fraud_score?: string | number | null;
 };
 
@@ -378,6 +387,73 @@ function buildFollowUpQuestion(lastAnswer: string | null | undefined) {
   return "Can you walk me through one recent project, your responsibilities, and the outcome?";
 }
 
+function buildGuaranteedFollowUpQuestion(input: {
+  lastQuestion: string | null | undefined;
+  lastAnswer: string | null | undefined;
+  skillBeingTested: string | null;
+  skillType: "technical" | "functional" | "behavioral";
+  skillScore: number;
+  clarityScore: number;
+  confidenceScore: number;
+  fraudScore: number;
+}) {
+  const summary = summarizeAnswer(input.lastAnswer);
+  const focus =
+    input.skillBeingTested ??
+    summary.skills[0] ??
+    summary.tools[0] ??
+    "the approach you just described";
+  const vagueAnswer =
+    !summary.cleanedText ||
+    summary.cleanedText.split(/\s+/).length < 35 ||
+    input.clarityScore > 0 && input.clarityScore < 0.5;
+  const lowConfidence =
+    input.confidenceScore > 0 && input.confidenceScore < 0.5;
+
+  if (input.fraudScore >= 0.65) {
+    return {
+      followUpQuestion: `Can you verify the exact sequence of actions you personally took on ${focus}, including one measurable result?`,
+      intent: "contradiction",
+    } satisfies FollowUpGenerationResult;
+  }
+
+  if (vagueAnswer || lowConfidence) {
+    return {
+      followUpQuestion: `Can you give one concrete example of ${focus}, including the problem, your exact steps, and the outcome?`,
+      intent: "clarification",
+    } satisfies FollowUpGenerationResult;
+  }
+
+  if (input.skillScore >= 0.75) {
+    return {
+      followUpQuestion:
+        input.skillType === "technical"
+          ? `What edge case or failure mode did you account for while working with ${focus}, and how did you validate the fix?`
+          : `What trade-off did you make while handling ${focus}, and how did you know it was the right decision?`,
+      intent: "probe",
+    } satisfies FollowUpGenerationResult;
+  }
+
+  if (input.skillType === "technical") {
+    return {
+      followUpQuestion: `Walk me through how you would debug ${focus} if it failed during a live production incident?`,
+      intent: "probe",
+    } satisfies FollowUpGenerationResult;
+  }
+
+  if (input.skillType === "behavioral") {
+    return {
+      followUpQuestion: `What was the hardest decision in that situation, and what changed because of your action?`,
+      intent: "probe",
+    } satisfies FollowUpGenerationResult;
+  }
+
+  return {
+    followUpQuestion: buildFollowUpQuestion(input.lastAnswer),
+    intent: "probe",
+  } satisfies FollowUpGenerationResult;
+}
+
 function normalizeIntent(value: unknown): FollowUpIntent {
   if (value === "clarification" || value === "probe" || value === "contradiction") {
     return value;
@@ -445,18 +521,38 @@ async function generateAiFollowUpQuestion(input: {
   skillBeingTested: string | null;
   skillType: "technical" | "functional" | "behavioral";
   skillScore: number;
+  clarityScore: number;
+  confidenceScore: number;
   fraudScore: number;
 }) {
-  const fallbackQuestion = buildFollowUpQuestion(input.lastAnswer);
+  const fallback = buildGuaranteedFollowUpQuestion({
+    lastQuestion: input.lastQuestion,
+    lastAnswer: input.lastAnswer,
+    skillBeingTested: input.skillBeingTested,
+    skillType: input.skillType,
+    skillScore: input.skillScore,
+    clarityScore: input.clarityScore,
+    confidenceScore: input.confidenceScore,
+    fraudScore: input.fraudScore,
+  });
 
   if (!process.env.OPENAI_API_KEY) {
-    return {
-      followUpQuestion: fallbackQuestion,
-      intent: input.fraudScore >= 0.65 ? "contradiction" : "probe",
-    } satisfies FollowUpGenerationResult;
+    return fallback;
   }
 
-  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+  return retryWithFallback<FollowUpGenerationResult>({
+    attempts: 2,
+    timeoutMs: 8000,
+    fallback: () => fallback,
+    onFailure: (error, attempt, latencyMs) => {
+      logInterviewEvent("warn", "ai.followup_generation_failed", {
+        aiLatencyMs: latencyMs,
+        attempt,
+        prismaFailure: error,
+      });
+    },
+    operation: async () => {
+      const response = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -513,8 +609,12 @@ async function generateAiFollowUpQuestion(input: {
               extracted_experience: input.answerSummary.experience,
               extracted_key_points: input.answerSummary.keyPoints,
               score: input.skillScore,
+              clarity_score: input.clarityScore,
+              confidence_score: input.confidenceScore,
               signals: [
                 input.skillScore <= 0.45 ? "vague" : null,
+                input.clarityScore <= 0.5 ? "unclear" : null,
+                input.confidenceScore <= 0.5 ? "low_confidence" : null,
                 input.skillScore >= 0.75 ? "strong" : null,
                 input.fraudScore >= 0.65 ? "inconsistent" : null,
                 input.fraudScore >= 0.5 ? "contradiction_risk" : null,
@@ -526,38 +626,40 @@ async function generateAiFollowUpQuestion(input: {
         },
       ],
     }),
+      });
+
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`Follow-up generation failed: ${text}`);
+      }
+
+      const payload = await response.json();
+      const content = payload?.choices?.[0]?.message?.content;
+
+      if (typeof content !== "string" || !content.trim()) {
+        throw new Error("Follow-up generation returned an empty response");
+      }
+
+      let parsed: Record<string, unknown>;
+
+      try {
+        parsed = JSON.parse(content);
+      } catch {
+        throw new Error("Follow-up generation returned invalid JSON");
+      }
+
+      return {
+        followUpQuestion: sanitizeFollowUpQuestion(
+          typeof parsed.follow_up_question === "string"
+            ? parsed.follow_up_question
+            : null,
+          fallback.followUpQuestion,
+          input.lastQuestion
+        ),
+        intent: normalizeIntent(parsed.intent),
+      } satisfies FollowUpGenerationResult;
+    },
   });
-
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Follow-up generation failed: ${text}`);
-  }
-
-  const payload = await response.json();
-  const content = payload?.choices?.[0]?.message?.content;
-
-  if (typeof content !== "string" || !content.trim()) {
-    throw new Error("Follow-up generation returned an empty response");
-  }
-
-  let parsed: Record<string, unknown>;
-
-  try {
-    parsed = JSON.parse(content);
-  } catch {
-    throw new Error("Follow-up generation returned invalid JSON");
-  }
-
-  return {
-    followUpQuestion: sanitizeFollowUpQuestion(
-      typeof parsed.follow_up_question === "string"
-        ? parsed.follow_up_question
-        : null,
-      fallbackQuestion,
-      input.lastQuestion
-    ),
-    intent: normalizeIntent(parsed.intent),
-  } satisfies FollowUpGenerationResult;
 }
 
 export async function POST(request: Request) {
@@ -574,6 +676,14 @@ export async function POST(request: Request) {
         { status: 400 }
       );
     }
+
+    assertUuid(attemptId, "attemptId");
+    void syncWarRoomActionsToCalm({ attemptId }).catch((error) => {
+      logInterviewEvent("warn", "war_room.sync_failed", {
+        attemptId,
+        prismaFailure: error,
+      });
+    });
 
     const createStartedAt = Date.now();
     let sessionQuestion: NextQuestionRow | undefined;
@@ -644,6 +754,18 @@ export async function POST(request: Request) {
         { status: 404 }
       );
     }
+
+    const timerState = getTimerState({
+      startedAt: attempt.started_at,
+      endsAt: attempt.ends_at,
+    });
+    logInterviewEvent("info", "question.next_requested", {
+      attemptId,
+      interviewId: attempt.interview_id,
+      timerState,
+      state: "ANSWER_PROCESSING",
+      nextState: "QUESTION_GENERATING",
+    });
 
     if (!canAskNextQuestion({ ends_at: attempt.ends_at })) {
       const completionResult = await finalizeInterviewAttempt({
@@ -816,6 +938,13 @@ export async function POST(request: Request) {
     });
 
     if (completion.complete) {
+      await prisma.$executeRaw`
+        update public.interview_attempts
+        set status = ${completion.timeExceeded ? "TIME_EXPIRED" : "COMPLETING"}::text
+        where attempt_id = ${attemptId}::uuid
+          and upper(status) not in ('COMPLETED', 'COMPLETING')
+      `;
+
       sessionQuestion = {
         session_question_id: null,
         question_id: null,
@@ -850,6 +979,8 @@ export async function POST(request: Request) {
             await prisma.$queryRaw<LatestEvaluationRow[]>`
               select
                 iae.skill_score,
+                iae.clarity_score,
+                iae.confidence_score,
                 iae.fraud_score
               from public.interview_answers ia
               join public.interview_answer_evaluations iae
@@ -869,6 +1000,8 @@ export async function POST(request: Request) {
             await prisma.$queryRaw<LatestEvaluationRow[]>`
               select
                 iae.score as skill_score,
+                iae.score as clarity_score,
+                iae.score as confidence_score,
                 ${null}::numeric as fraud_score
               from public.interview_answers ia
               join public.interview_answer_evaluations iae
@@ -888,6 +1021,8 @@ export async function POST(request: Request) {
         ? effectiveLastAnswer.trim().split(/\s+/).length
         : 0;
       const skillScore = asNumber(latestEvaluation?.skill_score);
+      const clarityScore = asNumber(latestEvaluation?.clarity_score);
+      const confidenceScore = asNumber(latestEvaluation?.confidence_score);
       const fraudScore = asNumber(latestEvaluation?.fraud_score);
       const targetDifficulty =
         completion.shouldAvoidDeepQuestions
@@ -982,6 +1117,8 @@ export async function POST(request: Request) {
             skillBeingTested: followUpSkillBeingTested,
             skillType: followUpSkillType,
             skillScore,
+            clarityScore,
+            confidenceScore,
             fraudScore,
           });
         } catch (error) {
@@ -1008,6 +1145,9 @@ export async function POST(request: Request) {
               ${"follow_up"}::text,
               ${askedTotal + 1}::integer
             )
+            on conflict (attempt_id, question_order)
+            do update
+            set content = public.session_questions.content
             returning
               session_question_id,
               question_id,
@@ -1036,6 +1176,9 @@ export async function POST(request: Request) {
               ${"core"}::text,
               ${askedTotal + 1}::integer
             )
+            on conflict (attempt_id, question_order)
+            do update
+            set content = public.session_questions.content
             returning
               session_question_id,
               question_id,
@@ -1100,6 +1243,9 @@ export async function POST(request: Request) {
               ${"core"}::text,
               ${askedTotal + 1}::integer
             )
+            on conflict (attempt_id, question_order)
+            do update
+            set content = public.session_questions.content
             returning
               session_question_id,
               question_id,
@@ -1136,6 +1282,8 @@ export async function POST(request: Request) {
             skillBeingTested: followUpSkillBeingTested,
             skillType: followUpSkillType,
             skillScore,
+            clarityScore,
+            confidenceScore,
             fraudScore,
           });
         } catch (error) {
@@ -1162,6 +1310,9 @@ export async function POST(request: Request) {
               ${"follow_up"}::text,
               ${askedTotal + 1}::integer
             )
+            on conflict (attempt_id, question_order)
+            do update
+            set content = public.session_questions.content
             returning
               session_question_id,
               question_id,
@@ -1198,6 +1349,30 @@ export async function POST(request: Request) {
             is_complete: true,
             follow_up_intent: null,
           });
+
+      if (createdQuestion) {
+        await prisma.$executeRaw`
+          update public.interview_attempts
+          set status = ${"QUESTION_ACTIVE"}::text,
+              current_phase = ${createdQuestion.question_kind === "follow_up" ? "probe" : "core"}::text
+          where attempt_id = ${attemptId}::uuid
+            and upper(status) not in ('COMPLETED', 'COMPLETING', 'TIME_EXPIRED')
+        `;
+
+        logInterviewEvent("info", "question.created", {
+          attemptId,
+          interviewId: attempt.interview_id,
+          questionSequence: askedTotal + 1,
+          aiLatencyMs: Date.now() - createStartedAt,
+          state:
+            createdQuestion.question_kind === "follow_up"
+              ? "FOLLOWUP_GENERATING"
+              : "QUESTION_GENERATING",
+          nextState: "QUESTION_ACTIVE",
+          timerState,
+          followUpIntent: generatedFollowUp?.intent ?? null,
+        });
+      }
     }
 
     console.log(
@@ -1250,6 +1425,10 @@ export async function POST(request: Request) {
     console.log(
       `[session/next-question] error after ${Date.now() - startedAt}ms: ${message}`
     );
+    logInterviewEvent("error", "question.next_failed", {
+      aiLatencyMs: Date.now() - startedAt,
+      prismaFailure: error,
+    });
 
     return Response.json({ error: message }, { status: 500 });
   }

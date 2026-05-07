@@ -1,4 +1,5 @@
 import { finalizeInterviewAttempt } from "@/app/lib/interviewCompletion";
+import { assertUuid, logInterviewEvent } from "@/app/lib/interviewReliability";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -51,6 +52,8 @@ export async function POST(request: Request) {
       return Response.json({ error: "attemptId is required" }, { status: 400 });
     }
 
+    assertUuid(attemptId, "attemptId");
+
     const result = await finalizeInterviewAttempt({
       attemptId,
       earlyExit: true,
@@ -62,6 +65,10 @@ export async function POST(request: Request) {
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Failed to terminate interview";
+
+    logInterviewEvent("error", "interview.terminate_failed", {
+      prismaFailure: error,
+    });
 
     return Response.json({ error: message }, { status: 500 });
   }
