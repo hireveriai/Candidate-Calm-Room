@@ -10,6 +10,13 @@ type Props = {
   onVideoReady?: (ref: RefObject<HTMLVideoElement | null>) => void;
 };
 
+const uuidPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function isValidAttemptId(value: string | null | undefined): value is string {
+  return Boolean(value && uuidPattern.test(value.trim()));
+}
+
 async function fetchLiveKitPublisherToken(attemptId: string) {
   const searchParams = new URLSearchParams({
     room: attemptId,
@@ -48,7 +55,14 @@ async function startServerRecording(attemptId: string) {
     throw new Error(payload?.error ?? "Failed to start recording");
   }
 
-  const payload = (await response.json()) as { egressId?: string };
+  const payload = (await response.json()) as {
+    egressId?: string;
+    skipped?: boolean;
+  };
+
+  if (payload.skipped) {
+    return null;
+  }
 
   if (!payload.egressId) {
     throw new Error("Recording API did not return an egress id");
@@ -126,7 +140,7 @@ export default function VideoPanel({ attemptId, timeLeft, onVideoReady }: Props)
   }, []);
 
   useEffect(() => {
-    if (!attemptId) {
+    if (!isValidAttemptId(attemptId)) {
       return;
     }
 
@@ -141,7 +155,9 @@ export default function VideoPanel({ attemptId, timeLeft, onVideoReady }: Props)
     const room = new Room();
 
     async function ensureRecordingStarted() {
-      if (!attemptId || recordingStartedRef.current) {
+      const safeAttemptId = attemptId?.trim();
+
+      if (!isValidAttemptId(safeAttemptId) || recordingStartedRef.current) {
         return;
       }
 
@@ -149,7 +165,7 @@ export default function VideoPanel({ attemptId, timeLeft, onVideoReady }: Props)
       stopRequestedRef.current = false;
 
       try {
-        recordingEgressIdRef.current = await startServerRecording(attemptId);
+        recordingEgressIdRef.current = await startServerRecording(safeAttemptId);
       } catch (error) {
         recordingStartedRef.current = false;
         console.error("Unable to start LiveKit recording:", error);
@@ -177,7 +193,13 @@ export default function VideoPanel({ attemptId, timeLeft, onVideoReady }: Props)
 
     async function publishCamera() {
       try {
-        const token = await fetchLiveKitPublisherToken(attemptId!);
+        const safeAttemptId = attemptId?.trim();
+
+        if (!isValidAttemptId(safeAttemptId)) {
+          return;
+        }
+
+        const token = await fetchLiveKitPublisherToken(safeAttemptId);
         await room.connect(liveKitUrl!, token);
 
         const stream =

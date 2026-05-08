@@ -1,6 +1,5 @@
 import { prisma } from "@/app/lib/prisma";
 import {
-  assertUuid,
   logInterviewEvent,
 } from "@/app/lib/interviewReliability";
 import { startRecoveryAttemptFromToken } from "@/app/lib/interviewRecovery";
@@ -31,6 +30,68 @@ type AttemptTimingRow = {
 type InviteAccessRow = {
   access_type: string | null;
 };
+
+type InviteAttemptRow = {
+  attempt_id: string;
+  interview_id: string;
+  attempt_number: number;
+  ends_at: Date | string | null;
+  candidate_id: string | null;
+  candidate_name: string | null;
+};
+
+const looseUuidPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function looksLikeUuid(value: string | null | undefined) {
+  return Boolean(value && looseUuidPattern.test(value.trim()));
+}
+
+function normalizeSessionStartRow(row: SessionStartRow | Record<string, unknown> | undefined) {
+  if (!row) {
+    return undefined;
+  }
+
+  const record = row as Record<string, unknown>;
+  const values = Object.values(record).map((value) => String(value ?? ""));
+  const uuidValues = values
+    .flatMap((value) =>
+      value.match(/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/gi) ?? []
+    );
+  const attemptId =
+    record.attempt_id ??
+    record.attemptId ??
+    record.attemptid ??
+    uuidValues[0] ??
+    "";
+  const interviewId =
+    record.interview_id ??
+    record.interviewId ??
+    record.interviewid ??
+    uuidValues[1] ??
+    "";
+
+  return {
+    ...row,
+    attempt_id: String(attemptId),
+    interview_id: String(interviewId),
+    attempt_number: Number(record.attempt_number ?? record.attemptNumber ?? 1),
+    reused: Boolean(record.reused),
+    candidate_name:
+      typeof record.candidate_name === "string"
+        ? record.candidate_name
+        : typeof record.candidateName === "string"
+          ? record.candidateName
+          : null,
+    candidate_id:
+      typeof record.candidate_id === "string"
+        ? record.candidate_id
+        : typeof record.candidateId === "string"
+          ? record.candidateId
+          : null,
+    ends_at: (record.ends_at ?? record.endsAt ?? null) as Date | string | null,
+  } satisfies SessionStartRow;
+}
 
 function hasMissingFunctionError(error: unknown, functionName: string) {
   return (
@@ -78,6 +139,43 @@ async function getInviteAccessType(token: string) {
   }
 }
 
+async function recoverLatestAttemptFromToken(token: string) {
+  const rows = await prisma.$queryRaw<InviteAttemptRow[]>`
+    select
+      ia.attempt_id::text,
+      ia.interview_id::text,
+      ia.attempt_number,
+      ia.ends_at,
+      i.candidate_id::text,
+      c.full_name as candidate_name
+    from public.interview_invites ii
+    join public.interviews i
+      on i.interview_id = ii.interview_id
+    join public.interview_attempts ia
+      on ia.interview_id = ii.interview_id
+    left join public.candidates c
+      on c.candidate_id = i.candidate_id
+    where ii.token = ${token}::text
+    order by ia.attempt_number desc, ia.started_at desc
+    limit 1
+  `;
+  const row = rows[0];
+
+  if (!row) {
+    return undefined;
+  }
+
+  return {
+    attempt_id: row.attempt_id,
+    interview_id: row.interview_id,
+    attempt_number: row.attempt_number,
+    reused: true,
+    candidate_name: row.candidate_name,
+    candidate_id: row.candidate_id,
+    ends_at: row.ends_at,
+  } satisfies SessionStartRow;
+}
+
 export async function POST(request: Request) {
   try {
     const body = (await request.json()) as RequestBody;
@@ -93,7 +191,7 @@ export async function POST(request: Request) {
 
     if (String(inviteAccessType ?? "").toUpperCase() === "RECOVERY") {
       const recoveryAttempt = await startRecoveryAttemptFromToken(token);
-      attempt = {
+      attempt = normalizeSessionStartRow({
         attempt_id: recoveryAttempt.attempt_id,
         interview_id: recoveryAttempt.interview_id,
         attempt_number: recoveryAttempt.attempt_number,
@@ -101,7 +199,7 @@ export async function POST(request: Request) {
         candidate_name: recoveryAttempt.candidate_name,
         candidate_id: recoveryAttempt.candidate_id,
         ends_at: recoveryAttempt.ends_at,
-      };
+      });
     }
 
     try {
@@ -114,7 +212,7 @@ export async function POST(request: Request) {
         from public.start_interview_session(${token}::text)
       `;
 
-      attempt = rows[0];
+      attempt = normalizeSessionStartRow(rows[0]);
     } catch (error) {
       if (error instanceof Error && error.message === "__RECOVERY_ATTEMPT_READY__") {
         // Continue with the recovery attempt created above.
@@ -274,7 +372,33 @@ export async function POST(request: Request) {
       );
     }
 
-    assertUuid(attempt.attempt_id, "attemptId");
+    attempt = normalizeSessionStartRow(attempt);
+
+    if (!attempt) {
+      return Response.json(
+        { error: "Failed to normalize interview session" },
+        { status: 500 }
+      );
+    }
+
+    if (!looksLikeUuid(attempt.attempt_id) || !looksLikeUuid(attempt.interview_id)) {
+      attempt = normalizeSessionStartRow(await recoverLatestAttemptFromToken(token));
+    }
+
+    if (!attempt || !looksLikeUuid(attempt.attempt_id) || !looksLikeUuid(attempt.interview_id)) {
+      logInterviewEvent("error", "session.start_invalid_attempt_payload", {
+        payloadKeys: Object.keys(attempt ?? {}),
+        payload: attempt ?? null,
+      });
+
+      return Response.json(
+        { error: "Unable to resolve a valid interview attempt for this invite" },
+        { status: 500 }
+      );
+    }
+
+    const attemptId = attempt.attempt_id;
+    const interviewId = attempt.interview_id;
 
     const timingRows = await prisma.$queryRaw<AttemptTimingRow[]>`
       select
@@ -284,7 +408,7 @@ export async function POST(request: Request) {
       from public.interview_attempts ia
       join public.interviews i
         on i.interview_id = ia.interview_id
-      where ia.attempt_id = ${attempt.attempt_id}::uuid
+      where ia.attempt_id = ${attemptId}::uuid
       limit 1
     `;
     const timing = timingRows[0] ?? null;
@@ -301,7 +425,7 @@ export async function POST(request: Request) {
       await prisma.$executeRaw`
         update public.interview_attempts
         set ends_at = ${endsAt}::timestamptz
-        where attempt_id = ${attempt.attempt_id}::uuid
+        where attempt_id = ${attemptId}::uuid
           and ends_at is null
       `;
 
@@ -338,8 +462,8 @@ export async function POST(request: Request) {
     }
 
     return Response.json({
-      attemptId: attempt.attempt_id,
-      interviewId: attempt.interview_id,
+      attemptId,
+      interviewId,
       attemptNumber: attempt.attempt_number,
       reused: attempt.reused,
       endsAt: attempt.ends_at,

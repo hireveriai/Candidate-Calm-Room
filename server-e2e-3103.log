@@ -1,0 +1,21 @@
+
+> hireveri-calm@0.1.0 start
+> next start --port 3103
+
+▲ Next.js 16.1.1
+- Local:         http://localhost:3103
+- Network:       http://192.168.0.101:3103
+
+✓ Starting...
+✓ Ready in 658ms
+(node:5484) Warning: SECURITY WARNING: The SSL modes 'prefer', 'require', and 'verify-ca' are treated as aliases for 'verify-full'.
+In the next major version (pg-connection-string v3.0.0 and pg v9.0.0), these modes will adopt standard libpq semantics, which have weaker security guarantees.
+
+To prepare for this change:
+- If you want the current behavior, explicitly use 'sslmode=verify-full'
+- If you want libpq compatibility now, use 'uselibpqcompat=true&sslmode=require'
+
+See https://www.postgresql.org/docs/current/libpq-ssl.html for libpq SSL mode definitions.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:5484) Warning: Setting the NODE_TLS_REJECT_UNAUTHORIZED environment variable to '0' makes TLS connections and HTTPS requests insecure by disabling certificate verification.
+{"prismaFailure":{"name":"Error","message":"Valid attemptId is required","stack":"Error: Valid attemptId is required\n    at n (D:\\Jatin\\New Folder\\hireveri-calm\\.next\\server\\chunks\\[root-of-the-server]__58dd9014._.js:1:1165)\n    at u (D:\\Jatin\\New Folder\\hireveri-calm\\.next\\server\\chunks\\_ba8ac2d6._.js:14:258)\n    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)\n    at async rU.do (D:\\Jatin\\New Folder\\hireveri-calm\\node_modules\\next\\dist\\compiled\\next-server\\app-route-turbo.runtime.prod.js:5:20169)\n    at async rU.handle (D:\\Jatin\\New Folder\\hireveri-calm\\node_modules\\next\\dist\\compiled\\next-server\\app-route-turbo.runtime.prod.js:5:24949)\n    at async l (D:\\Jatin\\New Folder\\hireveri-calm\\.next\\server\\chunks\\_ba8ac2d6._.js:29:4071)\n    at async rU.handleResponse (D:\\Jatin\\New Folder\\hireveri-calm\\node_modules\\next\\dist\\compiled\\next-server\\app-route-turbo.runtime.prod.js:1:101467)\n    at async u (D:\\Jatin\\New Folder\\hireveri-calm\\.next\\server\\chunks\\_ba8ac2d6._.js:29:5112)\n    at async Module.b (D:\\Jatin\\New Folder\\hireveri-calm\\.next\\server\\chunks\\_ba8ac2d6._.js:29:6190)\n    at async NextNodeServer.renderToResponseWithComponentsImpl (D:\\Jatin\\New Folder\\hireveri-calm\\node_modules\\next\\dist\\server\\base-server.js:1422:9)"},"event":"session.start_failed","at":"2026-05-08T05:15:56.498Z","interviewId":null,"attemptId":null,"orgId":null,"recruiterId":null,"candidateId":null,"questionSequence":null,"timerState":null,"aiLatencyMs":null,"websocketEvent":null,"livekitEvent":null,"state":null,"nextState":null}

@@ -38,7 +38,7 @@ export type InterviewLogContext = {
 };
 
 const uuidPattern =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{12}$/i;
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const allowedTransitions: Record<InterviewState, InterviewState[]> = {
   CREATED: ["READY", "QUESTION_GENERATING", "FAILED", "TIME_EXPIRED"],
@@ -59,7 +59,7 @@ const allowedTransitions: Record<InterviewState, InterviewState[]> = {
 };
 
 export function isUuid(value: string | null | undefined): value is string {
-  return Boolean(value && uuidPattern.test(value.trim()));
+  return Boolean(value && uuidPattern.test(String(value).trim()));
 }
 
 export function assertUuid(value: string | null | undefined, label: string) {
@@ -67,7 +67,7 @@ export function assertUuid(value: string | null | undefined, label: string) {
     throw new Error(`Valid ${label} is required`);
   }
 
-  return value.trim();
+  return String(value).trim();
 }
 
 export function normalizeInterviewState(value: string | null | undefined): InterviewState {
@@ -117,7 +117,16 @@ export function logInterviewEvent(
   event: string,
   context: InterviewLogContext = {}
 ) {
+  const serializedFailure =
+    context.prismaFailure instanceof Error
+      ? {
+          name: context.prismaFailure.name,
+          message: context.prismaFailure.message,
+          stack: context.prismaFailure.stack,
+        }
+      : context.prismaFailure ?? null;
   const payload = {
+    ...context,
     event,
     at: new Date().toISOString(),
     interviewId: context.interviewId ?? null,
@@ -132,15 +141,7 @@ export function logInterviewEvent(
     livekitEvent: context.livekitEvent ?? null,
     state: context.state ?? null,
     nextState: context.nextState ?? null,
-    prismaFailure:
-      context.prismaFailure instanceof Error
-        ? {
-            name: context.prismaFailure.name,
-            message: context.prismaFailure.message,
-            stack: context.prismaFailure.stack,
-          }
-        : context.prismaFailure ?? null,
-    ...context,
+    prismaFailure: serializedFailure,
   };
 
   const line = JSON.stringify(payload);

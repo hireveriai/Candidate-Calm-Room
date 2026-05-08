@@ -51,8 +51,11 @@ export async function POST(request: NextRequest) {
 
     if (!attemptId || !uuidPattern.test(attemptId)) {
       return NextResponse.json(
-        { error: "Valid attemptId is required" },
-        { status: 400 },
+        {
+          skipped: true,
+          reason: "invalid_attempt_id",
+        },
+        { status: 202 },
       );
     }
 

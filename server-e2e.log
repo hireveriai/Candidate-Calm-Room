@@ -1,0 +1,21 @@
+
+> hireveri-calm@0.1.0 start
+> next start --port 3100
+
+▲ Next.js 16.1.1
+- Local:         http://localhost:3100
+- Network:       http://192.168.0.101:3100
+
+✓ Starting...
+✓ Ready in 682ms
+(node:45928) Warning: SECURITY WARNING: The SSL modes 'prefer', 'require', and 'verify-ca' are treated as aliases for 'verify-full'.
+In the next major version (pg-connection-string v3.0.0 and pg v9.0.0), these modes will adopt standard libpq semantics, which have weaker security guarantees.
+
+To prepare for this change:
+- If you want the current behavior, explicitly use 'sslmode=verify-full'
+- If you want libpq compatibility now, use 'uselibpqcompat=true&sslmode=require'
+
+See https://www.postgresql.org/docs/current/libpq-ssl.html for libpq SSL mode definitions.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:45928) Warning: Setting the NODE_TLS_REJECT_UNAUTHORIZED environment variable to '0' makes TLS connections and HTTPS requests insecure by disabling certificate verification.
+{"event":"session.start_failed","at":"2026-05-08T05:11:11.395Z","interviewId":null,"attemptId":null,"orgId":null,"recruiterId":null,"candidateId":null,"questionSequence":null,"timerState":null,"aiLatencyMs":null,"websocketEvent":null,"livekitEvent":null,"state":null,"nextState":null,"prismaFailure":{}}
