@@ -183,11 +183,7 @@ export async function recordInterviewInterruption(input: RecoveryEventInput) {
   await prisma.$transaction(async (tx: typeof prisma) => {
     await tx.$executeRaw`
       update public.interview_attempts
-      set status = case
-            when upper(status) in ('COMPLETED', 'COMPLETING', 'TIME_EXPIRED') then status
-            else 'INTERRUPTED'
-          end,
-          interruption_reason = ${input.reason ?? classifier}::text,
+      set interruption_reason = ${input.reason ?? classifier}::text,
           interruption_detected_at = coalesce(interruption_detected_at, now()),
           timer_remaining_seconds = ${timerState.remainingSeconds}::integer,
           completion_percentage = coalesce(completion_percentage, ${computedCompletion}::numeric),
@@ -196,7 +192,7 @@ export async function recordInterviewInterruption(input: RecoveryEventInput) {
             else transcript_status
           end
       where attempt_id = ${attemptId}::uuid
-        and upper(status) not in ('COMPLETED', 'COMPLETING', 'TIME_EXPIRED')
+        and lower(status) <> 'completed'
     `;
 
     await tx.$executeRaw`
@@ -349,7 +345,7 @@ export async function startRecoveryAttemptFromToken(token: string) {
       select
         i.interview_id,
         p.last_attempt_number + 1,
-        'READY',
+        'started',
         now(),
         now() + make_interval(secs => greatest(coalesce(pa.timer_remaining_seconds, i.duration_minutes * 60, 1800), 60)),
         pa.expected_questions,

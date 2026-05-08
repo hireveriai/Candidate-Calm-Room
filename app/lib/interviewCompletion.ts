@@ -478,10 +478,8 @@ export async function finalizeInterviewAttempt(params: {
   const attemptId = assertUuid(params.attemptId, "attemptId");
   const transitionRows = await prisma.$queryRaw<Array<{ status: string }>>`
     update public.interview_attempts
-    set status = case
-          when upper(status) = 'COMPLETED' then status
-          else ${params.terminationType === "timeout" ? "TIME_EXPIRED" : "COMPLETING"}::text
-        end
+    set current_phase = coalesce(${params.currentPhase ?? null}::text, current_phase),
+        termination_type = coalesce(${params.terminationType ?? null}::text, termination_type)
     where attempt_id = ${attemptId}::uuid
     returning status
   `;

@@ -940,9 +940,13 @@ export async function POST(request: Request) {
     if (completion.complete) {
       await prisma.$executeRaw`
         update public.interview_attempts
-        set status = ${completion.timeExceeded ? "TIME_EXPIRED" : "COMPLETING"}::text
+        set current_phase = ${completion.timeExceeded ? "closing" : "closing"}::text,
+            termination_type = case
+              when ${completion.timeExceeded} then coalesce(termination_type, 'timeout')
+              else termination_type
+            end
         where attempt_id = ${attemptId}::uuid
-          and upper(status) not in ('COMPLETED', 'COMPLETING')
+          and lower(status) <> 'completed'
       `;
 
       sessionQuestion = {
@@ -1145,9 +1149,6 @@ export async function POST(request: Request) {
               ${"follow_up"}::text,
               ${askedTotal + 1}::integer
             )
-            on conflict (attempt_id, question_order)
-            do update
-            set content = public.session_questions.content
             returning
               session_question_id,
               question_id,
@@ -1176,9 +1177,6 @@ export async function POST(request: Request) {
               ${"core"}::text,
               ${askedTotal + 1}::integer
             )
-            on conflict (attempt_id, question_order)
-            do update
-            set content = public.session_questions.content
             returning
               session_question_id,
               question_id,
@@ -1243,9 +1241,6 @@ export async function POST(request: Request) {
               ${"core"}::text,
               ${askedTotal + 1}::integer
             )
-            on conflict (attempt_id, question_order)
-            do update
-            set content = public.session_questions.content
             returning
               session_question_id,
               question_id,
@@ -1310,9 +1305,6 @@ export async function POST(request: Request) {
               ${"follow_up"}::text,
               ${askedTotal + 1}::integer
             )
-            on conflict (attempt_id, question_order)
-            do update
-            set content = public.session_questions.content
             returning
               session_question_id,
               question_id,
@@ -1353,10 +1345,9 @@ export async function POST(request: Request) {
       if (createdQuestion) {
         await prisma.$executeRaw`
           update public.interview_attempts
-          set status = ${"QUESTION_ACTIVE"}::text,
-              current_phase = ${createdQuestion.question_kind === "follow_up" ? "probe" : "core"}::text
+          set current_phase = ${createdQuestion.question_kind === "follow_up" ? "probe" : "core"}::text
           where attempt_id = ${attemptId}::uuid
-            and upper(status) not in ('COMPLETED', 'COMPLETING', 'TIME_EXPIRED')
+            and lower(status) <> 'completed'
         `;
 
         logInterviewEvent("info", "question.created", {

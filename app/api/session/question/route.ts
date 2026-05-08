@@ -144,9 +144,6 @@ export async function POST(request: Request) {
         ${"core"}::text,
         ${1}::integer
       )
-      on conflict (attempt_id, question_order)
-      do update
-      set content = public.session_questions.content
       returning
         session_question_id,
         question_id,
@@ -160,10 +157,9 @@ export async function POST(request: Request) {
 
     await prisma.$executeRaw`
       update public.interview_attempts
-      set status = ${"QUESTION_ACTIVE"}::text,
-          current_phase = ${"warmup"}::text
+      set current_phase = ${"warmup"}::text
       where attempt_id = ${attemptId}::uuid
-        and upper(status) not in ('COMPLETED', 'COMPLETING', 'TIME_EXPIRED')
+        and lower(status) <> 'completed'
     `;
 
     console.log(

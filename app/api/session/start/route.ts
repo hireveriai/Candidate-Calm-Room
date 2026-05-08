@@ -28,6 +28,10 @@ type AttemptTimingRow = {
   duration_minutes: number | null;
 };
 
+type InviteAccessRow = {
+  access_type: string | null;
+};
+
 function hasMissingFunctionError(error: unknown, functionName: string) {
   return (
     error instanceof Error &&
@@ -46,6 +50,34 @@ function hasMissingDatabaseRoutineError(error: unknown) {
   );
 }
 
+function hasMissingDatabaseColumnError(error: unknown, columnName: string) {
+  return (
+    error instanceof Error &&
+    error.message.toLowerCase().includes("column") &&
+    error.message.toLowerCase().includes(columnName.toLowerCase()) &&
+    error.message.toLowerCase().includes("does not exist")
+  );
+}
+
+async function getInviteAccessType(token: string) {
+  try {
+    const rows = await prisma.$queryRaw<InviteAccessRow[]>`
+      select access_type
+      from public.interview_invites
+      where token = ${token}::text
+      limit 1
+    `;
+
+    return rows[0]?.access_type ?? null;
+  } catch (error) {
+    if (hasMissingDatabaseColumnError(error, "access_type")) {
+      return null;
+    }
+
+    throw error;
+  }
+}
+
 export async function POST(request: Request) {
   try {
     const body = (await request.json()) as RequestBody;
@@ -57,12 +89,9 @@ export async function POST(request: Request) {
 
     let attempt: SessionStartRow | undefined;
 
-    const recoveryInvite = await prisma.interview_invites.findUnique({
-      where: { token },
-      select: { access_type: true },
-    });
+    const inviteAccessType = await getInviteAccessType(token);
 
-    if (String(recoveryInvite?.access_type ?? "").toUpperCase() === "RECOVERY") {
+    if (String(inviteAccessType ?? "").toUpperCase() === "RECOVERY") {
       const recoveryAttempt = await startRecoveryAttemptFromToken(token);
       attempt = {
         attempt_id: recoveryAttempt.attempt_id,
@@ -187,7 +216,7 @@ export async function POST(request: Request) {
             data: {
               interview_id: invite.interview_id,
               attempt_number: nextAttemptNumber,
-              status: "READY",
+              status: "started",
               ends_at: new Date(
                 now.getTime() +
                   Math.max(invite.interviews.duration_minutes ?? 30, 1) *
