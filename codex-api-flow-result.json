@@ -1,0 +1,1133 @@
+{
+  "candidateA": {
+    "session": {
+      "attemptId": "aa821fe5-4910-4701-ab1f-cff98366f7d6",
+      "interviewId": "a749fdff-4efc-421d-b007-bd92e8966ddd",
+      "attemptNumber": 1,
+      "reused": true,
+      "endsAt": "2026-05-08T07:58:25.556Z",
+      "serverNow": "2026-05-08T07:34:24.122Z",
+      "candidateId": "9ba65462-8281-4cb7-aab8-895622e339af",
+      "candidateName": "Candidate A Strong"
+    },
+    "questions": [
+      {
+        "session_question_id": "4bc00e35-7b89-40bf-b65d-048fa0492a28",
+        "question_id": null,
+        "content": "Explain your experience",
+        "source": "system",
+        "asked_at": "2026-05-08T07:28:26.091Z",
+        "question_kind": "core",
+        "question_order": 1,
+        "question_type": null
+      },
+      {
+        "complete": false,
+        "question": "Can you provide a specific example of a query you optimized in PostgreSQL, detailing the changes you made and the results you achieved?",
+        "question_id": null,
+        "session_question_id": "c4b6d342-0c44-4d1c-82e2-94656e1f38e5",
+        "question_kind": "follow_up",
+        "question_type": "follow_up",
+        "follow_up_intent": "clarification"
+      }
+    ],
+    "transcripts": [
+      {
+        "questionText": "Explain your experience",
+        "transcript": "I have hands-on experience with explain, experience. In my recent backend work I personally owned implementation, troubleshooting, and optimization. For PostgreSQL and API performance, I started by identifying the failure mode, adding instrumentation, reviewing query plans, and using indexes, batching, and caching to remove bottlenecks. In one migration I reduced p95 latency by 38 percent, cut timeout incidents by more than half, and validated the rollout with load tests, alerts, and post-deploy metrics.",
+        "answer": {
+          "answer_id": "dc08100c-7650-4b93-a017-3fcc4e1661b3",
+          "attempt_id": "aa821fe5-4910-4701-ab1f-cff98366f7d6",
+          "question_id": null,
+          "session_question_id": "4bc00e35-7b89-40bf-b65d-048fa0492a28",
+          "answer_text": "I have hands-on experience in backend work where I personally owned implementation, troubleshooting, and optimization. For PostgreSQL and API performance, I identified failure modes, added instrumentation, reviewed query plans, and used indexes, batching, and caching to remove bottlenecks. In one migration, I reduced p95 latency by 38 percent, cut timeout incidents by more than half, and validated the rollout with load tests, alerts, and post-deploy metrics.",
+          "answer_payload": {
+            "llm": {
+              "id": "chatcmpl-DdA13iyLtXMM6OlhXpsmMTVW9LQ2c",
+              "model": "gpt-4o-mini-2024-07-18",
+              "usage": {
+                "total_tokens": 286,
+                "prompt_tokens": 196,
+                "completion_tokens": 90,
+                "prompt_tokens_details": {
+                  "audio_tokens": 0,
+                  "cached_tokens": 0
+                },
+                "completion_tokens_details": {
+                  "audio_tokens": 0,
+                  "reasoning_tokens": 0,
+                  "accepted_prediction_tokens": 0,
+                  "rejected_prediction_tokens": 0
+                }
+              },
+              "stream": false,
+              "provider": "openai"
+            },
+            "duration": 52,
+            "validation": {
+              "relevant": true,
+              "checked_at": "2026-05-08T07:34:27.057Z"
+            },
+            "answer_mode": "spoken",
+            "question_id": "4bc00e35-7b89-40bf-b65d-048fa0492a28",
+            "candidate_id": "9ba65462-8281-4cb7-aab8-895622e339af",
+            "original_transcript": "I have hands-on experience with explain, experience. In my recent backend work I personally owned implementation, troubleshooting, and optimization. For PostgreSQL and API performance, I started by identifying the failure mode, adding instrumentation, reviewing query plans, and using indexes, batching, and caching to remove bottlenecks. In one migration I reduced p95 latency by 38 percent, cut timeout incidents by more than half, and validated the rollout with load tests, alerts, and post-deploy metrics.",
+            "session_question_id": "4bc00e35-7b89-40bf-b65d-048fa0492a28",
+            "raw_candidate_answer": "I have hands-on experience with explain, experience. In my recent backend work I personally owned implementation, troubleshooting, and optimization. For PostgreSQL and API performance, I started by identifying the failure mode, adding instrumentation, reviewing query plans, and using indexes, batching, and caching to remove bottlenecks. In one migration I reduced p95 latency by 38 percent, cut timeout incidents by more than half, and validated the rollout with load tests, alerts, and post-deploy metrics.",
+            "submitted_question_text": "Explain your experience"
+          },
+          "answered_at": "2026-05-08T07:34:27.321Z",
+          "status": "completed"
+        }
+      },
+      {
+        "questionText": "Can you provide a specific example of a query you optimized in PostgreSQL, detailing the changes you made and the results you achieved?",
+        "transcript": "I have hands-on experience with can, you, provide, specific, example, query. In my recent backend work I personally owned implementation, troubleshooting, and optimization. For PostgreSQL and API performance, I started by identifying the failure mode, adding instrumentation, reviewing query plans, and using indexes, batching, and caching to remove bottlenecks. In one migration I reduced p95 latency by 38 percent, cut timeout incidents by more than half, and validated the rollout with load tests, alerts, and post-deploy metrics.",
+        "answer": {
+          "answer_id": "52d3b190-289e-44d7-9845-7bd7d5e3622a",
+          "attempt_id": "aa821fe5-4910-4701-ab1f-cff98366f7d6",
+          "question_id": null,
+          "session_question_id": "c4b6d342-0c44-4d1c-82e2-94656e1f38e5",
+          "answer_text": "In my recent backend work, I owned the implementation, troubleshooting, and optimization of PostgreSQL queries. I started by identifying the failure mode, adding instrumentation, reviewing query plans, and using indexes, batching, and caching to remove bottlenecks. In one migration, I reduced p95 latency by 38 percent and cut timeout incidents by more than half. I validated the rollout with load tests, alerts, and post-deploy metrics.",
+          "answer_payload": {
+            "llm": {
+              "id": "chatcmpl-DdA1F4n008V7FvF87WPeongEhtVFU",
+              "model": "gpt-4o-mini-2024-07-18",
+              "usage": {
+                "total_tokens": 313,
+                "prompt_tokens": 226,
+                "completion_tokens": 87,
+                "prompt_tokens_details": {
+                  "audio_tokens": 0,
+                  "cached_tokens": 0
+                },
+                "completion_tokens_details": {
+                  "audio_tokens": 0,
+                  "reasoning_tokens": 0,
+                  "accepted_prediction_tokens": 0,
+                  "rejected_prediction_tokens": 0
+                }
+              },
+              "stream": false,
+              "provider": "openai"
+            },
+            "duration": 52,
+            "validation": {
+              "relevant": true,
+              "checked_at": "2026-05-08T07:34:39.137Z"
+            },
+            "answer_mode": "spoken",
+            "question_id": "c4b6d342-0c44-4d1c-82e2-94656e1f38e5",
+            "candidate_id": "9ba65462-8281-4cb7-aab8-895622e339af",
+            "original_transcript": "I have hands-on experience with can, you, provide, specific, example, query. In my recent backend work I personally owned implementation, troubleshooting, and optimization. For PostgreSQL and API performance, I started by identifying the failure mode, adding instrumentation, reviewing query plans, and using indexes, batching, and caching to remove bottlenecks. In one migration I reduced p95 latency by 38 percent, cut timeout incidents by more than half, and validated the rollout with load tests, alerts, and post-deploy metrics.",
+            "session_question_id": "c4b6d342-0c44-4d1c-82e2-94656e1f38e5",
+            "raw_candidate_answer": "I have hands-on experience with can, you, provide, specific, example, query. In my recent backend work I personally owned implementation, troubleshooting, and optimization. For PostgreSQL and API performance, I started by identifying the failure mode, adding instrumentation, reviewing query plans, and using indexes, batching, and caching to remove bottlenecks. In one migration I reduced p95 latency by 38 percent, cut timeout incidents by more than half, and validated the rollout with load tests, alerts, and post-deploy metrics.",
+            "submitted_question_text": "Can you provide a specific example of a query you optimized in PostgreSQL, detailing the changes you made and the results you achieved?"
+          },
+          "answered_at": "2026-05-08T07:34:39.405Z",
+          "status": "completed"
+        }
+      }
+    ],
+    "evaluations": [
+      {
+        "answer_id": "dc08100c-7650-4b93-a017-3fcc4e1661b3",
+        "attempt_id": "aa821fe5-4910-4701-ab1f-cff98366f7d6",
+        "skill_id": null,
+        "skill_name": null,
+        "skill_type": "functional",
+        "skill_score": 0.9,
+        "clarity_score": 0.85,
+        "depth_score": 0.9,
+        "confidence_score": 0.8,
+        "fraud_score": 0.1,
+        "reasoning": "The candidate demonstrates strong functional skills with specific examples of their backend experience, including performance optimization techniques and measurable outcomes. The clarity of the response is good, though slightly less structured in the raw transcript. The depth of detail regarding technical processes and results is high, indicating a solid understanding of the subject matter. Confidence is present but could be improved with a more assertive delivery. The fraud score is low, as there are no signs of inconsistency or suspicious behavior.",
+        "evaluation_json": {
+          "skill_score": 0.9,
+          "clarity_score": 0.85,
+          "depth_score": 0.9,
+          "confidence_score": 0.8,
+          "fraud_score": 0.1,
+          "reasoning": "The candidate demonstrates strong functional skills with specific examples of their backend experience, including performance optimization techniques and measurable outcomes. The clarity of the response is good, though slightly less structured in the raw transcript. The depth of detail regarding technical processes and results is high, indicating a solid understanding of the subject matter. Confidence is present but could be improved with a more assertive delivery. The fraud score is low, as there are no signs of inconsistency or suspicious behavior.",
+          "signal_adjustment": {
+            "behavior_fraud_adjustment": 0,
+            "behavior_signals": [],
+            "focus_metrics": {
+              "focusRatio": 0.95,
+              "lookAwayEvents": 0,
+              "maxLookAwayDuration": 0.6,
+              "totalAnswerTime": 52,
+              "assessment": "stable"
+            }
+          }
+        }
+      },
+      {
+        "answer_id": "52d3b190-289e-44d7-9845-7bd7d5e3622a",
+        "attempt_id": "aa821fe5-4910-4701-ab1f-cff98366f7d6",
+        "skill_id": null,
+        "skill_name": null,
+        "skill_type": "functional",
+        "skill_score": 0.8,
+        "clarity_score": 0.7,
+        "depth_score": 0.8,
+        "confidence_score": 0.8,
+        "fraud_score": 0.1,
+        "reasoning": "The candidate demonstrates a solid understanding of PostgreSQL optimization techniques and provides a specific example of reducing latency and timeout incidents. The answer is structured and coherent, though it could benefit from clearer communication in some areas. The depth of detail regarding the methods used and the results achieved indicates a strong grasp of the subject matter. The confidence in delivery is evident, with no signs of vagueness or inconsistency, leading to a low fraud score.",
+        "evaluation_json": {
+          "skill_score": 0.8,
+          "clarity_score": 0.7,
+          "depth_score": 0.8,
+          "confidence_score": 0.8,
+          "fraud_score": 0.1,
+          "reasoning": "The candidate demonstrates a solid understanding of PostgreSQL optimization techniques and provides a specific example of reducing latency and timeout incidents. The answer is structured and coherent, though it could benefit from clearer communication in some areas. The depth of detail regarding the methods used and the results achieved indicates a strong grasp of the subject matter. The confidence in delivery is evident, with no signs of vagueness or inconsistency, leading to a low fraud score.",
+          "signal_adjustment": {
+            "behavior_fraud_adjustment": 0,
+            "behavior_signals": [],
+            "focus_metrics": {
+              "focusRatio": 0.95,
+              "lookAwayEvents": 0,
+              "maxLookAwayDuration": 0.6,
+              "totalAnswerTime": 52,
+              "assessment": "stable"
+            }
+          }
+        }
+      }
+    ],
+    "finalPayload": {
+      "complete": true,
+      "score": 15,
+      "risk_level": "LOW",
+      "strengths": [
+        "Basic communication clarity",
+        "Attempted structured response"
+      ],
+      "weaknesses": [
+        "lack of depth",
+        "unclear answers",
+        "weak problem solving"
+      ],
+      "behavioral_flags": [],
+      "recommendation": "WEAK_CANDIDATE",
+      "reason": "Insufficient capability demonstrated despite stable behavior",
+      "completed": true,
+      "early_exit": false,
+      "termination_type": null,
+      "time_elapsed": 377,
+      "questions_answered": 2,
+      "current_phase": "closing",
+      "completion_percentage": 100,
+      "reliability_score": 100
+    }
+  },
+  "candidateB": {
+    "session": {
+      "attemptId": "ee94db36-4162-4b9b-b439-50d7fffac0db",
+      "interviewId": "795a281e-f612-46fb-8f98-60539a7917c1",
+      "attemptNumber": 1,
+      "reused": false,
+      "endsAt": "2026-05-08T08:04:43.224Z",
+      "serverNow": "2026-05-08T07:34:43.115Z",
+      "candidateId": "ac697594-9807-4a99-a352-539f9a1316c3",
+      "candidateName": "Candidate B Weak"
+    },
+    "questions": [
+      {
+        "session_question_id": "a814c8b0-e66f-4503-8d3a-a98b6d8a5a0a",
+        "question_id": null,
+        "content": "Explain your experience",
+        "source": "system",
+        "asked_at": "2026-05-08T07:34:43.441Z",
+        "question_kind": "core",
+        "question_order": 1,
+        "question_type": "open_ended"
+      },
+      {
+        "complete": false,
+        "question": "Can you provide a specific example of a performance tuning issue you encountered and the steps you took to address it?",
+        "question_id": null,
+        "session_question_id": "c9f8d356-618f-44bb-8a67-023bd4569543",
+        "question_kind": "follow_up",
+        "question_type": "follow_up",
+        "follow_up_intent": "clarification"
+      },
+      {
+        "complete": false,
+        "question": "What signals tell you Performance Tuning is degrading, and what actions do you take next?",
+        "question_id": null,
+        "session_question_id": "6c16811e-569e-4323-8110-0d6aeb32d0b5",
+        "question_kind": "core",
+        "question_type": "open_ended",
+        "follow_up_intent": null
+      },
+      {
+        "complete": false,
+        "question": "You highlighted  \"assisted on small bug fixes\" . What was the most demanding piece of work around it, and how did you deliver the result?",
+        "question_id": null,
+        "session_question_id": "ac87b748-fa47-48e6-a5b6-8c215a91e417",
+        "question_kind": "core",
+        "question_type": "open_ended",
+        "follow_up_intent": null
+      },
+      {
+        "complete": false,
+        "question": "How do you troubleshoot Build and optimize high-throughput backend services, troubleshoot production incidents, tune PostgreSQL performance, and design reliable APIs when it starts failing in production?",
+        "question_id": null,
+        "session_question_id": "9c88bd19-82ab-48eb-8d77-3cbb00e04e22",
+        "question_kind": "core",
+        "question_type": "open_ended",
+        "follow_up_intent": null
+      },
+      {
+        "complete": false,
+        "question": "If you had to improve Senior Backend Engineer under real delivery pressure, what would you examine first?",
+        "question_id": null,
+        "session_question_id": "8a6c8929-82ec-45ca-8648-e93fef4fc131",
+        "question_kind": "core",
+        "question_type": "open_ended",
+        "follow_up_intent": null
+      },
+      {
+        "complete": false,
+        "question": "Before we wrap up, what is one recent decision you made while working on SQL, and why did it matter?",
+        "question_id": null,
+        "session_question_id": "f2f98b4e-477c-48df-afe9-90d5993b960a",
+        "question_kind": "core",
+        "question_type": "open_ended",
+        "follow_up_intent": null
+      },
+      {
+        "complete": false,
+        "question": "Before we wrap up, what is one recent decision you made while working on SQL, and why did it matter?",
+        "question_id": null,
+        "session_question_id": "b642e508-8b63-4615-b4e1-14b5511b9b29",
+        "question_kind": "core",
+        "question_type": "open_ended",
+        "follow_up_intent": null
+      },
+      {
+        "complete": false,
+        "question": "Before we wrap up, what is one recent decision you made while working on SQL, and why did it matter?",
+        "question_id": null,
+        "session_question_id": "2c442dd6-4b93-4f09-84a2-bba4a0212845",
+        "question_kind": "core",
+        "question_type": "open_ended",
+        "follow_up_intent": null
+      }
+    ],
+    "transcripts": [
+      {
+        "questionText": "Explain your experience",
+        "transcript": "I have some exposure to explain, experience, but my experience is limited. Usually I would try a few things, ask teammates, and see what works. I cannot give an exact metric, a clear implementation sequence, or a strong production example for explain right now.",
+        "answer": {
+          "answer_id": "f4940bff-6a9f-4b73-b265-4087c6acb5c7",
+          "attempt_id": "ee94db36-4162-4b9b-b439-50d7fffac0db",
+          "question_id": null,
+          "session_question_id": "a814c8b0-e66f-4503-8d3a-a98b6d8a5a0a",
+          "answer_text": "I have some exposure to explain and experience, but my experience is limited. I usually try a few things, ask teammates, and see what works. I cannot provide an exact metric, a clear implementation sequence, or a strong production example for explain right now.",
+          "answer_payload": {
+            "llm": {
+              "id": "chatcmpl-DdA1MT6OtnKiYavmKqFFcUyP2XmT1",
+              "model": "gpt-4o-mini-2024-07-18",
+              "usage": {
+                "total_tokens": 203,
+                "prompt_tokens": 151,
+                "completion_tokens": 52,
+                "prompt_tokens_details": {
+                  "audio_tokens": 0,
+                  "cached_tokens": 0
+                },
+                "completion_tokens_details": {
+                  "audio_tokens": 0,
+                  "reasoning_tokens": 0,
+                  "accepted_prediction_tokens": 0,
+                  "rejected_prediction_tokens": 0
+                }
+              },
+              "stream": false,
+              "provider": "openai"
+            },
+            "duration": 24,
+            "validation": {
+              "relevant": true,
+              "checked_at": "2026-05-08T07:34:48.258Z"
+            },
+            "answer_mode": "spoken",
+            "question_id": "a814c8b0-e66f-4503-8d3a-a98b6d8a5a0a",
+            "candidate_id": "ac697594-9807-4a99-a352-539f9a1316c3",
+            "original_transcript": "I have some exposure to explain, experience, but my experience is limited. Usually I would try a few things, ask teammates, and see what works. I cannot give an exact metric, a clear implementation sequence, or a strong production example for explain right now.",
+            "session_question_id": "a814c8b0-e66f-4503-8d3a-a98b6d8a5a0a",
+            "raw_candidate_answer": "I have some exposure to explain, experience, but my experience is limited. Usually I would try a few things, ask teammates, and see what works. I cannot give an exact metric, a clear implementation sequence, or a strong production example for explain right now.",
+            "submitted_question_text": "Explain your experience"
+          },
+          "answered_at": "2026-05-08T07:34:48.523Z",
+          "status": "completed"
+        }
+      },
+      {
+        "questionText": "Can you provide a specific example of a performance tuning issue you encountered and the steps you took to address it?",
+        "transcript": "I have some exposure to can, you, provide, specific, example, performance, but my experience is limited. Usually I would try a few things, ask teammates, and see what works. I cannot give an exact metric, a clear implementation sequence, or a strong production example for can right now.",
+        "answer": {
+          "answer_id": "c6e5aa01-5a5d-4167-b4b9-7127cf1efee2",
+          "attempt_id": "ee94db36-4162-4b9b-b439-50d7fffac0db",
+          "question_id": null,
+          "session_question_id": "c9f8d356-618f-44bb-8a67-023bd4569543",
+          "answer_text": "I have some exposure to performance tuning issues, but my experience is limited. Usually, I would try a few things, ask teammates, and see what works. I cannot provide an exact metric, a clear implementation sequence, or a strong production example at this time.",
+          "answer_payload": {
+            "llm": {
+              "id": "chatcmpl-DdA1WrxlNWjDq4zQoNoIWe85opXrm",
+              "model": "gpt-4o-mini-2024-07-18",
+              "usage": {
+                "total_tokens": 230,
+                "prompt_tokens": 177,
+                "completion_tokens": 53,
+                "prompt_tokens_details": {
+                  "audio_tokens": 0,
+                  "cached_tokens": 0
+                },
+                "completion_tokens_details": {
+                  "audio_tokens": 0,
+                  "reasoning_tokens": 0,
+                  "accepted_prediction_tokens": 0,
+                  "rejected_prediction_tokens": 0
+                }
+              },
+              "stream": false,
+              "provider": "openai"
+            },
+            "duration": 24,
+            "validation": {
+              "relevant": true,
+              "checked_at": "2026-05-08T07:34:55.009Z"
+            },
+            "answer_mode": "spoken",
+            "question_id": "c9f8d356-618f-44bb-8a67-023bd4569543",
+            "candidate_id": "ac697594-9807-4a99-a352-539f9a1316c3",
+            "original_transcript": "I have some exposure to can, you, provide, specific, example, performance, but my experience is limited. Usually I would try a few things, ask teammates, and see what works. I cannot give an exact metric, a clear implementation sequence, or a strong production example for can right now.",
+            "session_question_id": "c9f8d356-618f-44bb-8a67-023bd4569543",
+            "raw_candidate_answer": "I have some exposure to can, you, provide, specific, example, performance, but my experience is limited. Usually I would try a few things, ask teammates, and see what works. I cannot give an exact metric, a clear implementation sequence, or a strong production example for can right now.",
+            "submitted_question_text": "Can you provide a specific example of a performance tuning issue you encountered and the steps you took to address it?"
+          },
+          "answered_at": "2026-05-08T07:34:55.275Z",
+          "status": "completed"
+        }
+      },
+      {
+        "questionText": "What signals tell you Performance Tuning is degrading, and what actions do you take next?",
+        "transcript": "I have some exposure to signals, you, performance, tuning, degrading, actions, but my experience is limited. Usually I would try a few things, ask teammates, and see what works. I cannot give an exact metric, a clear implementation sequence, or a strong production example for signals right now.",
+        "answer": {
+          "answer_id": "5958bfaa-d9dd-480a-9631-bf2f3b971810",
+          "attempt_id": "ee94db36-4162-4b9b-b439-50d7fffac0db",
+          "question_id": null,
+          "session_question_id": "6c16811e-569e-4323-8110-0d6aeb32d0b5",
+          "answer_text": "I have some exposure to signals indicating performance tuning degradation, but my experience is limited. Usually, I would try a few things, ask teammates, and see what works. I cannot provide an exact metric, a clear implementation sequence, or a strong production example for signals right now.",
+          "answer_payload": {
+            "llm": {
+              "id": "chatcmpl-DdA1cB2yi8HcKX2v7bch5ieCL5z3N",
+              "model": "gpt-4o-mini-2024-07-18",
+              "usage": {
+                "total_tokens": 229,
+                "prompt_tokens": 173,
+                "completion_tokens": 56,
+                "prompt_tokens_details": {
+                  "audio_tokens": 0,
+                  "cached_tokens": 0
+                },
+                "completion_tokens_details": {
+                  "audio_tokens": 0,
+                  "reasoning_tokens": 0,
+                  "accepted_prediction_tokens": 0,
+                  "rejected_prediction_tokens": 0
+                }
+              },
+              "stream": false,
+              "provider": "openai"
+            },
+            "duration": 24,
+            "validation": {
+              "relevant": true,
+              "checked_at": "2026-05-08T07:35:01.503Z"
+            },
+            "answer_mode": "spoken",
+            "question_id": "6c16811e-569e-4323-8110-0d6aeb32d0b5",
+            "candidate_id": "ac697594-9807-4a99-a352-539f9a1316c3",
+            "original_transcript": "I have some exposure to signals, you, performance, tuning, degrading, actions, but my experience is limited. Usually I would try a few things, ask teammates, and see what works. I cannot give an exact metric, a clear implementation sequence, or a strong production example for signals right now.",
+            "session_question_id": "6c16811e-569e-4323-8110-0d6aeb32d0b5",
+            "raw_candidate_answer": "I have some exposure to signals, you, performance, tuning, degrading, actions, but my experience is limited. Usually I would try a few things, ask teammates, and see what works. I cannot give an exact metric, a clear implementation sequence, or a strong production example for signals right now.",
+            "submitted_question_text": "What signals tell you Performance Tuning is degrading, and what actions do you take next?"
+          },
+          "answered_at": "2026-05-08T07:35:01.767Z",
+          "status": "completed"
+        }
+      },
+      {
+        "questionText": "You highlighted  \"assisted on small bug fixes\" . What was the most demanding piece of work around it, and how did you deliver the result?",
+        "transcript": "I have some exposure to you, highlighted, assisted, small, bug, fixes, but my experience is limited. Usually I would try a few things, ask teammates, and see what works. I cannot give an exact metric, a clear implementation sequence, or a strong production example for you right now.",
+        "answer": {
+          "answer_id": "20321c50-62c9-44d9-b487-a3f2c4ac5bec",
+          "attempt_id": "ee94db36-4162-4b9b-b439-50d7fffac0db",
+          "question_id": null,
+          "session_question_id": "ac87b748-fa47-48e6-a5b6-8c215a91e417",
+          "answer_text": "I have some exposure to bug fixes, but my experience is limited. I usually try a few things, ask teammates, and see what works. I cannot provide an exact metric, a clear implementation sequence, or a strong production example at this moment.",
+          "answer_payload": {
+            "llm": {
+              "id": "chatcmpl-DdA1h87F3TXpFlUCulBRaQJH0Ayau",
+              "model": "gpt-4o-mini-2024-07-18",
+              "usage": {
+                "total_tokens": 236,
+                "prompt_tokens": 186,
+                "completion_tokens": 50,
+                "prompt_tokens_details": {
+                  "audio_tokens": 0,
+                  "cached_tokens": 0
+                },
+                "completion_tokens_details": {
+                  "audio_tokens": 0,
+                  "reasoning_tokens": 0,
+                  "accepted_prediction_tokens": 0,
+                  "rejected_prediction_tokens": 0
+                }
+              },
+              "stream": false,
+              "provider": "openai"
+            },
+            "duration": 24,
+            "validation": {
+              "relevant": true,
+              "checked_at": "2026-05-08T07:35:06.944Z"
+            },
+            "answer_mode": "spoken",
+            "question_id": "ac87b748-fa47-48e6-a5b6-8c215a91e417",
+            "candidate_id": "ac697594-9807-4a99-a352-539f9a1316c3",
+            "original_transcript": "I have some exposure to you, highlighted, assisted, small, bug, fixes, but my experience is limited. Usually I would try a few things, ask teammates, and see what works. I cannot give an exact metric, a clear implementation sequence, or a strong production example for you right now.",
+            "session_question_id": "ac87b748-fa47-48e6-a5b6-8c215a91e417",
+            "raw_candidate_answer": "I have some exposure to you, highlighted, assisted, small, bug, fixes, but my experience is limited. Usually I would try a few things, ask teammates, and see what works. I cannot give an exact metric, a clear implementation sequence, or a strong production example for you right now.",
+            "submitted_question_text": "You highlighted  \"assisted on small bug fixes\" . What was the most demanding piece of work around it, and how did you deliver the result?"
+          },
+          "answered_at": "2026-05-08T07:35:07.209Z",
+          "status": "completed"
+        }
+      },
+      {
+        "questionText": "How do you troubleshoot Build and optimize high-throughput backend services, troubleshoot production incidents, tune PostgreSQL performance, and design reliable APIs when it starts failing in production?",
+        "transcript": "I have some exposure to how, you, troubleshoot, build, optimize, high-throughput, but my experience is limited. Usually I would try a few things, ask teammates, and see what works. I cannot give an exact metric, a clear implementation sequence, or a strong production example for how right now.",
+        "answer": {
+          "answer_id": "abe3407b-58b7-40ea-a8b2-b9580b291eae",
+          "attempt_id": "ee94db36-4162-4b9b-b439-50d7fffac0db",
+          "question_id": null,
+          "session_question_id": "9c88bd19-82ab-48eb-8d77-3cbb00e04e22",
+          "answer_text": "I have some exposure to troubleshooting, building, and optimizing high-throughput backend services, but my experience is limited. Usually, I would try a few things, ask teammates, and see what works. I cannot provide an exact metric, a clear implementation sequence, or a strong production example at this time.",
+          "answer_payload": {
+            "llm": {
+              "id": "chatcmpl-DdA1nk263qu6T525YVw4IiCk4A5DC",
+              "model": "gpt-4o-mini-2024-07-18",
+              "usage": {
+                "total_tokens": 251,
+                "prompt_tokens": 190,
+                "completion_tokens": 61,
+                "prompt_tokens_details": {
+                  "audio_tokens": 0,
+                  "cached_tokens": 0
+                },
+                "completion_tokens_details": {
+                  "audio_tokens": 0,
+                  "reasoning_tokens": 0,
+                  "accepted_prediction_tokens": 0,
+                  "rejected_prediction_tokens": 0
+                }
+              },
+              "stream": false,
+              "provider": "openai"
+            },
+            "duration": 24,
+            "validation": {
+              "relevant": true,
+              "checked_at": "2026-05-08T07:35:13.033Z"
+            },
+            "answer_mode": "spoken",
+            "question_id": "9c88bd19-82ab-48eb-8d77-3cbb00e04e22",
+            "candidate_id": "ac697594-9807-4a99-a352-539f9a1316c3",
+            "original_transcript": "I have some exposure to how, you, troubleshoot, build, optimize, high-throughput, but my experience is limited. Usually I would try a few things, ask teammates, and see what works. I cannot give an exact metric, a clear implementation sequence, or a strong production example for how right now.",
+            "session_question_id": "9c88bd19-82ab-48eb-8d77-3cbb00e04e22",
+            "raw_candidate_answer": "I have some exposure to how, you, troubleshoot, build, optimize, high-throughput, but my experience is limited. Usually I would try a few things, ask teammates, and see what works. I cannot give an exact metric, a clear implementation sequence, or a strong production example for how right now.",
+            "submitted_question_text": "How do you troubleshoot Build and optimize high-throughput backend services, troubleshoot production incidents, tune PostgreSQL performance, and design reliable APIs when it starts failing in production?"
+          },
+          "answered_at": "2026-05-08T07:35:13.301Z",
+          "status": "completed"
+        }
+      },
+      {
+        "questionText": "If you had to improve Senior Backend Engineer under real delivery pressure, what would you examine first?",
+        "transcript": "I have some exposure to you, had, improve, senior, backend, engineer, but my experience is limited. Usually I would try a few things, ask teammates, and see what works. I cannot give an exact metric, a clear implementation sequence, or a strong production example for you right now.",
+        "answer": {
+          "answer_id": "72a4e323-eb79-457a-a83f-5178830a178f",
+          "attempt_id": "ee94db36-4162-4b9b-b439-50d7fffac0db",
+          "question_id": null,
+          "session_question_id": "8a6c8929-82ec-45ca-8648-e93fef4fc131",
+          "answer_text": "I have some exposure to improving a Senior Backend Engineer, but my experience is limited. Usually, I would try a few things, ask teammates, and see what works. I cannot give an exact metric, a clear implementation sequence, or a strong production example right now.",
+          "answer_payload": {
+            "llm": {
+              "id": "chatcmpl-DdA1tOV0zBHuO2GdCEwiatU47Z240",
+              "model": "gpt-4o-mini-2024-07-18",
+              "usage": {
+                "total_tokens": 228,
+                "prompt_tokens": 174,
+                "completion_tokens": 54,
+                "prompt_tokens_details": {
+                  "audio_tokens": 0,
+                  "cached_tokens": 0
+                },
+                "completion_tokens_details": {
+                  "audio_tokens": 0,
+                  "reasoning_tokens": 0,
+                  "accepted_prediction_tokens": 0,
+                  "rejected_prediction_tokens": 0
+                }
+              },
+              "stream": false,
+              "provider": "openai"
+            },
+            "duration": 24,
+            "validation": {
+              "relevant": true,
+              "checked_at": "2026-05-08T07:35:18.610Z"
+            },
+            "answer_mode": "spoken",
+            "question_id": "8a6c8929-82ec-45ca-8648-e93fef4fc131",
+            "candidate_id": "ac697594-9807-4a99-a352-539f9a1316c3",
+            "original_transcript": "I have some exposure to you, had, improve, senior, backend, engineer, but my experience is limited. Usually I would try a few things, ask teammates, and see what works. I cannot give an exact metric, a clear implementation sequence, or a strong production example for you right now.",
+            "session_question_id": "8a6c8929-82ec-45ca-8648-e93fef4fc131",
+            "raw_candidate_answer": "I have some exposure to you, had, improve, senior, backend, engineer, but my experience is limited. Usually I would try a few things, ask teammates, and see what works. I cannot give an exact metric, a clear implementation sequence, or a strong production example for you right now.",
+            "submitted_question_text": "If you had to improve Senior Backend Engineer under real delivery pressure, what would you examine first?"
+          },
+          "answered_at": "2026-05-08T07:35:18.876Z",
+          "status": "completed"
+        }
+      },
+      {
+        "questionText": "Before we wrap up, what is one recent decision you made while working on SQL, and why did it matter?",
+        "transcript": "I have some exposure to wrap, one, recent, decision, you, made, but my experience is limited. Usually I would try a few things, ask teammates, and see what works. I cannot give an exact metric, a clear implementation sequence, or a strong production example for wrap right now.",
+        "answer": {
+          "answer_id": "71cbd91e-f46a-43b9-b162-838ec80d9d09",
+          "attempt_id": "ee94db36-4162-4b9b-b439-50d7fffac0db",
+          "question_id": null,
+          "session_question_id": "f2f98b4e-477c-48df-afe9-90d5993b960a",
+          "answer_text": "I have some exposure to SQL, but my experience is limited. Usually, I would try a few things, ask teammates, and see what works. I cannot give an exact metric, a clear implementation sequence, or a strong production example right now.",
+          "answer_payload": {
+            "llm": {
+              "id": "chatcmpl-DdA1yUzeoN4UZn8O45mDaGuWto6uf",
+              "model": "gpt-4o-mini-2024-07-18",
+              "usage": {
+                "total_tokens": 228,
+                "prompt_tokens": 178,
+                "completion_tokens": 50,
+                "prompt_tokens_details": {
+                  "audio_tokens": 0,
+                  "cached_tokens": 0
+                },
+                "completion_tokens_details": {
+                  "audio_tokens": 0,
+                  "reasoning_tokens": 0,
+                  "accepted_prediction_tokens": 0,
+                  "rejected_prediction_tokens": 0
+                }
+              },
+              "stream": false,
+              "provider": "openai"
+            },
+            "duration": 24,
+            "validation": {
+              "relevant": true,
+              "checked_at": "2026-05-08T07:35:23.939Z"
+            },
+            "answer_mode": "spoken",
+            "question_id": "f2f98b4e-477c-48df-afe9-90d5993b960a",
+            "candidate_id": "ac697594-9807-4a99-a352-539f9a1316c3",
+            "original_transcript": "I have some exposure to wrap, one, recent, decision, you, made, but my experience is limited. Usually I would try a few things, ask teammates, and see what works. I cannot give an exact metric, a clear implementation sequence, or a strong production example for wrap right now.",
+            "session_question_id": "f2f98b4e-477c-48df-afe9-90d5993b960a",
+            "raw_candidate_answer": "I have some exposure to wrap, one, recent, decision, you, made, but my experience is limited. Usually I would try a few things, ask teammates, and see what works. I cannot give an exact metric, a clear implementation sequence, or a strong production example for wrap right now.",
+            "submitted_question_text": "Before we wrap up, what is one recent decision you made while working on SQL, and why did it matter?"
+          },
+          "answered_at": "2026-05-08T07:35:24.204Z",
+          "status": "completed"
+        }
+      },
+      {
+        "questionText": "Before we wrap up, what is one recent decision you made while working on SQL, and why did it matter?",
+        "transcript": "I have some exposure to wrap, one, recent, decision, you, made, but my experience is limited. Usually I would try a few things, ask teammates, and see what works. I cannot give an exact metric, a clear implementation sequence, or a strong production example for wrap right now.",
+        "answer": {
+          "answer_id": "07af2e9c-7e6d-45f1-b438-5f66d30d9d3e",
+          "attempt_id": "ee94db36-4162-4b9b-b439-50d7fffac0db",
+          "question_id": null,
+          "session_question_id": "b642e508-8b63-4615-b4e1-14b5511b9b29",
+          "answer_text": "I have some exposure to SQL, but my experience is limited. Usually, I would try a few things, ask teammates, and see what works. I cannot give an exact metric, a clear implementation sequence, or a strong production example right now.",
+          "answer_payload": {
+            "llm": {
+              "id": "chatcmpl-DdA24zI5NmLQmHBC5cIhdfwncOTIw",
+              "model": "gpt-4o-mini-2024-07-18",
+              "usage": {
+                "total_tokens": 228,
+                "prompt_tokens": 178,
+                "completion_tokens": 50,
+                "prompt_tokens_details": {
+                  "audio_tokens": 0,
+                  "cached_tokens": 0
+                },
+                "completion_tokens_details": {
+                  "audio_tokens": 0,
+                  "reasoning_tokens": 0,
+                  "accepted_prediction_tokens": 0,
+                  "rejected_prediction_tokens": 0
+                }
+              },
+              "stream": false,
+              "provider": "openai"
+            },
+            "duration": 24,
+            "validation": {
+              "relevant": true,
+              "checked_at": "2026-05-08T07:35:30.222Z"
+            },
+            "answer_mode": "spoken",
+            "question_id": "b642e508-8b63-4615-b4e1-14b5511b9b29",
+            "candidate_id": "ac697594-9807-4a99-a352-539f9a1316c3",
+            "original_transcript": "I have some exposure to wrap, one, recent, decision, you, made, but my experience is limited. Usually I would try a few things, ask teammates, and see what works. I cannot give an exact metric, a clear implementation sequence, or a strong production example for wrap right now.",
+            "session_question_id": "b642e508-8b63-4615-b4e1-14b5511b9b29",
+            "raw_candidate_answer": "I have some exposure to wrap, one, recent, decision, you, made, but my experience is limited. Usually I would try a few things, ask teammates, and see what works. I cannot give an exact metric, a clear implementation sequence, or a strong production example for wrap right now.",
+            "submitted_question_text": "Before we wrap up, what is one recent decision you made while working on SQL, and why did it matter?"
+          },
+          "answered_at": "2026-05-08T07:35:30.487Z",
+          "status": "completed"
+        }
+      }
+    ],
+    "evaluations": [
+      {
+        "answer_id": "f4940bff-6a9f-4b73-b265-4087c6acb5c7",
+        "attempt_id": "ee94db36-4162-4b9b-b439-50d7fffac0db",
+        "skill_id": null,
+        "skill_name": null,
+        "skill_type": "functional",
+        "skill_score": 0.2,
+        "clarity_score": 0.3,
+        "depth_score": 0.1,
+        "confidence_score": 0.2,
+        "fraud_score": 1,
+        "reasoning": "The candidate's response indicates limited experience and a lack of specific examples, which significantly lowers the skill and depth scores. The clarity score is also low due to the vague nature of the answer. The candidate shows signs of attention loss and disengagement, reflected in the behavior signals, which contributes to a lower confidence score. The high fraud score is due to inconsistencies in their claims of experience and the overall lack of concrete details.",
+        "evaluation_json": {
+          "skill_score": 0.2,
+          "clarity_score": 0.3,
+          "depth_score": 0.1,
+          "confidence_score": 0.2,
+          "fraud_score": 0.7,
+          "reasoning": "The candidate's response indicates limited experience and a lack of specific examples, which significantly lowers the skill and depth scores. The clarity score is also low due to the vague nature of the answer. The candidate shows signs of attention loss and disengagement, reflected in the behavior signals, which contributes to a lower confidence score. The high fraud score is due to inconsistencies in their claims of experience and the overall lack of concrete details.",
+          "signal_adjustment": {
+            "behavior_fraud_adjustment": 0.78,
+            "behavior_signals": [
+              {
+                "type": "attention_loss",
+                "severity": "medium",
+                "timestamp": 1778225688289
+              },
+              {
+                "type": "tab_switch",
+                "severity": "high",
+                "timestamp": 1778225688290
+              },
+              {
+                "type": "long_gaze_away",
+                "severity": "high",
+                "timestamp": 1778225688291
+              },
+              {
+                "type": "no_face",
+                "severity": "medium",
+                "timestamp": 1778225688292
+              }
+            ],
+            "focus_metrics": {
+              "focusRatio": 0.34,
+              "lookAwayEvents": 4,
+              "maxLookAwayDuration": 9.4,
+              "totalAnswerTime": 24,
+              "assessment": "high_risk"
+            }
+          }
+        }
+      },
+      {
+        "answer_id": "c6e5aa01-5a5d-4167-b4b9-7127cf1efee2",
+        "attempt_id": "ee94db36-4162-4b9b-b439-50d7fffac0db",
+        "skill_id": null,
+        "skill_name": null,
+        "skill_type": "functional",
+        "skill_score": 0.2,
+        "clarity_score": 0.4,
+        "depth_score": 0.1,
+        "confidence_score": 0.3,
+        "fraud_score": 1,
+        "reasoning": "The candidate's response indicates limited experience with performance tuning issues, which significantly affects the skill score. The clarity score is moderate due to some structure in the response, but the vagueness of the examples reduces depth. The confidence score is low as the candidate expresses uncertainty and lacks decisiveness. The high fraud score reflects the inconsistencies in their engagement, such as attention loss and tab switching, suggesting a lack of authenticity or focus during the interview.",
+        "evaluation_json": {
+          "skill_score": 0.2,
+          "clarity_score": 0.4,
+          "depth_score": 0.1,
+          "confidence_score": 0.3,
+          "fraud_score": 0.7,
+          "reasoning": "The candidate's response indicates limited experience with performance tuning issues, which significantly affects the skill score. The clarity score is moderate due to some structure in the response, but the vagueness of the examples reduces depth. The confidence score is low as the candidate expresses uncertainty and lacks decisiveness. The high fraud score reflects the inconsistencies in their engagement, such as attention loss and tab switching, suggesting a lack of authenticity or focus during the interview.",
+          "signal_adjustment": {
+            "behavior_fraud_adjustment": 0.78,
+            "behavior_signals": [
+              {
+                "type": "attention_loss",
+                "severity": "medium",
+                "timestamp": 1778225695043
+              },
+              {
+                "type": "tab_switch",
+                "severity": "high",
+                "timestamp": 1778225695044
+              },
+              {
+                "type": "long_gaze_away",
+                "severity": "high",
+                "timestamp": 1778225695045
+              },
+              {
+                "type": "no_face",
+                "severity": "medium",
+                "timestamp": 1778225695046
+              }
+            ],
+            "focus_metrics": {
+              "focusRatio": 0.34,
+              "lookAwayEvents": 4,
+              "maxLookAwayDuration": 9.4,
+              "totalAnswerTime": 24,
+              "assessment": "high_risk"
+            }
+          }
+        }
+      },
+      {
+        "answer_id": "5958bfaa-d9dd-480a-9631-bf2f3b971810",
+        "attempt_id": "ee94db36-4162-4b9b-b439-50d7fffac0db",
+        "skill_id": null,
+        "skill_name": null,
+        "skill_type": "functional",
+        "skill_score": 0.2,
+        "clarity_score": 0.4,
+        "depth_score": 0.2,
+        "confidence_score": 0.3,
+        "fraud_score": 1,
+        "reasoning": "The candidate demonstrates limited knowledge and experience in performance tuning, which is reflected in their vague response and inability to provide specific metrics or examples. Their communication lacks structure and clarity, making it difficult to follow their thought process. The low confidence score indicates hesitance and uncertainty in their delivery. Additionally, the behavior signals suggest a lack of engagement and focus during the interview, raising concerns about authenticity and commitment to the topic.",
+        "evaluation_json": {
+          "skill_score": 0.2,
+          "clarity_score": 0.4,
+          "depth_score": 0.2,
+          "confidence_score": 0.3,
+          "fraud_score": 0.6,
+          "reasoning": "The candidate demonstrates limited knowledge and experience in performance tuning, which is reflected in their vague response and inability to provide specific metrics or examples. Their communication lacks structure and clarity, making it difficult to follow their thought process. The low confidence score indicates hesitance and uncertainty in their delivery. Additionally, the behavior signals suggest a lack of engagement and focus during the interview, raising concerns about authenticity and commitment to the topic.",
+          "signal_adjustment": {
+            "behavior_fraud_adjustment": 0.78,
+            "behavior_signals": [
+              {
+                "type": "attention_loss",
+                "severity": "medium",
+                "timestamp": 1778225701535
+              },
+              {
+                "type": "tab_switch",
+                "severity": "high",
+                "timestamp": 1778225701536
+              },
+              {
+                "type": "long_gaze_away",
+                "severity": "high",
+                "timestamp": 1778225701537
+              },
+              {
+                "type": "no_face",
+                "severity": "medium",
+                "timestamp": 1778225701538
+              }
+            ],
+            "focus_metrics": {
+              "focusRatio": 0.34,
+              "lookAwayEvents": 4,
+              "maxLookAwayDuration": 9.4,
+              "totalAnswerTime": 24,
+              "assessment": "high_risk"
+            }
+          }
+        }
+      },
+      {
+        "answer_id": "20321c50-62c9-44d9-b487-a3f2c4ac5bec",
+        "attempt_id": "ee94db36-4162-4b9b-b439-50d7fffac0db",
+        "skill_id": null,
+        "skill_name": null,
+        "skill_type": "functional",
+        "skill_score": 0.2,
+        "clarity_score": 0.4,
+        "depth_score": 0.1,
+        "confidence_score": 0.3,
+        "fraud_score": 1,
+        "reasoning": "The candidate's response indicates limited experience with bug fixes, lacking specific examples or metrics, which affects the skill and depth scores significantly. Clarity is somewhat present, but the overall communication structure is weak due to vagueness. The confidence score is low as the candidate expresses uncertainty and hesitance. The behavior signals, including attention loss and tab switching, suggest a lack of engagement, raising the fraud score due to potential authenticity concerns.",
+        "evaluation_json": {
+          "skill_score": 0.2,
+          "clarity_score": 0.4,
+          "depth_score": 0.1,
+          "confidence_score": 0.3,
+          "fraud_score": 0.6,
+          "reasoning": "The candidate's response indicates limited experience with bug fixes, lacking specific examples or metrics, which affects the skill and depth scores significantly. Clarity is somewhat present, but the overall communication structure is weak due to vagueness. The confidence score is low as the candidate expresses uncertainty and hesitance. The behavior signals, including attention loss and tab switching, suggest a lack of engagement, raising the fraud score due to potential authenticity concerns.",
+          "signal_adjustment": {
+            "behavior_fraud_adjustment": 0.78,
+            "behavior_signals": [
+              {
+                "type": "attention_loss",
+                "severity": "medium",
+                "timestamp": 1778225706976
+              },
+              {
+                "type": "tab_switch",
+                "severity": "high",
+                "timestamp": 1778225706977
+              },
+              {
+                "type": "long_gaze_away",
+                "severity": "high",
+                "timestamp": 1778225706978
+              },
+              {
+                "type": "no_face",
+                "severity": "medium",
+                "timestamp": 1778225706979
+              }
+            ],
+            "focus_metrics": {
+              "focusRatio": 0.34,
+              "lookAwayEvents": 4,
+              "maxLookAwayDuration": 9.4,
+              "totalAnswerTime": 24,
+              "assessment": "high_risk"
+            }
+          }
+        }
+      },
+      {
+        "answer_id": "abe3407b-58b7-40ea-a8b2-b9580b291eae",
+        "attempt_id": "ee94db36-4162-4b9b-b439-50d7fffac0db",
+        "skill_id": null,
+        "skill_name": null,
+        "skill_type": "functional",
+        "skill_score": 0.3,
+        "clarity_score": 0.4,
+        "depth_score": 0.2,
+        "confidence_score": 0.3,
+        "fraud_score": 1,
+        "reasoning": "The candidate demonstrates limited experience and provides vague responses without specific examples or metrics, indicating a lack of depth in knowledge. The communication lacks structure and clarity, making it difficult to follow. Behavioral signals such as attention loss and tab switching suggest disengagement, which raises concerns about authenticity and confidence in their abilities.",
+        "evaluation_json": {
+          "skill_score": 0.3,
+          "clarity_score": 0.4,
+          "depth_score": 0.2,
+          "confidence_score": 0.3,
+          "fraud_score": 0.7,
+          "reasoning": "The candidate demonstrates limited experience and provides vague responses without specific examples or metrics, indicating a lack of depth in knowledge. The communication lacks structure and clarity, making it difficult to follow. Behavioral signals such as attention loss and tab switching suggest disengagement, which raises concerns about authenticity and confidence in their abilities.",
+          "signal_adjustment": {
+            "behavior_fraud_adjustment": 0.78,
+            "behavior_signals": [
+              {
+                "type": "attention_loss",
+                "severity": "medium",
+                "timestamp": 1778225713066
+              },
+              {
+                "type": "tab_switch",
+                "severity": "high",
+                "timestamp": 1778225713067
+              },
+              {
+                "type": "long_gaze_away",
+                "severity": "high",
+                "timestamp": 1778225713068
+              },
+              {
+                "type": "no_face",
+                "severity": "medium",
+                "timestamp": 1778225713069
+              }
+            ],
+            "focus_metrics": {
+              "focusRatio": 0.34,
+              "lookAwayEvents": 4,
+              "maxLookAwayDuration": 9.4,
+              "totalAnswerTime": 24,
+              "assessment": "high_risk"
+            }
+          }
+        }
+      },
+      {
+        "answer_id": "72a4e323-eb79-457a-a83f-5178830a178f",
+        "attempt_id": "ee94db36-4162-4b9b-b439-50d7fffac0db",
+        "skill_id": null,
+        "skill_name": null,
+        "skill_type": "functional",
+        "skill_score": 0.3,
+        "clarity_score": 0.4,
+        "depth_score": 0.2,
+        "confidence_score": 0.3,
+        "fraud_score": 1,
+        "reasoning": "The candidate shows limited experience and provides vague responses without specific metrics or examples, indicating a lack of depth in knowledge. The communication is somewhat structured but lacks clarity and decisiveness. The behavior signals suggest a loss of attention and potential disengagement, raising concerns about authenticity and confidence.",
+        "evaluation_json": {
+          "skill_score": 0.3,
+          "clarity_score": 0.4,
+          "depth_score": 0.2,
+          "confidence_score": 0.3,
+          "fraud_score": 0.7,
+          "reasoning": "The candidate shows limited experience and provides vague responses without specific metrics or examples, indicating a lack of depth in knowledge. The communication is somewhat structured but lacks clarity and decisiveness. The behavior signals suggest a loss of attention and potential disengagement, raising concerns about authenticity and confidence.",
+          "signal_adjustment": {
+            "behavior_fraud_adjustment": 0.78,
+            "behavior_signals": [
+              {
+                "type": "attention_loss",
+                "severity": "medium",
+                "timestamp": 1778225718644
+              },
+              {
+                "type": "tab_switch",
+                "severity": "high",
+                "timestamp": 1778225718645
+              },
+              {
+                "type": "long_gaze_away",
+                "severity": "high",
+                "timestamp": 1778225718646
+              },
+              {
+                "type": "no_face",
+                "severity": "medium",
+                "timestamp": 1778225718647
+              }
+            ],
+            "focus_metrics": {
+              "focusRatio": 0.34,
+              "lookAwayEvents": 4,
+              "maxLookAwayDuration": 9.4,
+              "totalAnswerTime": 24,
+              "assessment": "high_risk"
+            }
+          }
+        }
+      },
+      {
+        "answer_id": "71cbd91e-f46a-43b9-b162-838ec80d9d09",
+        "attempt_id": "ee94db36-4162-4b9b-b439-50d7fffac0db",
+        "skill_id": null,
+        "skill_name": null,
+        "skill_type": "functional",
+        "skill_score": 0.2,
+        "clarity_score": 0.3,
+        "depth_score": 0.1,
+        "confidence_score": 0.2,
+        "fraud_score": 1,
+        "reasoning": "The candidate demonstrates limited experience with SQL, which is reflected in their vague response and inability to provide specific examples or metrics. The communication lacks structure and clarity, making it difficult to follow. Additionally, the behavior signals indicate a lack of engagement and focus during the interview, raising concerns about authenticity and confidence in their skills.",
+        "evaluation_json": {
+          "skill_score": 0.2,
+          "clarity_score": 0.3,
+          "depth_score": 0.1,
+          "confidence_score": 0.2,
+          "fraud_score": 0.7,
+          "reasoning": "The candidate demonstrates limited experience with SQL, which is reflected in their vague response and inability to provide specific examples or metrics. The communication lacks structure and clarity, making it difficult to follow. Additionally, the behavior signals indicate a lack of engagement and focus during the interview, raising concerns about authenticity and confidence in their skills.",
+          "signal_adjustment": {
+            "behavior_fraud_adjustment": 0.78,
+            "behavior_signals": [
+              {
+                "type": "attention_loss",
+                "severity": "medium",
+                "timestamp": 1778225723970
+              },
+              {
+                "type": "tab_switch",
+                "severity": "high",
+                "timestamp": 1778225723971
+              },
+              {
+                "type": "long_gaze_away",
+                "severity": "high",
+                "timestamp": 1778225723972
+              },
+              {
+                "type": "no_face",
+                "severity": "medium",
+                "timestamp": 1778225723973
+              }
+            ],
+            "focus_metrics": {
+              "focusRatio": 0.34,
+              "lookAwayEvents": 4,
+              "maxLookAwayDuration": 9.4,
+              "totalAnswerTime": 24,
+              "assessment": "high_risk"
+            }
+          }
+        }
+      },
+      {
+        "answer_id": "07af2e9c-7e6d-45f1-b438-5f66d30d9d3e",
+        "attempt_id": "ee94db36-4162-4b9b-b439-50d7fffac0db",
+        "skill_id": null,
+        "skill_name": null,
+        "skill_type": "functional",
+        "skill_score": 0.2,
+        "clarity_score": 0.4,
+        "depth_score": 0.1,
+        "confidence_score": 0.3,
+        "fraud_score": 1,
+        "reasoning": "The candidate demonstrates limited experience with SQL, which is reflected in their vague response and inability to provide specific examples or metrics. The communication lacks structure and clarity, making it difficult to follow. The low depth score indicates a lack of technical detail and authenticity in their answer. The confidence score is moderate due to hesitance in their delivery. The high fraud score is attributed to behavioral signals such as attention loss and tab switching, suggesting a lack of engagement or potential dishonesty.",
+        "evaluation_json": {
+          "skill_score": 0.2,
+          "clarity_score": 0.4,
+          "depth_score": 0.1,
+          "confidence_score": 0.3,
+          "fraud_score": 0.7,
+          "reasoning": "The candidate demonstrates limited experience with SQL, which is reflected in their vague response and inability to provide specific examples or metrics. The communication lacks structure and clarity, making it difficult to follow. The low depth score indicates a lack of technical detail and authenticity in their answer. The confidence score is moderate due to hesitance in their delivery. The high fraud score is attributed to behavioral signals such as attention loss and tab switching, suggesting a lack of engagement or potential dishonesty.",
+          "signal_adjustment": {
+            "behavior_fraud_adjustment": 0.78,
+            "behavior_signals": [
+              {
+                "type": "attention_loss",
+                "severity": "medium",
+                "timestamp": 1778225730246
+              },
+              {
+                "type": "tab_switch",
+                "severity": "high",
+                "timestamp": 1778225730247
+              },
+              {
+                "type": "long_gaze_away",
+                "severity": "high",
+                "timestamp": 1778225730248
+              },
+              {
+                "type": "no_face",
+                "severity": "medium",
+                "timestamp": 1778225730249
+              }
+            ],
+            "focus_metrics": {
+              "focusRatio": 0.34,
+              "lookAwayEvents": 4,
+              "maxLookAwayDuration": 9.4,
+              "totalAnswerTime": 24,
+              "assessment": "high_risk"
+            }
+          }
+        }
+      }
+    ],
+    "finalPayload": null
+  }
+}

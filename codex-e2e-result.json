@@ -1,0 +1,46 @@
+{
+  "startedAt": "2026-05-08T06:52:04.290Z",
+  "baseUrl": "http://127.0.0.1:3110",
+  "seed": {
+    "stamp": "20260508064754",
+    "organizationId": "8cad69fd-80b6-4636-a56f-0a067583d191",
+    "organizationName": "Codex Reliability 20260508064754",
+    "recruiterId": "a14b2391-320a-4c95-ac81-4f656a7c1c8c",
+    "recruiterEmail": "codex.recruiter.20260508064754@example.com",
+    "jobId": "cbd56fd2-273a-45e6-b9cd-42cfa4930da2",
+    "candidateA": {
+      "candidateId": "9ba65462-8281-4cb7-aab8-895622e339af",
+      "interviewId": "a749fdff-4efc-421d-b007-bd92e8966ddd",
+      "inviteId": "709db58f-4e2f-4a85-aed6-80963b1c56ac",
+      "token": "codex-a-20260508064754-c5e2cc53-99c5-4531-ae9d-1d78cc9db58a",
+      "email": "candidate.a.20260508064754@example.com",
+      "link": "http://127.0.0.1:3108/interview/codex-a-20260508064754-c5e2cc53-99c5-4531-ae9d-1d78cc9db58a"
+    },
+    "candidateB": {
+      "candidateId": "ac697594-9807-4a99-a352-539f9a1316c3",
+      "interviewId": "795a281e-f612-46fb-8f98-60539a7917c1",
+      "inviteId": "8c5fd405-94be-447b-8fb2-c53346925616",
+      "token": "codex-b-20260508064754-aca0ed8a-df1c-44c9-8ba1-588424086c7e",
+      "email": "candidate.b.20260508064754@example.com",
+      "link": "http://127.0.0.1:3108/interview/codex-b-20260508064754-aca0ed8a-df1c-44c9-8ba1-588424086c7e"
+    },
+    "baseUrl": "http://127.0.0.1:3108"
+  },
+  "uiRecovery": null,
+  "candidateA": null,
+  "candidateB": null,
+  "server": {
+    "exitCode": null,
+    "stdout": "\n> hireveri-calm@0.1.0 dev\n> next dev --port 3110\n\n▲ Next.js 16.1.1 (Turbopack)\n- Local:         http://localhost:3110\n- Network:       http://192.168.0.101:3110\n- Environments: .env.local, .env\n- Experiments (use with caution):\n  · cpus: 1\n\n✓ Starting...\n✓ Ready in 1066ms\n GET / 307 in 1289ms (compile: 681ms, render: 608ms)\n○ Compiling /interview/[token] ...\n",
+    "stderr": "(node:17280) Warning: SECURITY WARNING: The SSL modes 'prefer', 'require', and 'verify-ca' are treated as aliases for 'verify-full'.\nIn the next major version (pg-connection-string v3.0.0 and pg v9.0.0), these modes will adopt standard libpq semantics, which have weaker security guarantees.\n\nTo prepare for this change:\n- If you want the current behavior, explicitly use 'sslmode=verify-full'\n- If you want libpq compatibility now, use 'uselibpqcompat=true&sslmode=require'\n\nSee https://www.postgresql.org/docs/current/libpq-ssl.html for libpq SSL mode definitions.\n(Use `node --trace-warnings ...` to show where the warning was created)\n(node:17280) Warning: Setting the NODE_TLS_REJECT_UNAUTHORIZED environment variable to '0' makes TLS connections and HTTPS requests insecure by disabling certificate verification.\n"
+  },
+  "errors": [
+    {
+      "message": "page.goto: net::ERR_CONNECTION_RESET at http://127.0.0.1:3110/interview/codex-a-20260508064754-c5e2cc53-99c5-4531-ae9d-1d78cc9db58a\nCall log:\n\u001b[2m  - navigating to \"http://127.0.0.1:3110/interview/codex-a-20260508064754-c5e2cc53-99c5-4531-ae9d-1d78cc9db58a\", waiting until \"domcontentloaded\"\u001b[22m\n",
+      "stack": "page.goto: net::ERR_CONNECTION_RESET at http://127.0.0.1:3110/interview/codex-a-20260508064754-c5e2cc53-99c5-4531-ae9d-1d78cc9db58a\nCall log:\n\u001b[2m  - navigating to \"http://127.0.0.1:3110/interview/codex-a-20260508064754-c5e2cc53-99c5-4531-ae9d-1d78cc9db58a\", waiting until \"domcontentloaded\"\u001b[22m\n\n    at runBrowserRecoveryCheck ([stdin]:100:14)\n    at async [stdin]:243:25",
+      "payload": null,
+      "status": null
+    }
+  ],
+  "finishedAt": "2026-05-08T06:52:13.456Z"
+}

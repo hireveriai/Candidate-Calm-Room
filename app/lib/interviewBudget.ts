@@ -14,8 +14,8 @@ export function deriveQuestionTargetFromDuration(durationMinutes: number | null 
   if (duration >= 45) return 8;
   if (duration >= 30) return 6;
   if (duration >= 20) return 4;
-  if (duration >= 15) return 3;
-  if (duration >= 10) return 2;
+  if (duration >= 15) return 4;
+  if (duration >= 10) return 4;
   if (duration > 0) return 2;
   return 6;
 }
@@ -27,8 +27,8 @@ function deriveMinimumQuestionTargetFromDuration(durationMinutes: number | null 
   if (duration >= 45) return 6;
   if (duration >= 30) return 5;
   if (duration >= 20) return 3;
-  if (duration >= 15) return 2;
-  if (duration >= 10) return 2;
+  if (duration >= 15) return 3;
+  if (duration >= 10) return 3;
   if (duration > 0) return 1;
   return 1;
 }

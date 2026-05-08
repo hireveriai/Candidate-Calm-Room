@@ -456,6 +456,32 @@ async function loadScoreAggregates(attemptId: string) {
   }
 }
 
+async function sleep(ms: number) {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function loadScoreAggregatesWithRetry(attemptId: string) {
+  let aggregateRows = await loadScoreAggregates(attemptId);
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const aggregate = aggregateRows[0];
+    const answeredQuestions = aggregate?.questions_answered ?? 0;
+    const hasComputedScores =
+      asNumber(aggregate?.avg_skill_score) > 0 ||
+      asNumber(aggregate?.avg_cognitive_score) > 0 ||
+      asNumber(aggregate?.avg_fraud_score) > 0;
+
+    if (!answeredQuestions || hasComputedScores) {
+      return aggregateRows;
+    }
+
+    await sleep(200 * (attempt + 1));
+    aggregateRows = await loadScoreAggregates(attemptId);
+  }
+
+  return aggregateRows;
+}
+
 async function loadSignalTypes(attemptId: string) {
   const rows = await prisma.$queryRaw<{ type: string }[]>`
     select type
@@ -539,7 +565,7 @@ export async function finalizeInterviewAttempt(params: {
   }
 
   const [aggregates, latestQuestions] = await Promise.all([
-    loadScoreAggregates(attemptId),
+    loadScoreAggregatesWithRetry(attemptId),
     prisma.$queryRaw<LatestQuestionRow[]>`
       select question_kind, content
       from public.session_questions

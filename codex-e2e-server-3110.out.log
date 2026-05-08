@@ -1,0 +1,16 @@
+
+> hireveri-calm@0.1.0 dev
+> next dev --port 3110
+
+▲ Next.js 16.1.1 (Turbopack)
+- Local:         http://localhost:3110
+- Network:       http://192.168.0.101:3110
+- Environments: .env.local, .env
+- Experiments (use with caution):
+  · cpus: 1
+
+✓ Starting...
+✓ Ready in 1066ms
+ GET / 307 in 1289ms (compile: 681ms, render: 608ms)
+○ Compiling /interview/[token] ...
+[?25h

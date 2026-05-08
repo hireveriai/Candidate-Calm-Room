@@ -1,0 +1,381 @@
+{
+  "candidateA": {
+    "attempt": [
+      {
+        "attempt_id": "aa821fe5-4910-4701-ab1f-cff98366f7d6",
+        "status": "completed",
+        "started_at": "2026-05-08T07:28:25.556Z",
+        "ended_at": "2026-05-08T07:34:43.020Z",
+        "ends_at": "2026-05-08T07:58:25.556Z",
+        "questions_answered": 2,
+        "expected_questions": 2,
+        "completion_percentage": "1.0000",
+        "reliability_score": "100.00",
+        "termination_type": null,
+        "termination_phase": "closing",
+        "current_phase": "closing",
+        "termination_metadata": {
+          "reason": "Insufficient capability demonstrated despite stable behavior",
+          "base_score": 15,
+          "risk_flags": [],
+          "risk_level": "LOW",
+          "risk_score": 0,
+          "final_score": 15,
+          "asked_questions": 2,
+          "avg_fraud_score": 0,
+          "avg_skill_score": 0,
+          "behavioral_flags": [],
+          "completion_factor": 1,
+          "avg_cognitive_score": 0
+        }
+      }
+    ],
+    "questions": [
+      {
+        "question_order": 1,
+        "question_kind": "core",
+        "content": "Explain your experience"
+      },
+      {
+        "question_order": 2,
+        "question_kind": "follow_up",
+        "content": "Can you provide a specific example of a query you optimized in PostgreSQL, detailing the changes you made and the results you achieved?"
+      }
+    ],
+    "answers": [
+      {
+        "answer_id": "dc08100c-7650-4b93-a017-3fcc4e1661b3",
+        "answer_text": "I have hands-on experience in backend work where I personally owned implementation, troubleshooting, and optimization. For PostgreSQL and API performance, I ide",
+        "status": "completed"
+      },
+      {
+        "answer_id": "52d3b190-289e-44d7-9845-7bd7d5e3622a",
+        "answer_text": "In my recent backend work, I owned the implementation, troubleshooting, and optimization of PostgreSQL queries. I started by identifying the failure mode, addin",
+        "status": "completed"
+      }
+    ],
+    "evals": [
+      {
+        "answer_id": "dc08100c-7650-4b93-a017-3fcc4e1661b3",
+        "score": "9.00",
+        "skill_score": "0.9",
+        "clarity_score": "0.85",
+        "depth_score": "0.9",
+        "confidence_score": "0.8",
+        "fraud_score": "0.1"
+      },
+      {
+        "answer_id": "52d3b190-289e-44d7-9845-7bd7d5e3622a",
+        "score": "8.00",
+        "skill_score": "0.8",
+        "clarity_score": "0.7",
+        "depth_score": "0.8",
+        "confidence_score": "0.8",
+        "fraud_score": "0.1"
+      }
+    ],
+    "summary": [
+      {
+        "attempt_id": "aa821fe5-4910-4701-ab1f-cff98366f7d6",
+        "overall_score": 15,
+        "risk_level": "LOW",
+        "strengths": "Basic communication clarity, Attempted structured response",
+        "weaknesses": "lack of depth, unclear answers, weak problem solving",
+        "hire_recommendation": "WEAK_CANDIDATE",
+        "created_at": "2026-05-08T07:34:43.077Z"
+      }
+    ],
+    "finalEval": [
+      {
+        "evaluation_id": "67c3bba5-3dbf-4528-94c3-401df9c729f8",
+        "attempt_id": "aa821fe5-4910-4701-ab1f-cff98366f7d6",
+        "final_score": "15.00",
+        "decision": "REVIEW",
+        "ai_summary": "Insufficient capability demonstrated despite stable behavior",
+        "created_at": "2026-05-08T07:34:43.105Z",
+        "is_locked": true
+      }
+    ],
+    "result": [
+      {
+        "interview_result_id": "00b2639e-0cc2-4c3c-b48e-1e4f9bd8c8e3",
+        "interview_id": "a749fdff-4efc-421d-b007-bd92e8966ddd",
+        "best_attempt_id": "aa821fe5-4910-4701-ab1f-cff98366f7d6",
+        "final_score": "0.00",
+        "result_status": "IN_REVIEW",
+        "decided_by": null,
+        "decided_at": "2026-05-08T07:34:43.162Z"
+      }
+    ],
+    "recordings": [
+      {
+        "attempt_id": "aa821fe5-4910-4701-ab1f-cff98366f7d6",
+        "egress_id": "EG_UJy7yEoJPTw2",
+        "status": "recording",
+        "video_url": "https://qvhbtxionaquyyuktdsr.supabase.co/storage/v1/object/public/recordings/recordings/aa821fe5-4910-4701-ab1f-cff98366f7d6-2026-05-08T07-28-43-665Z.mp4",
+        "file_path": "recordings/aa821fe5-4910-4701-ab1f-cff98366f7d6-2026-05-08T07-28-43-665Z.mp4",
+        "started_at": "2026-05-08T07:28:46.037Z",
+        "ended_at": null
+      }
+    ],
+    "recovery": [
+      {
+        "event_type": "INTERRUPTION_DETECTED",
+        "classifier": "BROWSER_CRASH",
+        "reason": "Browser page closed or refreshed",
+        "source": "candidate_calm_room",
+        "occurred_at": "2026-05-08T07:28:41.103Z",
+        "metadata": {
+          "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/147.0.7727.15 Safari/537.36",
+          "questionId": "4bc00e35-7b89-40bf-b65d-048fa0492a28",
+          "timerState": {
+            "endsAt": "2026-05-08T07:58:25.556Z",
+            "expired": false,
+            "serverNow": "2026-05-08T07:28:40.846Z",
+            "startedAt": "2026-05-08T07:28:25.556Z",
+            "elapsedSeconds": 15,
+            "remainingSeconds": 1785
+          },
+          "currentPhase": "core",
+          "serverEndsAt": "2026-05-08T07:58:25.556Z",
+          "browserOnline": true,
+          "currentQuestion": "Explain your experience",
+          "transcriptBuffer": null,
+          "sessionQuestionId": "4bc00e35-7b89-40bf-b65d-048fa0492a28",
+          "completionPercentage": 0
+        }
+      }
+    ],
+    "transcripts": [],
+    "interview": [
+      {
+        "interview_id": "a749fdff-4efc-421d-b007-bd92e8966ddd",
+        "status": "INTERRUPTED",
+        "question_status": "COMPLETED",
+        "email_status": "SENT",
+        "recovery_allowed": true,
+        "recovery_used": false,
+        "final_status": "INTERRUPTED"
+      }
+    ]
+  },
+  "candidateB": {
+    "attempt": [
+      {
+        "attempt_id": "ee94db36-4162-4b9b-b439-50d7fffac0db",
+        "status": "started",
+        "started_at": "2026-05-08T07:34:43.224Z",
+        "ended_at": null,
+        "ends_at": "2026-05-08T08:04:43.224Z",
+        "questions_answered": 0,
+        "expected_questions": null,
+        "completion_percentage": null,
+        "reliability_score": null,
+        "termination_type": null,
+        "termination_phase": null,
+        "current_phase": "core",
+        "termination_metadata": {}
+      }
+    ],
+    "questions": [
+      {
+        "question_order": 1,
+        "question_kind": "core",
+        "content": "Explain your experience"
+      },
+      {
+        "question_order": 2,
+        "question_kind": "follow_up",
+        "content": "Can you provide a specific example of a performance tuning issue you encountered and the steps you took to address it?"
+      },
+      {
+        "question_order": 3,
+        "question_kind": "core",
+        "content": "What signals tell you Performance Tuning is degrading, and what actions do you take next?"
+      },
+      {
+        "question_order": 4,
+        "question_kind": "core",
+        "content": "You highlighted  \"assisted on small bug fixes\" . What was the most demanding piece of work around it, and how did you deliver the result?"
+      },
+      {
+        "question_order": 5,
+        "question_kind": "core",
+        "content": "How do you troubleshoot Build and optimize high-throughput backend services, troubleshoot production incidents, tune PostgreSQL performance, and design reliable APIs when it starts failing in production?"
+      },
+      {
+        "question_order": 6,
+        "question_kind": "core",
+        "content": "If you had to improve Senior Backend Engineer under real delivery pressure, what would you examine first?"
+      },
+      {
+        "question_order": 7,
+        "question_kind": "core",
+        "content": "Before we wrap up, what is one recent decision you made while working on SQL, and why did it matter?"
+      },
+      {
+        "question_order": 8,
+        "question_kind": "core",
+        "content": "Before we wrap up, what is one recent decision you made while working on SQL, and why did it matter?"
+      },
+      {
+        "question_order": 9,
+        "question_kind": "core",
+        "content": "Before we wrap up, what is one recent decision you made while working on SQL, and why did it matter?"
+      }
+    ],
+    "answers": [
+      {
+        "answer_id": "f4940bff-6a9f-4b73-b265-4087c6acb5c7",
+        "answer_text": "I have some exposure to explain and experience, but my experience is limited. I usually try a few things, ask teammates, and see what works. I cannot provide an",
+        "status": "completed"
+      },
+      {
+        "answer_id": "c6e5aa01-5a5d-4167-b4b9-7127cf1efee2",
+        "answer_text": "I have some exposure to performance tuning issues, but my experience is limited. Usually, I would try a few things, ask teammates, and see what works. I cannot ",
+        "status": "completed"
+      },
+      {
+        "answer_id": "5958bfaa-d9dd-480a-9631-bf2f3b971810",
+        "answer_text": "I have some exposure to signals indicating performance tuning degradation, but my experience is limited. Usually, I would try a few things, ask teammates, and s",
+        "status": "completed"
+      },
+      {
+        "answer_id": "20321c50-62c9-44d9-b487-a3f2c4ac5bec",
+        "answer_text": "I have some exposure to bug fixes, but my experience is limited. I usually try a few things, ask teammates, and see what works. I cannot provide an exact metric",
+        "status": "completed"
+      },
+      {
+        "answer_id": "abe3407b-58b7-40ea-a8b2-b9580b291eae",
+        "answer_text": "I have some exposure to troubleshooting, building, and optimizing high-throughput backend services, but my experience is limited. Usually, I would try a few thi",
+        "status": "completed"
+      },
+      {
+        "answer_id": "72a4e323-eb79-457a-a83f-5178830a178f",
+        "answer_text": "I have some exposure to improving a Senior Backend Engineer, but my experience is limited. Usually, I would try a few things, ask teammates, and see what works.",
+        "status": "completed"
+      },
+      {
+        "answer_id": "71cbd91e-f46a-43b9-b162-838ec80d9d09",
+        "answer_text": "I have some exposure to SQL, but my experience is limited. Usually, I would try a few things, ask teammates, and see what works. I cannot give an exact metric, ",
+        "status": "completed"
+      },
+      {
+        "answer_id": "07af2e9c-7e6d-45f1-b438-5f66d30d9d3e",
+        "answer_text": "I have some exposure to SQL, but my experience is limited. Usually, I would try a few things, ask teammates, and see what works. I cannot give an exact metric, ",
+        "status": "completed"
+      }
+    ],
+    "evals": [
+      {
+        "answer_id": "f4940bff-6a9f-4b73-b265-4087c6acb5c7",
+        "score": "2.00",
+        "skill_score": "0.2",
+        "clarity_score": "0.3",
+        "depth_score": "0.1",
+        "confidence_score": "0.2",
+        "fraud_score": "1"
+      },
+      {
+        "answer_id": "c6e5aa01-5a5d-4167-b4b9-7127cf1efee2",
+        "score": "2.00",
+        "skill_score": "0.2",
+        "clarity_score": "0.4",
+        "depth_score": "0.1",
+        "confidence_score": "0.3",
+        "fraud_score": "1"
+      },
+      {
+        "answer_id": "5958bfaa-d9dd-480a-9631-bf2f3b971810",
+        "score": "2.00",
+        "skill_score": "0.2",
+        "clarity_score": "0.4",
+        "depth_score": "0.2",
+        "confidence_score": "0.3",
+        "fraud_score": "1"
+      },
+      {
+        "answer_id": "20321c50-62c9-44d9-b487-a3f2c4ac5bec",
+        "score": "2.00",
+        "skill_score": "0.2",
+        "clarity_score": "0.4",
+        "depth_score": "0.1",
+        "confidence_score": "0.3",
+        "fraud_score": "1"
+      },
+      {
+        "answer_id": "abe3407b-58b7-40ea-a8b2-b9580b291eae",
+        "score": "3.00",
+        "skill_score": "0.3",
+        "clarity_score": "0.4",
+        "depth_score": "0.2",
+        "confidence_score": "0.3",
+        "fraud_score": "1"
+      },
+      {
+        "answer_id": "72a4e323-eb79-457a-a83f-5178830a178f",
+        "score": "3.00",
+        "skill_score": "0.3",
+        "clarity_score": "0.4",
+        "depth_score": "0.2",
+        "confidence_score": "0.3",
+        "fraud_score": "1"
+      },
+      {
+        "answer_id": "71cbd91e-f46a-43b9-b162-838ec80d9d09",
+        "score": "2.00",
+        "skill_score": "0.2",
+        "clarity_score": "0.3",
+        "depth_score": "0.1",
+        "confidence_score": "0.2",
+        "fraud_score": "1"
+      },
+      {
+        "answer_id": "07af2e9c-7e6d-45f1-b438-5f66d30d9d3e",
+        "score": "2.00",
+        "skill_score": "0.2",
+        "clarity_score": "0.4",
+        "depth_score": "0.1",
+        "confidence_score": "0.3",
+        "fraud_score": "1"
+      }
+    ],
+    "summary": [
+      {
+        "attempt_id": "ee94db36-4162-4b9b-b439-50d7fffac0db",
+        "overall_score": 0,
+        "risk_level": "HIGH",
+        "strengths": null,
+        "weaknesses": ", clarity, depth, credibility risk",
+        "hire_recommendation": "NO_HIRE",
+        "created_at": "2026-05-08T07:35:32.083Z"
+      }
+    ],
+    "finalEval": [],
+    "result": [
+      {
+        "interview_result_id": "6c10ca57-bc23-4e83-89c3-7b8303011d84",
+        "interview_id": "795a281e-f612-46fb-8f98-60539a7917c1",
+        "best_attempt_id": "ee94db36-4162-4b9b-b439-50d7fffac0db",
+        "final_score": "0.00",
+        "result_status": "FAILED",
+        "decided_by": null,
+        "decided_at": "2026-05-08T07:35:32.083Z"
+      }
+    ],
+    "recordings": [],
+    "recovery": [],
+    "transcripts": [],
+    "interview": [
+      {
+        "interview_id": "795a281e-f612-46fb-8f98-60539a7917c1",
+        "status": "READY",
+        "question_status": "COMPLETED",
+        "email_status": "SENT",
+        "recovery_allowed": true,
+        "recovery_used": false,
+        "final_status": null
+      }
+    ]
+  }
+}

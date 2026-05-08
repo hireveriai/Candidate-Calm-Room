@@ -260,6 +260,54 @@ function normalizeAnchorToken(value: string | null | undefined) {
     .trim();
 }
 
+function findBestRequiredSkillMatch(
+  normalizedQuestionKey: string,
+  requiredSkills: Array<{
+    skillId: string;
+    skillName: string | null;
+  }> | undefined
+) {
+  if (!requiredSkills?.length || !normalizedQuestionKey) {
+    return null;
+  }
+
+  const matches = requiredSkills
+    .map((skill) => {
+      const normalizedSkillName = normalizeQuestionKey(skill.skillName);
+
+      if (!normalizedSkillName || !normalizedQuestionKey.includes(normalizedSkillName)) {
+        return null;
+      }
+
+      const exactWordMatch = new RegExp(
+        `(?:^|\\s)${normalizedSkillName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:\\s|$)`
+      ).test(normalizedQuestionKey);
+
+      return {
+        skillId: skill.skillId,
+        normalizedSkillName,
+        exactWordMatch,
+      };
+    })
+    .filter(
+      (
+        match
+      ): match is {
+        skillId: string;
+        normalizedSkillName: string;
+        exactWordMatch: boolean;
+      } => Boolean(match)
+    )
+    .sort((left, right) => {
+      return (
+        Number(right.exactWordMatch) - Number(left.exactWordMatch) ||
+        right.normalizedSkillName.length - left.normalizedSkillName.length
+      );
+    });
+
+  return matches[0]?.skillId ?? null;
+}
+
 export function extractClaimAnchors(
   values: Array<string | null | undefined>,
   limit = 6
@@ -623,10 +671,7 @@ export function buildAskedQuestionState(params: {
     const plannedQuestion =
       (question.questionId ? plannedByQuestionId.get(question.questionId) : undefined) ??
       plannedByContent.get(normalizedKey);
-    const inferredSkillId =
-      params.requiredSkills?.find((skill) =>
-        normalizedKey.includes(normalizeQuestionKey(skill.skillName))
-      )?.skillId ?? null;
+    const inferredSkillId = findBestRequiredSkillMatch(normalizedKey, params.requiredSkills);
 
     return {
       questionId: question.questionId,

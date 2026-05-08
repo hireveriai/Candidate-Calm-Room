@@ -1,0 +1,25 @@
+{
+  "stamp": "20260508064754",
+  "organizationId": "8cad69fd-80b6-4636-a56f-0a067583d191",
+  "organizationName": "Codex Reliability 20260508064754",
+  "recruiterId": "a14b2391-320a-4c95-ac81-4f656a7c1c8c",
+  "recruiterEmail": "codex.recruiter.20260508064754@example.com",
+  "jobId": "cbd56fd2-273a-45e6-b9cd-42cfa4930da2",
+  "candidateA": {
+    "candidateId": "9ba65462-8281-4cb7-aab8-895622e339af",
+    "interviewId": "a749fdff-4efc-421d-b007-bd92e8966ddd",
+    "inviteId": "709db58f-4e2f-4a85-aed6-80963b1c56ac",
+    "token": "codex-a-20260508064754-c5e2cc53-99c5-4531-ae9d-1d78cc9db58a",
+    "email": "candidate.a.20260508064754@example.com",
+    "link": "http://127.0.0.1:3108/interview/codex-a-20260508064754-c5e2cc53-99c5-4531-ae9d-1d78cc9db58a"
+  },
+  "candidateB": {
+    "candidateId": "ac697594-9807-4a99-a352-539f9a1316c3",
+    "interviewId": "795a281e-f612-46fb-8f98-60539a7917c1",
+    "inviteId": "8c5fd405-94be-447b-8fb2-c53346925616",
+    "token": "codex-b-20260508064754-aca0ed8a-df1c-44c9-8ba1-588424086c7e",
+    "email": "candidate.b.20260508064754@example.com",
+    "link": "http://127.0.0.1:3108/interview/codex-b-20260508064754-aca0ed8a-df1c-44c9-8ba1-588424086c7e"
+  },
+  "baseUrl": "http://127.0.0.1:3108"
+}
