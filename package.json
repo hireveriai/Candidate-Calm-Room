@@ -7,7 +7,9 @@
     "build": "node scripts/prisma-generate-if-possible.js && tsc --noEmit && next build",
     "postinstall": "node scripts/prisma-generate-if-possible.js",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "validate:production": "node scripts/validate-production.js",
+    "report:test-run": "node scripts/generate-test-run-report.js"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",

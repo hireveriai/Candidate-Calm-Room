@@ -1,6 +1,13 @@
 import { prisma } from "@/app/lib/prisma";
 import { resolveEffectiveQuestionCount } from "@/app/lib/interviewBudget";
-import { assertUuid, logInterviewEvent } from "@/app/lib/interviewReliability";
+import { ensurePhase2SchemaCompatibility } from "@/app/lib/productionReadiness";
+import {
+  assertUuid,
+  canTransitionInterviewState,
+  isAttemptStatusFinalized,
+  logInterviewEvent,
+  normalizeInterviewState,
+} from "@/app/lib/interviewReliability";
 
 type TerminationType =
   | "manual_exit"
@@ -12,9 +19,12 @@ type TerminationType =
 type AttemptContextRow = {
   attempt_id: string;
   interview_id: string;
+  organization_id: string | null;
+  candidate_id: string | null;
   started_at: Date;
   ended_at: Date | null;
   status: string;
+  interview_status: string | null;
   expected_questions: number | null;
   question_count: number | null;
   duration_minutes: number | null;
@@ -24,6 +34,7 @@ type AttemptContextRow = {
   termination_type: string | null;
   termination_phase: string | null;
   early_exit: boolean | null;
+  termination_metadata: unknown;
 };
 
 type ScoreAggregateRow = {
@@ -45,6 +56,30 @@ type BestAttemptRow = {
   attempt_id: string;
   normalized_score: string | number | null;
 };
+
+type TranscriptAggregateRow = {
+  transcript_segments: number;
+  transcript_events: number;
+};
+
+type PersistedCompletionRow = {
+  started_at: Date;
+  ended_at: Date | null;
+  termination_type: string | null;
+  termination_phase: string | null;
+  early_exit: boolean | null;
+  questions_answered: number | null;
+  completion_percentage: string | number | null;
+  reliability_score: string | number | null;
+  termination_metadata: unknown;
+  hire_recommendation: string | null;
+  strengths: string | null;
+  weaknesses: string | null;
+  risk_level: string | null;
+  ai_summary: string | null;
+};
+
+type PrismaExecutor = typeof prisma;
 
 export type InterviewCompletionResult = {
   score: number;
@@ -392,9 +427,9 @@ function getRiskFlags(params: {
   return flags;
 }
 
-async function loadScoreAggregates(attemptId: string) {
+async function loadScoreAggregates(db: PrismaExecutor, attemptId: string) {
   try {
-    return await prisma.$queryRaw<ScoreAggregateRow[]>`
+    return await db.$queryRaw<ScoreAggregateRow[]>`
       select
         count(*) filter (
           where ia.answer_text is not null
@@ -430,7 +465,7 @@ async function loadScoreAggregates(attemptId: string) {
       throw error;
     }
 
-    return prisma.$queryRaw<ScoreAggregateRow[]>`
+    return db.$queryRaw<ScoreAggregateRow[]>`
       select
         count(*) filter (
           where ia.answer_text is not null
@@ -461,7 +496,7 @@ async function sleep(ms: number) {
 }
 
 async function loadScoreAggregatesWithRetry(attemptId: string) {
-  let aggregateRows = await loadScoreAggregates(attemptId);
+  let aggregateRows = await loadScoreAggregates(prisma, attemptId);
 
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const aggregate = aggregateRows[0];
@@ -476,14 +511,14 @@ async function loadScoreAggregatesWithRetry(attemptId: string) {
     }
 
     await sleep(200 * (attempt + 1));
-    aggregateRows = await loadScoreAggregates(attemptId);
+    aggregateRows = await loadScoreAggregates(prisma, attemptId);
   }
 
   return aggregateRows;
 }
 
-async function loadSignalTypes(attemptId: string) {
-  const rows = await prisma.$queryRaw<{ type: string }[]>`
+async function loadSignalTypes(db: PrismaExecutor, attemptId: string) {
+  const rows = await db.$queryRaw<{ type: string }[]>`
     select type
     from public.interview_signals
     where attempt_id = ${attemptId}::uuid
@@ -495,40 +530,47 @@ async function loadSignalTypes(attemptId: string) {
     .filter((type: string | undefined): type is string => Boolean(type));
 }
 
-export async function finalizeInterviewAttempt(params: {
-  attemptId: string;
-  earlyExit: boolean;
-  terminationType?: TerminationType;
-  currentPhase?: string | null;
-}) {
-  const attemptId = assertUuid(params.attemptId, "attemptId");
-  const transitionRows = await prisma.$queryRaw<Array<{ status: string }>>`
-    update public.interview_attempts
-    set current_phase = coalesce(${params.currentPhase ?? null}::text, current_phase),
-        termination_type = coalesce(${params.terminationType ?? null}::text, termination_type)
-    where attempt_id = ${attemptId}::uuid
-    returning status
+async function loadTranscriptAggregates(db: PrismaExecutor, attemptId: string) {
+  const rows = await db.$queryRaw<TranscriptAggregateRow[]>`
+    select
+      (
+        select count(*)
+        from public.forensic_transcripts ft
+        where ft.attempt_id = ${attemptId}::uuid
+      )::int as transcript_segments,
+      (
+        select
+          count(*) filter (
+            where ia.answer_text is not null
+              and nullif(trim(ia.answer_text), '') is not null
+          )
+        from public.interview_answers ia
+        where ia.attempt_id = ${attemptId}::uuid
+      )::int as transcript_events
   `;
 
-  if (!transitionRows[0]) {
-    throw new Error("Interview attempt not found");
-  }
+  return rows[0] ?? {
+    transcript_segments: 0,
+    transcript_events: 0,
+  };
+}
 
-  logInterviewEvent("info", "interview.completion_started", {
-    attemptId,
-    state: transitionRows[0].status,
-    nextState: "COMPLETED",
-    terminationType: params.terminationType ?? null,
-    earlyExit: params.earlyExit,
-  });
-
-  const attempts = await prisma.$queryRaw<AttemptContextRow[]>`
+async function loadAttemptContext(
+  db: PrismaExecutor,
+  attemptId: string,
+  lock = false
+) {
+  const lockClause = lock ? "for update" : "";
+  const query = `
     select
       ia.attempt_id,
       ia.interview_id,
+      i.organization_id::text,
+      i.candidate_id::text,
       ia.started_at,
       ia.ended_at,
       ia.status,
+      i.status as interview_status,
       i.question_count,
       i.duration_minutes,
       ia.completion_percentage,
@@ -536,6 +578,7 @@ export async function finalizeInterviewAttempt(params: {
       ia.termination_type,
       ia.termination_phase,
       ia.early_exit,
+      ia.termination_metadata,
       coalesce(
         ia.expected_questions,
         i.question_count,
@@ -554,164 +597,434 @@ export async function finalizeInterviewAttempt(params: {
     from public.interview_attempts ia
     join public.interviews i
       on i.interview_id = ia.interview_id
-    where ia.attempt_id = ${attemptId}::uuid
+    where ia.attempt_id = $1::uuid
+    limit 1
+    ${lockClause}
+  `;
+
+  const attempts = (await db.$queryRawUnsafe(
+    query,
+    attemptId
+  )) as AttemptContextRow[];
+  return attempts[0] ?? null;
+}
+
+async function loadLatestQuestion(db: PrismaExecutor, attemptId: string) {
+  const latestQuestions = await db.$queryRaw<LatestQuestionRow[]>`
+    select question_kind, content
+    from public.session_questions
+    where attempt_id = ${attemptId}::uuid
+    order by question_order desc, asked_at desc nulls last
     limit 1
   `;
 
-  const attempt = attempts[0];
+  return latestQuestions[0] ?? null;
+}
 
-  if (!attempt) {
+function parseTerminationMetadata(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+
+  return value as Record<string, unknown>;
+}
+
+function hasDeterministicFinalizationMarker(metadata: Record<string, unknown>) {
+  return (
+    metadata["source_of_truth"] ===
+      "persisted_answers_evaluations_transcripts_signals" &&
+    asNumber(metadata["final_score"] as string | number | null | undefined) > 0
+  );
+}
+
+function splitSummaryField(value: string | null | undefined) {
+  return String(value ?? "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+async function loadPersistedCompletionResult(
+  db: PrismaExecutor,
+  attemptId: string
+) {
+  const rows = (await db.$queryRaw`
+    select
+      ia.started_at,
+      ia.ended_at,
+      ia.termination_type,
+      ia.termination_phase,
+      ia.early_exit,
+      ia.questions_answered,
+      ia.completion_percentage,
+      ia.reliability_score,
+      ia.termination_metadata,
+      s.hire_recommendation,
+      s.strengths,
+      s.weaknesses,
+      s.risk_level,
+      e.ai_summary
+    from public.interview_attempts ia
+    left join public.interview_summaries s
+      on s.attempt_id = ia.attempt_id
+    left join public.interview_evaluations e
+      on e.attempt_id = ia.attempt_id
+    where ia.attempt_id = ${attemptId}::uuid
+    limit 1
+  `) as PersistedCompletionRow[];
+
+  const row = rows[0];
+
+  if (!row) {
     throw new Error("Interview attempt not found");
   }
 
-  const [aggregates, latestQuestions] = await Promise.all([
-    loadScoreAggregatesWithRetry(attemptId),
-    prisma.$queryRaw<LatestQuestionRow[]>`
-      select question_kind, content
-      from public.session_questions
-      where attempt_id = ${attemptId}::uuid
-      order by question_order desc, asked_at desc nulls last
-      limit 1
-    `,
-  ]);
-
-  const aggregate = aggregates[0] ?? {
-    questions_answered: 0,
-    asked_questions: 0,
-    avg_skill_score: 0,
-    avg_cognitive_score: 0,
-    avg_clarity_score: 0,
-    avg_depth_score: 0,
-    avg_fraud_score: 0,
-  };
-  const latestQuestion = latestQuestions[0];
-
-  const expectedQuestions = resolveEffectiveQuestionCount({
-    configuredCount: attempt.expected_questions ?? attempt.question_count,
-    durationMinutes: attempt.duration_minutes,
-    plannedQuestionCount: attempt.planned_question_count,
-  });
-  const questionsAnswered = Math.max(aggregate.questions_answered ?? 0, 0);
-  const askedQuestions = Math.max(aggregate.asked_questions ?? 0, 0);
-  const completionPercentage = clamp(questionsAnswered / Math.max(expectedQuestions, 1), 0, 1);
-  const completionFactor = getCompletionFactor(completionPercentage);
-  const avgSkillScore = clamp(asNumber(aggregate.avg_skill_score), 0, 1);
-  const avgCognitiveScore = clamp(asNumber(aggregate.avg_cognitive_score), 0, 1);
-  const avgClarityScore = clamp(asNumber(aggregate.avg_clarity_score), 0, 1);
-  const avgDepthScore = clamp(asNumber(aggregate.avg_depth_score), 0, 1);
-  const avgFraudScore = clamp(asNumber(aggregate.avg_fraud_score), 0, 1);
-  const baseScore = round(
-    clamp(
-      ((avgSkillScore * 0.45) + (avgCognitiveScore * 0.4) + ((1 - avgFraudScore) * 0.15)) * 100,
-      0,
-      100
-    )
+  const metadata = parseTerminationMetadata(row.termination_metadata);
+  const score = normalizeScore(
+    asNumber(metadata["final_score"] as string | number | null | undefined)
   );
-  const finalScore = normalizeScore(baseScore * completionFactor);
-  const reliabilityScore = round(completionFactor * 100);
-  const elapsedSeconds = Math.max(
-    0,
-    Math.round(((attempt.ended_at ?? new Date()).getTime() - new Date(attempt.started_at).getTime()) / 1000)
-  );
-  const currentPhase = derivePhase({
-    currentPhase: params.currentPhase,
-    latestQuestionKind: latestQuestion?.question_kind,
-    completionPercentage,
-    earlyExit: params.earlyExit,
-  });
-  const riskFlags = getRiskFlags({
-    terminationType: params.terminationType ?? null,
-    currentPhase,
-    avgFraudScore,
-    earlyExit: params.earlyExit,
-  });
-  const rawEvents = [
-    ...(params.terminationType === "manual_exit" ? ["manual_exit"] : []),
-    ...(await loadSignalTypes(attemptId)),
-  ];
-  const behavioralFlags = mapEvents(rawEvents);
-  const riskScore = clamp(
-    Math.round(
-      avgFraudScore * 20 +
-        (behavioralFlags.includes("Early exit") ? 4 : 0) +
-        (behavioralFlags.includes("Tab switching") ? 5 : 0) +
-        (behavioralFlags.includes("Long silence") ? 3 : 0) +
-        (behavioralFlags.includes("Multiple voices") ? 6 : 0)
-    ),
-    0,
-    20
-  );
-  const riskLevel = getRiskLevel(riskScore);
-
-  const strengths = ensureStrengths(
-    [
-      avgSkillScore >= 0.7 ? "Demonstrated relevant capability" : "",
-      avgClarityScore >= 0.65 ? "Basic communication clarity" : "",
-      avgDepthScore >= 0.65 ? "Attempted structured response" : "",
-      avgCognitiveScore >= 0.7 ? "Consistent response organization" : "",
-    ].filter(Boolean)
-  );
-
+  const behavioralFlags = Array.isArray(metadata["behavioral_flags"])
+    ? metadata["behavioral_flags"].filter(
+        (flag): flag is string => typeof flag === "string"
+      )
+    : [];
+  const strengths = ensureStrengths(splitSummaryField(row.strengths));
   const weaknesses = cleanWeaknesses(
-    [
-      avgDepthScore < 0.55 ? "lack of depth" : "",
-      avgClarityScore < 0.55 ? "unclear answers" : "",
-      avgSkillScore < 0.55 ? "weak problem solving" : "",
-    ].filter(Boolean),
+    splitSummaryField(row.weaknesses),
     behavioralFlags
   );
 
-  const recommendation = getRecommendation(finalScore, riskLevel);
-  const evaluationDecision =
-    mapRecommendationToEvaluationDecision(recommendation);
-  const reason = generateReason(
-    finalScore,
-    riskLevel,
-    weaknesses,
-    behavioralFlags
-  );
-
-  validateEvaluation({
-    score: finalScore,
+  return {
+    score,
+    risk_level:
+      row.risk_level === "HIGH" || row.risk_level === "MEDIUM"
+        ? row.risk_level
+        : "LOW",
     strengths,
-    recommendation,
-    reason,
+    weaknesses,
+    behavioral_flags: behavioralFlags,
+    recommendation:
+      (row.hire_recommendation as InterviewCompletionResult["recommendation"]) ??
+      "REVIEW_REQUIRED",
+    reason:
+      (typeof metadata["reason"] === "string" && metadata["reason"]) ||
+      row.ai_summary ||
+      "Persisted completion result",
+    completed: true as const,
+    early_exit: Boolean(row.early_exit),
+    termination_type: (row.termination_type as TerminationType) ?? null,
+    time_elapsed: Math.max(
+      0,
+      Math.round(
+        ((row.ended_at ?? new Date()).getTime() - new Date(row.started_at).getTime()) /
+          1000
+      )
+    ),
+    questions_answered: Math.max(row.questions_answered ?? 0, 0),
+    current_phase: row.termination_phase ?? "closing",
+    completion_percentage: round(asNumber(row.completion_percentage) * 100),
+    reliability_score: round(asNumber(row.reliability_score)),
+  } satisfies InterviewCompletionResult;
+}
+
+export async function finalizeInterviewAttempt(params: {
+  attemptId: string;
+  earlyExit: boolean;
+  terminationType?: TerminationType;
+  currentPhase?: string | null;
+}) {
+  const attemptId = assertUuid(params.attemptId, "attemptId");
+  await ensurePhase2SchemaCompatibility();
+  logInterviewEvent("info", "interview.completion_started", {
+    attemptId,
+    terminationType: params.terminationType ?? null,
+    earlyExit: params.earlyExit,
   });
 
-  await prisma.$executeRaw`
-    update public.interview_attempts
-    set status = 'completed',
-        ended_at = coalesce(ended_at, now()),
-        termination_type = ${params.terminationType ?? null}::text,
-        termination_detected_at = case
-          when ${params.earlyExit} then now()
-          else null
-        end,
-        termination_phase = ${currentPhase}::text,
-        time_elapsed_seconds = ${elapsedSeconds}::integer,
-        questions_answered = ${questionsAnswered}::integer,
-        expected_questions = ${expectedQuestions}::integer,
-        completion_percentage = ${round(completionPercentage, 4)},
-        reliability_score = ${reliabilityScore},
-        early_exit = ${params.earlyExit},
-        termination_metadata = jsonb_build_object(
-          'asked_questions', ${askedQuestions}::integer,
-          'avg_skill_score', ${round(avgSkillScore, 4)}::numeric,
-          'avg_cognitive_score', ${round(avgCognitiveScore, 4)}::numeric,
-          'avg_fraud_score', ${round(avgFraudScore, 4)}::numeric,
-          'completion_factor', ${completionFactor}::numeric,
-          'base_score', ${baseScore}::numeric,
-          'final_score', ${finalScore}::numeric,
-          'risk_flags', ${JSON.stringify(riskFlags)}::jsonb,
-          'risk_score', ${riskScore}::integer,
-          'risk_level', ${riskLevel}::text,
-          'behavioral_flags', ${JSON.stringify(behavioralFlags)}::jsonb,
-          'reason', ${reason}::text
-        )
-    where attempt_id = ${attemptId}::uuid
-  `;
+  return prisma.$transaction(async (tx: PrismaExecutor) => {
+    const lockedAttempt = await loadAttemptContext(tx, attemptId, true);
 
-  await prisma.$executeRaw`
+    if (!lockedAttempt) {
+      throw new Error("Interview attempt not found");
+    }
+
+    const existingMetadata = parseTerminationMetadata(
+      lockedAttempt.termination_metadata
+    );
+    const repairingLegacyFinalization =
+      isAttemptStatusFinalized(lockedAttempt.status) &&
+      !hasDeterministicFinalizationMarker(existingMetadata);
+
+    if (isAttemptStatusFinalized(lockedAttempt.status)) {
+      if (repairingLegacyFinalization) {
+        logInterviewEvent("warn", "interview.completion_repair_started", {
+          attemptId,
+          interviewId: lockedAttempt.interview_id,
+          orgId: lockedAttempt.organization_id,
+          candidateId: lockedAttempt.candidate_id,
+          state: lockedAttempt.status,
+          nextState: "FINALIZING",
+        });
+      } else {
+      logInterviewEvent("info", "interview.completion_reused", {
+        attemptId,
+        interviewId: lockedAttempt.interview_id,
+        orgId: lockedAttempt.organization_id,
+        candidateId: lockedAttempt.candidate_id,
+        state: lockedAttempt.status,
+        nextState: "FINALIZED",
+      });
+
+        return loadPersistedCompletionResult(tx, attemptId);
+      }
+    }
+
+    const normalizedCurrentState = normalizeInterviewState(lockedAttempt.status);
+    if (
+      !repairingLegacyFinalization &&
+      !canTransitionInterviewState(normalizedCurrentState, "COMPLETING")
+    ) {
+      logInterviewEvent("warn", "interview.completion_invalid_transition", {
+        attemptId,
+        interviewId: lockedAttempt.interview_id,
+        orgId: lockedAttempt.organization_id,
+        candidateId: lockedAttempt.candidate_id,
+        state: lockedAttempt.status,
+        nextState: "COMPLETING",
+      });
+      throw new Error(
+        `Cannot finalize interview from state ${lockedAttempt.status}`
+      );
+    }
+
+    await tx.$executeRaw`
+      update public.interview_attempts
+      set status = 'COMPLETING',
+          current_phase = coalesce(${params.currentPhase ?? null}::text, current_phase),
+          termination_type = coalesce(${params.terminationType ?? null}::text, termination_type)
+      where attempt_id = ${attemptId}::uuid
+    `;
+
+    let aggregates = await loadScoreAggregates(tx, attemptId);
+    for (let attemptIndex = 0; attemptIndex < 3; attemptIndex += 1) {
+      const aggregate = aggregates[0];
+      const answeredQuestions = aggregate?.questions_answered ?? 0;
+      const hasComputedScores =
+        asNumber(aggregate?.avg_skill_score) > 0 ||
+        asNumber(aggregate?.avg_cognitive_score) > 0 ||
+        asNumber(aggregate?.avg_fraud_score) > 0;
+
+      if (!answeredQuestions || hasComputedScores) {
+        break;
+      }
+
+      await sleep(200 * (attemptIndex + 1));
+      aggregates = await loadScoreAggregates(tx, attemptId);
+    }
+
+    const [attempt, latestQuestion, transcriptAggregate, signalTypes] =
+      await Promise.all([
+        loadAttemptContext(tx, attemptId),
+        loadLatestQuestion(tx, attemptId),
+        loadTranscriptAggregates(tx, attemptId),
+        loadSignalTypes(tx, attemptId),
+      ]);
+
+    if (!attempt) {
+      throw new Error("Interview attempt not found");
+    }
+
+    const aggregate = aggregates[0] ?? {
+      questions_answered: 0,
+      asked_questions: 0,
+      avg_skill_score: 0,
+      avg_cognitive_score: 0,
+      avg_clarity_score: 0,
+      avg_depth_score: 0,
+      avg_fraud_score: 0,
+    };
+
+    const expectedQuestions = resolveEffectiveQuestionCount({
+      configuredCount: attempt.expected_questions ?? attempt.question_count,
+      durationMinutes: attempt.duration_minutes,
+      plannedQuestionCount: attempt.planned_question_count,
+    });
+    const questionsAnswered = Math.max(aggregate.questions_answered ?? 0, 0);
+    const askedQuestions = Math.max(aggregate.asked_questions ?? 0, 0);
+    const completionPercentage = clamp(
+      questionsAnswered / Math.max(expectedQuestions, 1),
+      0,
+      1
+    );
+    const completionFactor = getCompletionFactor(completionPercentage);
+    const avgSkillScore = clamp(asNumber(aggregate.avg_skill_score), 0, 1);
+    const avgCognitiveScore = clamp(asNumber(aggregate.avg_cognitive_score), 0, 1);
+    const avgClarityScore = clamp(asNumber(aggregate.avg_clarity_score), 0, 1);
+    const avgDepthScore = clamp(asNumber(aggregate.avg_depth_score), 0, 1);
+    const avgFraudScore = clamp(asNumber(aggregate.avg_fraud_score), 0, 1);
+    const transcriptCoverage = clamp(
+      (Math.max(transcriptAggregate.transcript_segments, transcriptAggregate.transcript_events) || questionsAnswered) /
+        Math.max(questionsAnswered, 1),
+      0.85,
+      1
+    );
+    const baseScore = round(
+      clamp(
+        ((avgSkillScore * 0.45) +
+          (avgCognitiveScore * 0.35) +
+          ((1 - avgFraudScore) * 0.15) +
+          (transcriptCoverage * 0.05)) * 100,
+        0,
+        100
+      )
+    );
+    const finalScore = normalizeScore(baseScore * completionFactor);
+    const reliabilityScore = round(
+      clamp(
+        completionFactor * 85 + transcriptCoverage * 15,
+        0,
+        100
+      )
+    );
+    const endedAt = attempt.ended_at ?? new Date();
+    const elapsedSeconds = Math.max(
+      0,
+      Math.round((endedAt.getTime() - new Date(attempt.started_at).getTime()) / 1000)
+    );
+    const currentPhase = derivePhase({
+      currentPhase: params.currentPhase,
+      latestQuestionKind: latestQuestion?.question_kind,
+      completionPercentage,
+      earlyExit: params.earlyExit,
+    });
+    const riskFlags = getRiskFlags({
+      terminationType: params.terminationType ?? null,
+      currentPhase,
+      avgFraudScore,
+      earlyExit: params.earlyExit,
+    });
+    const rawEvents = [
+      ...(params.terminationType === "manual_exit" ? ["manual_exit"] : []),
+      ...signalTypes,
+    ];
+    const behavioralFlags = mapEvents(rawEvents);
+    const riskScore = clamp(
+      Math.round(
+        avgFraudScore * 20 +
+          (behavioralFlags.includes("Early exit") ? 4 : 0) +
+          (behavioralFlags.includes("Tab switching") ? 5 : 0) +
+          (behavioralFlags.includes("Long silence") ? 3 : 0) +
+          (behavioralFlags.includes("Multiple voices") ? 6 : 0)
+      ),
+      0,
+      20
+    );
+    const riskLevel = getRiskLevel(riskScore);
+
+    const strengths = ensureStrengths(
+      [
+        avgSkillScore >= 0.7 ? "Demonstrated relevant capability" : "",
+        avgClarityScore >= 0.65 ? "Basic communication clarity" : "",
+        avgDepthScore >= 0.65 ? "Attempted structured response" : "",
+        avgCognitiveScore >= 0.7 ? "Consistent response organization" : "",
+      ].filter(Boolean)
+    );
+
+    const weaknesses = cleanWeaknesses(
+      [
+        avgDepthScore < 0.55 ? "lack of depth" : "",
+        avgClarityScore < 0.55 ? "unclear answers" : "",
+        avgSkillScore < 0.55 ? "weak problem solving" : "",
+      ].filter(Boolean),
+      behavioralFlags
+    );
+
+    const recommendation = getRecommendation(finalScore, riskLevel);
+    const evaluationDecision =
+      mapRecommendationToEvaluationDecision(recommendation);
+    const reason = generateReason(
+      finalScore,
+      riskLevel,
+      weaknesses,
+      behavioralFlags
+    );
+
+    validateEvaluation({
+      score: finalScore,
+      strengths,
+      recommendation,
+      reason,
+    });
+
+    const aggregateAudit = {
+      asked_questions: askedQuestions,
+      questions_answered: questionsAnswered,
+      avg_skill_score: round(avgSkillScore, 4),
+      avg_cognitive_score: round(avgCognitiveScore, 4),
+      avg_fraud_score: round(avgFraudScore, 4),
+      transcript_segments: transcriptAggregate.transcript_segments,
+      transcript_events: transcriptAggregate.transcript_events,
+      transcript_coverage: round(transcriptCoverage, 4),
+      completion_factor: completionFactor,
+      base_score: baseScore,
+      final_score: finalScore,
+      risk_flags: riskFlags,
+      risk_score: riskScore,
+      risk_level: riskLevel,
+      behavioral_flags: behavioralFlags,
+      reason,
+      source_of_truth: "persisted_answers_evaluations_transcripts_signals",
+      finalized_at: new Date().toISOString(),
+    };
+
+    await tx.$executeRaw`
+      update public.interview_attempts
+      set status = 'FINALIZING',
+          ended_at = coalesce(ended_at, now()),
+          termination_type = ${params.terminationType ?? null}::text,
+          termination_detected_at = case
+            when ${params.earlyExit} then now()
+            else termination_detected_at
+          end,
+          termination_phase = ${currentPhase}::text,
+          time_elapsed_seconds = ${elapsedSeconds}::integer,
+          questions_answered = ${questionsAnswered}::integer,
+          expected_questions = ${expectedQuestions}::integer,
+          completion_percentage = ${round(completionPercentage, 4)},
+          reliability_score = ${reliabilityScore},
+          early_exit = ${params.earlyExit},
+          transcript_status = 'FINALIZED',
+          recording_status = case
+            when exists (
+              select 1
+              from public.interview_recordings ir
+              where ir.attempt_id = ${attemptId}::uuid
+            ) then 'FINALIZED'
+            else recording_status
+          end,
+          termination_metadata = ${JSON.stringify(aggregateAudit)}::jsonb
+      where attempt_id = ${attemptId}::uuid
+    `;
+
+    await tx.$executeRaw`
+      update public.interview_recordings
+      set status = case
+            when coalesce(status, 'recording') = 'failed' then status
+            else 'completed'
+          end,
+          ended_at = coalesce(ended_at, timezone('utc', now()))
+      where attempt_id = ${attemptId}::uuid
+        and ended_at is null
+    `;
+
+    await tx.$executeRaw`
+      update public.interviews
+      set status = 'COMPLETED',
+          final_status = 'FINALIZED'
+      where interview_id = ${attempt.interview_id}::uuid
+    `;
+
+    await tx.$executeRaw`
     insert into public.interview_attempt_scores (
       attempt_id,
       total_questions,
@@ -741,9 +1054,9 @@ export async function finalizeInterviewAttempt(params: {
         evaluated_by = excluded.evaluated_by,
         evaluated_at = excluded.evaluated_at,
         interview_id = excluded.interview_id
-  `;
+    `;
 
-  await prisma.$executeRaw`
+    await tx.$executeRaw`
     insert into public.interview_summaries (
       attempt_id,
       overall_score,
@@ -770,9 +1083,9 @@ export async function finalizeInterviewAttempt(params: {
         weaknesses = excluded.weaknesses,
         hire_recommendation = excluded.hire_recommendation,
         created_at = excluded.created_at
-  `;
+    `;
 
-  await prisma.$executeRaw`
+    await tx.$executeRaw`
     insert into public.interview_evaluations (
       attempt_id,
       final_score,
@@ -796,9 +1109,9 @@ export async function finalizeInterviewAttempt(params: {
         ai_summary = excluded.ai_summary,
         created_at = excluded.created_at,
         is_locked = excluded.is_locked
-  `;
+    `;
 
-  const bestAttempts = await prisma.$queryRaw<BestAttemptRow[]>`
+    const bestAttempts = await tx.$queryRaw<BestAttemptRow[]>`
     select ias.attempt_id, ias.normalized_score
     from public.interview_attempt_scores ias
     join public.interview_attempts ia
@@ -806,12 +1119,12 @@ export async function finalizeInterviewAttempt(params: {
     where ia.interview_id = ${attempt.interview_id}::uuid
     order by ias.normalized_score desc nulls last, ias.evaluated_at desc
     limit 1
-  `;
+    `;
 
-  const bestAttempt = bestAttempts[0];
+    const bestAttempt = bestAttempts[0];
 
-  if (bestAttempt) {
-    await prisma.$executeRaw`
+    if (bestAttempt) {
+      await tx.$executeRaw`
       insert into public.interview_results (
         interview_id,
         best_attempt_id,
@@ -832,39 +1145,50 @@ export async function finalizeInterviewAttempt(params: {
           final_score = excluded.final_score,
           result_status = excluded.result_status,
           decided_at = excluded.decided_at
+      `;
+    }
+
+    await tx.$executeRaw`
+      update public.interview_attempts
+      set status = 'FINALIZED'
+      where attempt_id = ${attemptId}::uuid
     `;
-  }
 
-  logInterviewEvent("info", "interview.completed", {
-    attemptId,
-    interviewId: attempt.interview_id,
-    state: "COMPLETING",
-    nextState: "COMPLETED",
-    timerState: {
-      elapsedSeconds,
-      durationMinutes: attempt.duration_minutes,
-    },
-    score: finalScore,
-    riskLevel,
-    questionsAnswered,
-    expectedQuestions,
+    logInterviewEvent("info", "interview.completed", {
+      attemptId,
+      interviewId: attempt.interview_id,
+      orgId: attempt.organization_id,
+      candidateId: attempt.candidate_id,
+      state: "FINALIZING",
+      nextState: "FINALIZED",
+      timerState: {
+        elapsedSeconds,
+        durationMinutes: attempt.duration_minutes,
+      },
+      score: finalScore,
+      riskLevel,
+      questionsAnswered,
+      expectedQuestions,
+      transcriptCoverage,
+      aggregateAudit,
+    });
+
+    return {
+      score: finalScore,
+      risk_level: riskLevel,
+      strengths,
+      weaknesses,
+      behavioral_flags: behavioralFlags,
+      recommendation,
+      reason,
+      completed: true,
+      early_exit: params.earlyExit,
+      termination_type: params.terminationType ?? null,
+      time_elapsed: elapsedSeconds,
+      questions_answered: questionsAnswered,
+      current_phase: currentPhase,
+      completion_percentage: round(completionPercentage * 100),
+      reliability_score: reliabilityScore,
+    } satisfies InterviewCompletionResult;
   });
-
-  return {
-    score: finalScore,
-    risk_level: riskLevel,
-    strengths,
-    weaknesses,
-    behavioral_flags: behavioralFlags,
-    recommendation,
-    reason,
-    completed: true,
-    early_exit: params.earlyExit,
-    termination_type: params.terminationType ?? null,
-    time_elapsed: elapsedSeconds,
-    questions_answered: questionsAnswered,
-    current_phase: currentPhase,
-    completion_percentage: round(completionPercentage * 100),
-    reliability_score: reliabilityScore,
-  } satisfies InterviewCompletionResult;
 }

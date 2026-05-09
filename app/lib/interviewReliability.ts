@@ -7,7 +7,8 @@ export const INTERVIEW_STATES = [
   "ANSWER_PROCESSING",
   "FOLLOWUP_GENERATING",
   "COMPLETING",
-  "COMPLETED",
+  "FINALIZING",
+  "FINALIZED",
   "INTERRUPTED",
   "RECOVERY_ALLOWED",
   "RECOVERY_USED",
@@ -48,14 +49,15 @@ const allowedTransitions: Record<InterviewState, InterviewState[]> = {
   ANSWER_RECORDING: ["ANSWER_PROCESSING", "COMPLETING", "FAILED", "TIME_EXPIRED"],
   ANSWER_PROCESSING: ["FOLLOWUP_GENERATING", "QUESTION_GENERATING", "QUESTION_ACTIVE", "COMPLETING", "FAILED", "TIME_EXPIRED"],
   FOLLOWUP_GENERATING: ["QUESTION_ACTIVE", "QUESTION_GENERATING", "COMPLETING", "FAILED", "TIME_EXPIRED"],
-  COMPLETING: ["COMPLETED", "FAILED", "TIME_EXPIRED"],
-  COMPLETED: ["COMPLETED"],
+  COMPLETING: ["FINALIZING", "FAILED", "TIME_EXPIRED"],
+  FINALIZING: ["FINALIZED", "FAILED", "TIME_EXPIRED"],
+  FINALIZED: ["FINALIZED"],
   INTERRUPTED: ["RECOVERY_ALLOWED", "RECOVERY_USED", "ABANDONED", "FAILED"],
   RECOVERY_ALLOWED: ["RECOVERY_USED", "ABANDONED", "FAILED"],
   RECOVERY_USED: ["READY", "QUESTION_GENERATING", "QUESTION_ACTIVE", "COMPLETING", "FAILED", "TIME_EXPIRED"],
   ABANDONED: ["ABANDONED"],
   FAILED: ["READY", "QUESTION_GENERATING", "COMPLETING", "FAILED"],
-  TIME_EXPIRED: ["COMPLETING", "COMPLETED", "TIME_EXPIRED"],
+  TIME_EXPIRED: ["COMPLETING", "FINALIZING", "FINALIZED", "TIME_EXPIRED"],
 };
 
 export function isUuid(value: string | null | undefined): value is string {
@@ -84,12 +86,18 @@ export function normalizeInterviewState(value: string | null | undefined): Inter
     case "completed":
     case "ended":
     case "finished":
-      return "COMPLETED";
+    case "finalized":
+      return "FINALIZED";
     case "failed":
       return "FAILED";
     default:
       return "CREATED";
   }
+}
+
+export function isAttemptStatusFinalized(value: string | null | undefined) {
+  const normalized = (value ?? "").trim().toUpperCase();
+  return ["COMPLETED", "FINALIZED", "FAILED", "TIME_EXPIRED"].includes(normalized);
 }
 
 export function canTransitionInterviewState(

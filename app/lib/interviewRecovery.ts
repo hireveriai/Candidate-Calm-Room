@@ -193,6 +193,7 @@ export async function recordInterviewInterruption(input: RecoveryEventInput) {
           end
       where attempt_id = ${attemptId}::uuid
         and lower(status) <> 'completed'
+        and upper(coalesce(status, '')) <> 'FINALIZED'
     `;
 
     await tx.$executeRaw`

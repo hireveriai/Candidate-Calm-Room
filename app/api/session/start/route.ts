@@ -1,5 +1,6 @@
 import { prisma } from "@/app/lib/prisma";
 import {
+  isAttemptStatusFinalized,
   logInterviewEvent,
 } from "@/app/lib/interviewReliability";
 import { startRecoveryAttemptFromToken } from "@/app/lib/interviewRecovery";
@@ -284,9 +285,8 @@ export async function POST(request: Request) {
 
       if (
         latestAttempt &&
-        !["completed", "COMPLETED", "COMPLETING", "TIME_EXPIRED"].includes(
-          latestAttempt.status
-        )
+        !isAttemptStatusFinalized(latestAttempt.status) &&
+        !["COMPLETING", "FINALIZING"].includes(String(latestAttempt.status ?? "").toUpperCase())
       ) {
         attempt = {
           attempt_id: latestAttempt.attempt_id,

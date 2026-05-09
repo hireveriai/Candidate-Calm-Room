@@ -159,7 +159,7 @@ export async function POST(request: Request) {
       update public.interview_attempts
       set current_phase = ${"warmup"}::text
       where attempt_id = ${attemptId}::uuid
-        and lower(status) <> 'completed'
+        and upper(coalesce(status, '')) not in ('COMPLETED', 'FINALIZED')
     `;
 
     console.log(

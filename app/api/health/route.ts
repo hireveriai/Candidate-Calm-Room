@@ -5,11 +5,7 @@ export const runtime = "nodejs";
 
 export async function GET() {
   const report = await getProductionReadinessReport();
-  return Response.json({
-    ok: report.ok,
-    generatedAt: report.generatedAt,
-    database: report.database,
-    schema: report.schema,
-    realtime: report.realtime,
+  return Response.json(report, {
+    status: report.ok ? 200 : 503,
   });
 }

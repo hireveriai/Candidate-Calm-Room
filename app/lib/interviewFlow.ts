@@ -1,4 +1,11 @@
-import { resolveEffectiveQuestionCount } from "@/app/lib/interviewBudget";
+import {
+  buildDeterministicInterviewBudget,
+  resolveEffectiveQuestionCount,
+} from "@/app/lib/interviewBudget";
+import {
+  canonicalizeTechnologyReferences,
+  technologiesOverlap,
+} from "@/app/lib/skillNormalization";
 
 export type InterviewQuestionSource = "resume" | "job" | "behavioral";
 export type InterviewPhase = "warmup" | "core" | "probe" | "closing";
@@ -253,7 +260,7 @@ export function extractResponsibilityAnchors(
 }
 
 function normalizeAnchorToken(value: string | null | undefined) {
-  return normalizeText(value)
+  return canonicalizeTechnologyReferences(normalizeText(value))
     .toLowerCase()
     .replace(/[^a-z0-9\s]/g, " ")
     .replace(/\s+/g, " ")
@@ -275,7 +282,11 @@ function findBestRequiredSkillMatch(
     .map((skill) => {
       const normalizedSkillName = normalizeQuestionKey(skill.skillName);
 
-      if (!normalizedSkillName || !normalizedQuestionKey.includes(normalizedSkillName)) {
+      if (
+        !normalizedSkillName ||
+        (!normalizedQuestionKey.includes(normalizedSkillName) &&
+          !technologiesOverlap(normalizedQuestionKey, normalizedSkillName))
+      ) {
         return null;
       }
 
@@ -472,7 +483,7 @@ function roundDownCounts(
 }
 
 export function normalizeQuestionKey(value: string | null | undefined) {
-  return normalizeText(value).toLowerCase();
+  return canonicalizeTechnologyReferences(normalizeText(value)).toLowerCase();
 }
 
 export function normalizeQuestionSource(
@@ -811,13 +822,14 @@ export function buildFallbackCoreQuestion(params: {
   contextAnchor?: string | null;
   roleTitle?: string | null;
   phase?: InterviewPhase;
+  variantSeed?: string | number | null;
 }) {
   const skillContext =
     normalizeText(params.skillName) ||
     normalizeText(params.contextAnchor) ||
     cleanRoleTitle(params.roleTitle) ||
     "this area";
-  const templateSeed = `${params.sourceType}:${params.phase ?? "core"}:${skillContext}`;
+  const templateSeed = `${params.sourceType}:${params.phase ?? "core"}:${skillContext}:${params.variantSeed ?? "0"}`;
 
   if (params.phase === "closing") {
     return `Before we wrap up, what is one recent decision you made while working on ${skillContext}, and why did it matter?`;
@@ -854,6 +866,7 @@ export function buildFallbackCoreQuestion(params: {
 }
 
 export function shouldCompleteInterview(params: {
+  askedTotalQuestions: number;
   askedCoreTotal: number;
   totalQuestions: number;
   elapsedSeconds: number;
@@ -862,6 +875,7 @@ export function shouldCompleteInterview(params: {
   coveredSkillIds: Set<string>;
   askedQuestions: Array<{ questionKind: string | null }>;
 }) {
+  const budget = buildDeterministicInterviewBudget(params.durationMinutes);
   const durationSeconds = normalizePositiveInteger(params.durationMinutes) * 60;
   const timeExceeded = durationSeconds > 0 && params.elapsedSeconds >= durationSeconds;
   const timeRemainingSeconds =
@@ -869,11 +883,12 @@ export function shouldCompleteInterview(params: {
       ? Math.max(durationSeconds - params.elapsedSeconds, 0)
       : Number.MAX_SAFE_INTEGER;
   const enoughQuestions = params.askedCoreTotal >= params.totalQuestions;
+  const hardCapReached = params.askedTotalQuestions >= budget.hardTotalQuestionCap;
   const coverageSatisfied =
     params.requiredSkillIds.length === 0 ||
     params.requiredSkillIds.every((skillId) => params.coveredSkillIds.has(skillId));
   const followUpsForCurrentCore = countFollowUpsForCurrentCore(params.askedQuestions);
-  const maxFollowUpsPerCore = durationSeconds >= 30 * 60 ? 2 : 1;
+  const maxFollowUpsPerCore = budget.maxFollowUpsPerPrimary;
   const followUpSeconds = estimateQuestionTimeSeconds({
     questionKind: "follow_up",
   });
@@ -902,10 +917,12 @@ export function shouldCompleteInterview(params: {
   return {
     complete:
       timeExceeded ||
+      hardCapReached ||
       shouldWrapUp ||
       (enoughQuestions && coverageSatisfied) ||
       (!canFitCoreQuestion && coverageSatisfied),
     timeExceeded,
+    hardCapReached,
     coverageSatisfied,
     enoughQuestions,
     timeRemainingSeconds,
@@ -916,5 +933,7 @@ export function shouldCompleteInterview(params: {
     followUpsForCurrentCore,
     maxFollowUpsPerCore,
     shouldWrapUp,
+    remainingQuestionBudget: Math.max(budget.hardTotalQuestionCap - params.askedTotalQuestions, 0),
+    remainingPrimaryBudget: Math.max(params.totalQuestions - params.askedCoreTotal, 0),
   };
 }

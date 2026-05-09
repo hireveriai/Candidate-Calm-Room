@@ -1,6 +1,10 @@
 import { randomUUID } from "crypto";
 
 import { prisma } from "@/app/lib/prisma";
+import {
+  canonicalizeTechnologyReferences,
+  extractCanonicalTechnologyTokens,
+} from "@/app/lib/skillNormalization";
 
 export type JsonValue =
   | string
@@ -97,7 +101,7 @@ function normalizeText(value: string | null | undefined) {
 }
 
 function extractKeywords(question: string) {
-  return question
+  return canonicalizeTechnologyReferences(question)
     .toLowerCase()
     .split(/[^a-z0-9+#.]+/i)
     .map((word) => word.trim())
@@ -111,10 +115,22 @@ export function validateAnswer(answer: string, question: string) {
     return false;
   }
 
-  const answerLower = normalizedAnswer.toLowerCase();
+  const normalizedQuestion = canonicalizeTechnologyReferences(question);
+  const normalizedAnswerText = canonicalizeTechnologyReferences(normalizedAnswer);
+  const answerLower = normalizedAnswerText.toLowerCase();
   const keywords = extractKeywords(question);
+  const questionTechnologyTokens = extractCanonicalTechnologyTokens(normalizedQuestion);
+  const answerTechnologyTokens = new Set(
+    extractCanonicalTechnologyTokens(normalizedAnswerText)
+  );
 
   if (keywords.length === 0) {
+    return true;
+  }
+
+  if (
+    questionTechnologyTokens.some((token) => answerTechnologyTokens.has(token))
+  ) {
     return true;
   }
 

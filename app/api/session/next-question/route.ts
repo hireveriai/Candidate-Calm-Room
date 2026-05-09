@@ -8,6 +8,7 @@ import {
   retryWithFallback,
 } from "@/app/lib/interviewReliability";
 import { syncWarRoomActionsToCalm } from "@/app/lib/warRoomSync";
+import { buildDeterministicInterviewBudget } from "@/app/lib/interviewBudget";
 import {
   buildAskedQuestionState,
   buildFallbackCoreQuestion,
@@ -19,6 +20,7 @@ import {
   deriveInterviewPhase,
   pickNextExpectedSource,
   pickQuestionAnchor,
+  normalizeQuestionKey,
   selectNextCoreQuestion,
   shouldCompleteInterview,
 } from "@/app/lib/interviewFlow";
@@ -924,8 +926,12 @@ export async function POST(request: Request) {
         skillName: skill.skill_name,
       })),
     });
+    const deterministicBudget = buildDeterministicInterviewBudget(
+      attempt.duration_minutes
+    );
 
     const completion = shouldCompleteInterview({
+      askedTotalQuestions: askedTotal,
       askedCoreTotal: coreAskedTotal,
       totalQuestions: totalLimit,
       elapsedSeconds,
@@ -946,7 +952,7 @@ export async function POST(request: Request) {
               else termination_type
             end
         where attempt_id = ${attemptId}::uuid
-          and lower(status) <> 'completed'
+          and upper(coalesce(status, '')) not in ('COMPLETED', 'FINALIZED')
       `;
 
       sessionQuestion = {
@@ -1218,40 +1224,60 @@ export async function POST(request: Request) {
           responsibilities: extractResponsibilityAnchors(attempt.job_description),
           fallbackRoleTitle: attempt.job_title,
         });
-        const createdQuestions = await prisma.$queryRaw<CreatedSessionQuestionRow[]>`
-            insert into public.session_questions (
-              attempt_id,
-              question_id,
-              content,
-              source,
-              question_kind,
-              question_order
-            )
-            values (
-              ${attemptId}::uuid,
-              ${null}::uuid,
-              ${buildFallbackCoreQuestion({
-                sourceType: nextExpectedSource,
-                skillName: anchor,
-                contextAnchor: responsibilityAnchor,
-                roleTitle: attempt.job_title,
-                phase: completion.lowTime ? "closing" : phase,
-              })}::text,
-              ${"system"}::text,
-              ${"core"}::text,
-              ${askedTotal + 1}::integer
-            )
-            returning
-              session_question_id,
-              question_id,
-              content,
-              source,
-              asked_at,
-              question_kind
-          `;
-        createdQuestion = createdQuestions[0] ?? null;
-        createdQuestionType =
-          nextExpectedSource === "behavioral" ? "behavioral" : "open_ended";
+        const fallbackQuestion = buildFallbackCoreQuestion({
+          sourceType: nextExpectedSource,
+          skillName: anchor,
+          contextAnchor: responsibilityAnchor,
+          roleTitle: attempt.job_title,
+          phase: completion.lowTime ? "closing" : phase,
+          variantSeed: askedTotal + 1,
+        });
+        const fallbackQuestionKey = normalizeQuestionKey(fallbackQuestion);
+
+        if (
+          !askedState.usedNormalizedKeys.has(fallbackQuestionKey)
+        ) {
+          const createdQuestions = await prisma.$queryRaw<CreatedSessionQuestionRow[]>`
+              insert into public.session_questions (
+                attempt_id,
+                question_id,
+                content,
+                source,
+                question_kind,
+                question_order
+              )
+              values (
+                ${attemptId}::uuid,
+                ${null}::uuid,
+                ${fallbackQuestion}::text,
+                ${"system"}::text,
+                ${"core"}::text,
+                ${askedTotal + 1}::integer
+              )
+              returning
+                session_question_id,
+                question_id,
+                content,
+                source,
+                asked_at,
+                question_kind
+            `;
+          createdQuestion = createdQuestions[0] ?? null;
+          createdQuestionType =
+            nextExpectedSource === "behavioral" ? "behavioral" : "open_ended";
+        } else if (completion.remainingQuestionBudget <= 1 || completion.coverageSatisfied) {
+          sessionQuestion = {
+            session_question_id: null,
+            question_id: null,
+            content: null,
+            source: null,
+            question_kind: null,
+            question_order: null,
+            asked_at: null,
+            is_complete: true,
+            follow_up_intent: null,
+          };
+        }
       }
 
       if (!createdQuestion && remainingFollowUps > 0 && effectiveLastAnswer) {
@@ -1347,7 +1373,7 @@ export async function POST(request: Request) {
           update public.interview_attempts
           set current_phase = ${createdQuestion.question_kind === "follow_up" ? "probe" : "core"}::text
           where attempt_id = ${attemptId}::uuid
-            and lower(status) <> 'completed'
+            and upper(coalesce(status, '')) not in ('COMPLETED', 'FINALIZED')
         `;
 
         logInterviewEvent("info", "question.created", {
@@ -1362,6 +1388,13 @@ export async function POST(request: Request) {
           nextState: "QUESTION_ACTIVE",
           timerState,
           followUpIntent: generatedFollowUp?.intent ?? null,
+          pacing: {
+            targetPrimaryQuestions: totalLimit,
+            hardTotalQuestionCap: deterministicBudget.hardTotalQuestionCap,
+            remainingQuestionBudget: completion.remainingQuestionBudget,
+            remainingPrimaryBudget: completion.remainingPrimaryBudget,
+            maxFollowUpsPerPrimary: deterministicBudget.maxFollowUpsPerPrimary,
+          },
         });
       }
     }

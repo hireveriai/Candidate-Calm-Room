@@ -1,0 +1,47 @@
+{
+  "generatedAt": "2026-05-08T13:03:06.957Z",
+  "baseUrl": "http://127.0.0.1:3103",
+  "build": {
+    "ok": true
+  },
+  "runtime": {
+    "ok": true,
+    "pid": null,
+    "status": 200
+  },
+  "routes": {
+    "/": {
+      "ok": true,
+      "status": 200
+    },
+    "/api/health": {
+      "ok": true,
+      "status": 200
+    },
+    "/api/test": {
+      "ok": true,
+      "status": 200
+    }
+  },
+  "database": {
+    "ok": true,
+    "latencyMs": null,
+    "issues": []
+  },
+  "websocket": {
+    "ok": true,
+    "status": 200
+  },
+  "calmRoom": {
+    "ok": true,
+    "token": "codex-a-20260508064754-c5e2cc53-99c5-4531-ae9d-1d78cc9db58a",
+    "status": 200
+  },
+  "warnings": [
+    {
+      "severity": "warn",
+      "code": "tls_verification_disabled",
+      "message": "NODE_TLS_REJECT_UNAUTHORIZED is set to 0, which weakens production transport security"
+    }
+  ]
+}
