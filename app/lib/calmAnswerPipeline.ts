@@ -108,11 +108,24 @@ function extractKeywords(question: string) {
     .filter((word) => word.length > 2 && !STOP_WORDS.has(word));
 }
 
+function isBroadOpeningQuestion(question: string) {
+  const normalized = normalizeText(question).toLowerCase();
+
+  return (
+    /\b(explain|tell me about|walk me through|describe)\b/.test(normalized) &&
+    /\b(experience|background|journey|work|role|yourself)\b/.test(normalized)
+  );
+}
+
 export function validateAnswer(answer: string, question: string) {
   const normalizedAnswer = normalizeText(answer);
 
   if (normalizedAnswer.length < 20) {
     return false;
+  }
+
+  if (isBroadOpeningQuestion(question)) {
+    return normalizedAnswer.split(/\s+/).filter(Boolean).length >= 5;
   }
 
   const normalizedQuestion = canonicalizeTechnologyReferences(question);
