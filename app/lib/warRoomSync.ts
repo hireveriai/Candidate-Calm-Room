@@ -57,18 +57,28 @@ export async function syncWarRoomActionsToCalm(params: {
     limit 25
   `;
 
-  for (const action of actions) {
-    const value = actionToSignalValue(action);
+  if (actions.length > 0) {
+    const payload = actions.map((action: WarRoomActionRow) => ({
+      actionId: action.action_id,
+      value: actionToSignalValue(action),
+    }));
 
     await prisma.$executeRaw`
       insert into public.interview_signals (attempt_id, type, value)
-      select ${attemptId}::uuid, ${"war_room_action"}::text, ${JSON.stringify(value)}::jsonb
+      select
+        ${attemptId}::uuid,
+        ${"war_room_action"}::text,
+        candidate.value
+      from jsonb_to_recordset(${JSON.stringify(payload)}::jsonb) as candidate(
+        "actionId" text,
+        value jsonb
+      )
       where not exists (
         select 1
-        from public.interview_signals
-        where attempt_id = ${attemptId}::uuid
-          and type = ${"war_room_action"}::text
-          and value ->> 'actionId' = ${action.action_id}::text
+        from public.interview_signals existing
+        where existing.attempt_id = ${attemptId}::uuid
+          and existing.type = ${"war_room_action"}::text
+          and existing.value ->> 'actionId' = candidate."actionId"
       )
     `;
   }
