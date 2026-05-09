@@ -1,5 +1,10 @@
 import { prisma } from "@/app/lib/prisma";
 import { assertUuid, logInterviewEvent } from "@/app/lib/interviewReliability";
+import {
+  classifyInterviewQuestion,
+  InterviewQuestionType,
+  normalizeInterviewQuestionType,
+} from "@/app/lib/interviewQuestionTypes";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -44,6 +49,7 @@ type QuestionContextRow = {
   skill_id: string | null;
   skill_name: string | null;
   job_title: string | null;
+  question_type: string | null;
 };
 
 type EvaluationResult = {
@@ -79,8 +85,14 @@ function hasMissingRecordEvaluationFunction(error: unknown) {
 
 function deriveSkillType(
   sourceType: string | null | undefined,
-  skillName: string | null | undefined
+  skillName: string | null | undefined,
+  questionType?: string | null
 ) {
+  const normalizedQuestionType = normalizeInterviewQuestionType(questionType);
+  if (normalizedQuestionType === InterviewQuestionType.BEHAVIORAL) {
+    return "behavioral";
+  }
+
   if (sourceType === "behavioral") {
     return "behavioral";
   }
@@ -96,6 +108,28 @@ function deriveSkillType(
   }
 
   return "functional";
+}
+
+function buildEvaluationRubric(questionType: InterviewQuestionType) {
+  switch (questionType) {
+    case InterviewQuestionType.CODING:
+      return "Evaluate correctness, optimization, syntax, complexity, and execution reasoning.";
+    case InterviewQuestionType.SYSTEM_DESIGN:
+      return "Evaluate scalability, tradeoffs, resilience, data flow, boundaries, and architecture maturity.";
+    case InterviewQuestionType.BEHAVIORAL:
+      return "Evaluate communication, ownership, emotional maturity, leadership, and STAR-style specificity.";
+    case InterviewQuestionType.ARCHITECTURE:
+      return "Evaluate strategic reasoning, governance, platform maturity, enterprise integration, and long-term risk handling.";
+    case InterviewQuestionType.TROUBLESHOOTING:
+      return "Evaluate debugging methodology, root-cause analysis quality, prioritization, and operational maturity.";
+    case InterviewQuestionType.MCQ:
+      return "Evaluate answer choice accuracy and whether the explanation supports the selected option.";
+    case InterviewQuestionType.CASE_STUDY:
+      return "Evaluate scenario analysis, structure, tradeoffs, stakeholder awareness, and decision quality.";
+    case InterviewQuestionType.TECHNICAL_DISCUSSION:
+    default:
+      return "Evaluate technical depth, real-world experience, terminology, architecture understanding, measurable outcomes, and clarity.";
+  }
 }
 
 function calculateBehaviorFraudAdjustment(params: {
@@ -150,6 +184,7 @@ function fallbackEvaluation(params: {
   skillName: string | null;
   focusMetrics: FocusMetrics | null | undefined;
   behaviorSignals: BehaviorSignal[];
+  questionType: InterviewQuestionType;
 }) {
   const wordCount = normalizeText(params.transcript).split(/\s+/).filter(Boolean).length;
   const hasMetrics = /\b\d+(\.\d+)?%?\b/.test(params.transcript);
@@ -198,6 +233,7 @@ async function evaluateWithAi(input: {
   rawTranscript: string | null;
   focusMetrics: FocusMetrics | null | undefined;
   behaviorSignals: BehaviorSignal[];
+  questionType: InterviewQuestionType;
 }) {
   if (!process.env.OPENAI_API_KEY) {
     return null;
@@ -225,6 +261,7 @@ async function evaluateWithAi(input: {
             "Depth should reflect specificity, technical or functional detail, and authenticity.",
             "Confidence should reflect decisiveness, coherence, and delivery confidence, not arrogance.",
             "Fraud score should reflect inconsistency, suspicious behavior, and authenticity risk.",
+            "Use the question_type-specific rubric instead of assuming all technical questions are coding tasks.",
             "Do not inflate scores when the answer is vague.",
           ].join("\n"),
         },
@@ -235,6 +272,8 @@ async function evaluateWithAi(input: {
               job_role: input.jobRole ?? "",
               skill: input.skillName ?? "",
               skill_type: input.skillType,
+              question_type: input.questionType,
+              evaluation_rubric: buildEvaluationRubric(input.questionType),
               question: input.questionText ?? "",
               transcript: input.transcript,
               raw_transcript: input.rawTranscript ?? "",
@@ -313,7 +352,8 @@ export async function POST(request: Request) {
         iq.source_type,
         coalesce(iq.target_skill_id, qsm.skill_id) as skill_id,
         sm.skill_name,
-        jp.job_title
+        jp.job_title,
+        coalesce(sq.question_kind, iq.question_type) as question_type
       from public.interview_answers ia
       join public.session_questions sq
         on sq.session_question_id = ia.session_question_id
@@ -341,7 +381,19 @@ export async function POST(request: Request) {
       return Response.json({ error: "Answer context not found" }, { status: 404 });
     }
 
-    const skillType = deriveSkillType(context.source_type, context.skill_name);
+    const resolvedQuestionType = normalizeInterviewQuestionType(
+      context.question_type,
+      classifyInterviewQuestion(
+        context.question_text ?? "",
+        context.job_title ?? undefined,
+        context.skill_name ? [context.skill_name] : []
+      ).questionType
+    );
+    const skillType = deriveSkillType(
+      context.source_type,
+      context.skill_name,
+      resolvedQuestionType
+    );
     const normalizedTranscript = normalizeText(transcript);
     const normalizedRawTranscript = normalizeText(rawTranscript);
 
@@ -355,6 +407,7 @@ export async function POST(request: Request) {
         rawTranscript: normalizedRawTranscript || null,
         focusMetrics,
         behaviorSignals,
+        questionType: resolvedQuestionType,
       }).catch((error) => {
         console.error("Spoken answer AI evaluation error:", error);
         return null;
@@ -364,6 +417,7 @@ export async function POST(request: Request) {
         skillName: context.skill_name,
         focusMetrics,
         behaviorSignals,
+        questionType: resolvedQuestionType,
       });
 
     const behaviorFraudAdjustment = calculateBehaviorFraudAdjustment({

@@ -7,7 +7,7 @@ import { useParams } from "next/navigation";
 import CalmLayout from "@/app/components/calm/core/CalmLayout";
 import CalmHeader from "@/app/components/calm/core/CalmHeader";
 import VideoPanel from "@/app/components/calm/core/VideoPanel";
-import TranscriptStream from "@/app/components/calm/core/TranscriptStream";
+import QuestionRenderer from "@/app/components/calm/core/QuestionRenderer";
 import SystemIndicators from "@/app/components/calm/core/SystemIndicators";
 import InterviewControls from "@/app/components/calm/core/InterviewControls";
 import PrecheckScreen from "@/app/components/calm/flow/PrecheckScreen";
@@ -28,6 +28,11 @@ import {
   calculateFraudScore,
   classifyRisk,
 } from "@/app/utils/fraudEngine";
+import {
+  classifyInterviewQuestion,
+  InterviewQuestionType,
+  normalizeInterviewQuestionType,
+} from "@/app/lib/interviewQuestionTypes";
 
 type VerisState = "idle" | "listening" | "thinking" | "speaking";
 type TerminationType =
@@ -101,23 +106,6 @@ const STRICT_TAB_TERMINATION = false;
 const PENDING_TERMINATION_STORAGE_KEY = "hireveri.pendingTermination";
 const PENDING_COMPLETION_STORAGE_KEY = "hireveri.pendingCompletion";
 const PENDING_RECOVERY_EVENT_STORAGE_KEY = "hireveri.pendingRecoveryEvent";
-
-function isCodingQuestionType(
-  questionType: string | null | undefined,
-  questionText?: string | null
-) {
-  const normalizedType = (questionType ?? "").replace(/[_-]+/g, " ");
-  const normalizedQuestion = questionText ?? "";
-
-  return (
-    /\b(code|coding|programming|live coding|debugging|backend logic|dsa|algorithm|sql)\b/i.test(
-      normalizedType
-    ) ||
-    /\b(write|implement|debug|fix|query|sql|function|algorithm|code)\b/i.test(
-      normalizedQuestion
-    )
-  );
-}
 
 function cleanTranscript(text: string) {
   const collapsed = text
@@ -205,6 +193,8 @@ export default function Page() {
   const [isTransitioning, setIsTransitioning] = useState(false);
   const [attemptId, setAttemptId] = useState("");
   const [candidateId, setCandidateId] = useState("");
+  const [currentQuestionType, setCurrentQuestionType] =
+    useState<InterviewQuestionType>(InterviewQuestionType.TECHNICAL_DISCUSSION);
   const [sessionEndsAt, setSessionEndsAt] = useState<number | null>(null);
   const [sessionTimeEnded, setSessionTimeEnded] = useState(false);
   const [answerWindowEnded, setAnswerWindowEnded] = useState(false);
@@ -774,6 +764,7 @@ export default function Page() {
     setIsTransitioning(false);
     setVerisState("idle");
     setCurrentQuestion("");
+    setCurrentQuestionType(InterviewQuestionType.TECHNICAL_DISCUSSION);
     setSessionQuestionId("");
     setQuestionId("");
     setSessionEndsAt(null);
@@ -792,7 +783,9 @@ export default function Page() {
     questionStartTimeRef.current = null;
     setTimeLeft(0);
 
-    const score = calculateFraudScore(events);
+    const score = calculateFraudScore(events, {
+      questionType: currentQuestionType,
+    });
     const risk = classifyRisk(score);
 
     console.log("🧠 FINAL TIMELINE:", events);
@@ -968,6 +961,11 @@ export default function Page() {
     nextQuestionId?: string | null,
     questionType?: string | null
   ) => {
+    const resolvedQuestionType = normalizeInterviewQuestionType(
+      questionType,
+      classifyInterviewQuestion(question).questionType
+    );
+
     stopAll();
     stopAudioAnalysis();
     isAdvancingRef.current = false;
@@ -977,6 +975,7 @@ export default function Page() {
     setSessionQuestionId(nextSessionQuestionId);
     setQuestionId(nextQuestionId || nextSessionQuestionId);
     setCurrentQuestion(question);
+    setCurrentQuestionType(resolvedQuestionType);
     setVerisState("thinking");
     setShowCoding(false);
     resetInactivityTimeout();
@@ -989,7 +988,7 @@ export default function Page() {
     resetFocusMetrics();
     startQuestionTimer();
 
-    if (isCodingQuestionType(questionType, question)) {
+    if (resolvedQuestionType === InterviewQuestionType.CODING) {
       addEvent({
         type: "coding_start",
         severity: "low",
@@ -1740,7 +1739,10 @@ export default function Page() {
 
         <VerisOrb state={verisState} audioLevel={audioLevel} />
 
-        <TranscriptStream text={currentQuestion} />
+        <QuestionRenderer
+          question={currentQuestion}
+          questionType={currentQuestionType}
+        />
 
         <InterviewControls
           disabled={isTransitioning}

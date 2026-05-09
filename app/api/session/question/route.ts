@@ -1,6 +1,10 @@
 import { prisma } from "@/app/lib/prisma";
 import { canAskNextQuestion } from "@/app/lib/calmTiming";
 import { assertUuid, logInterviewEvent } from "@/app/lib/interviewReliability";
+import {
+  classifyInterviewQuestion,
+  normalizeInterviewQuestionType,
+} from "@/app/lib/interviewQuestionTypes";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -94,7 +98,10 @@ export async function POST(request: Request) {
         ...existingQuestion,
         question_kind: existingQuestion.question_kind ?? "core",
         question_order: existingQuestion.question_order ?? 1,
-        question_type: questionTypes[0]?.question_type ?? null,
+        question_type: normalizeInterviewQuestionType(
+          questionTypes[0]?.question_type,
+          classifyInterviewQuestion(existingQuestion.content ?? "").questionType
+        ),
       } satisfies SessionQuestionRow);
     }
 
@@ -125,7 +132,7 @@ export async function POST(request: Request) {
 
     const openingQuestion =
       fallbackContent || "Tell me about your experience and the work most relevant to this role.";
-    const createdQuestionType = "open_ended";
+    const createdQuestionType = classifyInterviewQuestion(openingQuestion).questionType;
 
     const createdQuestions = await prisma.$queryRaw<ExistingSessionQuestionRow[]>`
       insert into public.session_questions (
@@ -179,7 +186,7 @@ export async function POST(request: Request) {
       ...createdQuestion,
       question_kind: createdQuestion.question_kind ?? "core",
       question_order: 1,
-      question_type: createdQuestionType,
+      question_type: normalizeInterviewQuestionType(createdQuestionType),
     } satisfies SessionQuestionRow);
   } catch (error) {
     const message =

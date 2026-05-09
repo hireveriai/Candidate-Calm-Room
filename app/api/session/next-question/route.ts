@@ -24,6 +24,10 @@ import {
   selectNextCoreQuestion,
   shouldCompleteInterview,
 } from "@/app/lib/interviewFlow";
+import {
+  classifyInterviewQuestion,
+  normalizeInterviewQuestionType,
+} from "@/app/lib/interviewQuestionTypes";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -1432,14 +1436,24 @@ export async function POST(request: Request) {
         `
       : [];
 
+    const responseQuestionType = normalizeInterviewQuestionType(
+      sessionQuestion.question_type ?? questionTypes[0]?.question_type,
+      classifyInterviewQuestion(
+        sessionQuestion.content ?? "",
+        attempt.job_title ?? undefined,
+        plannedQuestions
+          .map((question) => question.skill_name)
+          .filter((skill): skill is string => Boolean(skill))
+      ).questionType
+    );
+
     return Response.json({
       complete: false,
       question: sessionQuestion.content,
       question_id: sessionQuestion.question_id,
       session_question_id: sessionQuestion.session_question_id,
       question_kind: sessionQuestion.question_kind,
-      question_type:
-        sessionQuestion.question_type ?? questionTypes[0]?.question_type ?? null,
+      question_type: responseQuestionType,
       follow_up_intent: sessionQuestion.follow_up_intent ?? null,
     });
   } catch (error) {

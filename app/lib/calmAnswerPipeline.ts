@@ -312,24 +312,10 @@ async function ensureGeneratingAnswer(input: GenerateAnswerInput) {
   const existing = existingRows[0] ?? null;
 
   if (existing?.status === "completed" && normalizeText(existing.answer_text)) {
-    const existingPayload = getPayloadObject(existing.answer_payload);
-    const rawCandidateAnswer =
-      typeof existingPayload.raw_candidate_answer === "string"
-        ? existingPayload.raw_candidate_answer
-        : "";
-
-    if (
-      input.candidate_answer &&
-      (normalizeText(existing.answer_text) === normalizeText(input.candidate_answer) ||
-        normalizeText(rawCandidateAnswer) === normalizeText(input.candidate_answer))
-    ) {
-      return {
-        record: existing,
-        alreadyCompleted: true,
-      };
-    }
-
-    throw new Error("Answer has already been completed for this question");
+    return {
+      record: existing,
+      alreadyCompleted: true,
+    };
   }
 
   if (existing?.answer_id) {

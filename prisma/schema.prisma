@@ -778,6 +778,8 @@ model neural_verdicts {
 model organizations {
   organization_id      String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   organization_name    String                 @unique(map: "uniq_practice_org", where: raw("(organization_name = 'Practice'::text)"))
+  timezone             String                 @default("Asia/Kolkata")
+  timezone_label       String                 @default("India Standard Time")
   is_active            Boolean                @default(true)
   created_at           DateTime               @default(now()) @db.Timestamptz(6)
   candidates           candidates[]
