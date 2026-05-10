@@ -1,7 +1,6 @@
-process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
-
 import { Pool } from "pg";
 import { PrismaPg } from "@prisma/adapter-pg";
+import { buildPgConnectionConfig } from "@/app/lib/pgConnection";
 
 type PrismaClientLike = Record<string, any>;
 
@@ -20,7 +19,7 @@ function createPrismaClient(): PrismaClientLike {
   const pool =
     globalForPrisma.prismaPool ||
     new Pool({
-      connectionString: process.env.DATABASE_URL,
+      ...buildPgConnectionConfig(process.env.DATABASE_URL),
       max: Number.isFinite(maxConnections) && maxConnections > 0 ? maxConnections : 5,
       idleTimeoutMillis:
         Number.isFinite(idleTimeoutMillis) && idleTimeoutMillis > 0

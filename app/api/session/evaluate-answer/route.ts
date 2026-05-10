@@ -239,8 +239,12 @@ async function evaluateWithAi(input: {
     return null;
   }
 
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+
   const response = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
+    signal: controller.signal,
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
@@ -286,7 +290,7 @@ async function evaluateWithAi(input: {
         },
       ],
     }),
-  });
+  }).finally(() => clearTimeout(timeout));
 
   if (!response.ok) {
     const text = await response.text();

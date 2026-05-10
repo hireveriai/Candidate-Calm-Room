@@ -2,9 +2,6 @@ const fs = require("fs");
 const path = require("path");
 const { Client } = require("pg");
 
-process.env.NODE_TLS_REJECT_UNAUTHORIZED =
-  process.env.NODE_TLS_REJECT_UNAUTHORIZED || "0";
-
 const repoRoot = path.resolve(__dirname, "..");
 const seedPath = path.join(repoRoot, "codex-e2e-seed.json");
 const validationPath = path.join(repoRoot, "production-validation-report.json");
@@ -45,6 +42,76 @@ function loadEnvFile(filePath) {
 loadEnvFile(path.join(repoRoot, ".env"));
 loadEnvFile(path.join(repoRoot, ".env.local"));
 
+function buildPgConnectionConfig(rawConnectionString) {
+  const raw = String(rawConnectionString || "").trim().replace(/^["']|["']$/g, "");
+
+  if (!raw) {
+    return {
+      connectionString: rawConnectionString,
+    };
+  }
+
+  const url = new URL(raw);
+  if (
+    process.env.HIREVERI_USE_DIRECT_DB === "1" &&
+    url.hostname.includes("pooler.supabase.com") &&
+    url.username.startsWith("postgres.")
+  ) {
+    const projectRef = url.username.slice("postgres.".length);
+    url.username = "postgres";
+    url.hostname = `db.${projectRef}.supabase.co`;
+    url.port = "5432";
+  }
+  const sslMode = (url.searchParams.get("sslmode") || "").toLowerCase();
+  const ca = readRootCertificate(raw);
+  url.searchParams.delete("sslmode");
+  url.searchParams.delete("sslcert");
+  url.searchParams.delete("sslkey");
+  url.searchParams.delete("sslrootcert");
+
+  const ssl =
+    sslMode === "disable"
+      ? false
+      : ca && ["allow", "prefer", "require", "verify-ca", "verify-full"].includes(sslMode)
+        ? { ca, rejectUnauthorized: true }
+        : sslMode === "allow" || sslMode === "prefer" || sslMode === "require"
+          ? true
+          : ca && raw.includes("sslmode=")
+            ? { ca, rejectUnauthorized: true }
+            : sslMode === "no-verify"
+              ? { rejectUnauthorized: false }
+              : raw.includes("sslmode=")
+                ? true
+                : undefined;
+
+  return {
+    connectionString: url.toString(),
+    ...(ssl === undefined ? {} : { ssl }),
+  };
+}
+
+function readRootCertificate(rawConnectionString) {
+  const url = new URL(rawConnectionString);
+  const candidates = [
+    url.searchParams.get("sslrootcert"),
+    process.env.PGSSLROOTCERT,
+    path.join(repoRoot, "certs", "supabase-pooler-chain.pem"),
+    path.join(repoRoot, "certs", "aws-rds-global-bundle.pem"),
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    const resolved = path.isAbsolute(candidate)
+      ? candidate
+      : path.resolve(repoRoot, candidate);
+
+    if (fs.existsSync(resolved)) {
+      return fs.readFileSync(resolved, "utf8");
+    }
+  }
+
+  return null;
+}
+
 function formatList(items) {
   if (!items.length) {
     return "- none";
@@ -63,9 +130,7 @@ async function main() {
     ? JSON.parse(fs.readFileSync(validationPath, "utf8"))
     : null;
 
-  const client = new Client({
-    connectionString: process.env.DATABASE_URL,
-  });
+  const client = new Client(buildPgConnectionConfig(process.env.DATABASE_URL));
 
   await client.connect();
 

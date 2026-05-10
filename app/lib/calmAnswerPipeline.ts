@@ -194,8 +194,12 @@ async function callLlm(input: GenerateAnswerInput): Promise<LlmResult | null> {
   }
 
   const prompt = buildPrompt(input);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+
   const response = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
+    signal: controller.signal,
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
@@ -211,7 +215,7 @@ async function callLlm(input: GenerateAnswerInput): Promise<LlmResult | null> {
         },
       ],
     }),
-  });
+  }).finally(() => clearTimeout(timeout));
 
   if (!response.ok) {
     const text = await response.text();
@@ -403,7 +407,16 @@ export async function generateAnswer(
   }
 
   try {
-    const llmResult = await callLlm(input);
+    const llmResult = await callLlm(input).catch((error) => {
+      console.warn(
+        JSON.stringify({
+          event: "answer.llm_cleanup_unavailable",
+          at: new Date().toISOString(),
+          reason: error instanceof Error ? error.message : String(error),
+        })
+      );
+      return null;
+    });
     const answer = normalizeText(
       llmResult?.text ?? input.candidate_answer ?? ""
     );

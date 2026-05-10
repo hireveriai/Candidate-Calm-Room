@@ -9,7 +9,8 @@
     "start": "next start",
     "lint": "eslint",
     "validate:production": "node scripts/validate-production.js",
-    "report:test-run": "node scripts/generate-test-run-report.js"
+    "report:test-run": "node scripts/generate-test-run-report.js",
+    "stability:full-interview": "node scripts/full-interview-stability-simulation.js"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",

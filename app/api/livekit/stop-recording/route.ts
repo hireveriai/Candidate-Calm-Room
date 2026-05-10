@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/app/lib/prisma";
 import { stopRecording } from "@/app/lib/livekit/egress";
 
+export const runtime = "nodejs";
+
 type StopRecordingBody = {
   egressId?: string;
 };
