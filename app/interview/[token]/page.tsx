@@ -1677,21 +1677,7 @@ export default function Page() {
   }, [attemptId, started]);
 
   if (interviewFinished) {
-    return (
-      <div className="flex h-screen w-screen flex-col items-center justify-center bg-[#0B0F1A] px-6 text-white">
-        <div className="max-w-xl text-center">
-          <p className="mb-4 text-xs uppercase tracking-[0.28em] text-cyan-300/70">
-            Session Complete
-          </p>
-          <h1 className="mb-4 text-3xl font-medium tracking-[0.04em]">
-            Interview Finished
-          </h1>
-          <p className="text-sm leading-7 text-white/72 md:text-base">
-            {completionMessage}
-          </p>
-        </div>
-      </div>
-    );
+    return <div className="h-screen w-screen bg-[#0B0F1A]" />;
   }
 
   if (interviewInterrupted) {
