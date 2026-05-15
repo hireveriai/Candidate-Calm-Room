@@ -99,6 +99,7 @@ export default function VideoPanel({
   const onVideoReadyRef = useRef(onVideoReady);
   const onCameraStatusChangeRef = useRef(onCameraStatusChange);
   const onRoomConnectionChangeRef = useRef(onRoomConnectionChange);
+  const hasConnectedRoomRef = useRef(false);
   const cameraStreamRef = useRef<MediaStream | null>(null);
   const recordingEgressIdRef = useRef<string | null>(null);
   const recordingStartedRef = useRef(false);
@@ -226,8 +227,8 @@ export default function VideoPanel({
         }
 
         const token = await fetchLiveKitPublisherToken(safeAttemptId);
-        onRoomConnectionChangeRef.current?.("reconnecting");
         await room.connect(liveKitUrl!, token);
+        hasConnectedRoomRef.current = true;
         onRoomConnectionChangeRef.current?.("connected");
 
         const stream =
@@ -262,13 +263,18 @@ export default function VideoPanel({
     }
 
     room.on("reconnecting", () => {
-      onRoomConnectionChangeRef.current?.("reconnecting");
+      if (hasConnectedRoomRef.current) {
+        onRoomConnectionChangeRef.current?.("reconnecting");
+      }
     });
     room.on("reconnected", () => {
+      hasConnectedRoomRef.current = true;
       onRoomConnectionChangeRef.current?.("connected");
     });
     room.on("disconnected", () => {
-      onRoomConnectionChangeRef.current?.("disconnected");
+      if (hasConnectedRoomRef.current) {
+        onRoomConnectionChangeRef.current?.("disconnected");
+      }
     });
 
     void publishCamera();
@@ -277,7 +283,7 @@ export default function VideoPanel({
       cancelled = true;
       void ensureRecordingStopped();
       room.disconnect();
-      onRoomConnectionChangeRef.current?.("disconnected");
+      hasConnectedRoomRef.current = false;
     };
   }, [attemptId, reconnectKey]);
 
