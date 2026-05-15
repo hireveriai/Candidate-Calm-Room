@@ -14,6 +14,7 @@ import PrecheckScreen from "@/app/components/calm/flow/PrecheckScreen";
 import ExitModal from "@/app/components/calm/flow/ExitModal";
 
 import WarningOverlay from "@/app/components/calm/system/WarningOverlay";
+import ReconnectOverlay from "./ReconnectOverlay";
 
 import {
   speak,
@@ -33,13 +34,20 @@ import {
   InterviewQuestionType,
   normalizeInterviewQuestionType,
 } from "@/app/lib/interviewQuestionTypes";
+import {
+  HEARTBEAT_INTERVAL_MS,
+  HEARTBEAT_TIMEOUT_MS,
+  MAX_RECONNECT_ATTEMPTS,
+  RECONNECT_BACKOFF_MS,
+} from "@/app/lib/interviewSessionReliability";
 
 type VerisState = "idle" | "listening" | "thinking" | "speaking";
 type TerminationType =
   | "manual_exit"
   | "tab_close"
   | "disconnect"
-  | "timeout";
+  | "timeout"
+  | "network_disconnect_timeout";
 
 type TerminationPayload = {
   attemptId: string;
@@ -192,6 +200,7 @@ export default function Page() {
   const [timeLeft, setTimeLeft] = useState(0);
   const [isTransitioning, setIsTransitioning] = useState(false);
   const [attemptId, setAttemptId] = useState("");
+  const [interviewId, setInterviewId] = useState("");
   const [candidateId, setCandidateId] = useState("");
   const [currentQuestionType, setCurrentQuestionType] =
     useState<InterviewQuestionType>(InterviewQuestionType.TECHNICAL_DISCUSSION);
@@ -243,6 +252,33 @@ export default function Page() {
 
   const [, setTabViolations] = useState(0);
   const [showCoding, setShowCoding] = useState(false);
+  const [isReconnecting, setIsReconnecting] = useState(false);
+  const [reconnectAttempt, setReconnectAttempt] = useState(0);
+  const [reconnectReason, setReconnectReason] = useState("");
+  const [reconnectCountdownMs, setReconnectCountdownMs] = useState(0);
+  const [networkOnline, setNetworkOnline] = useState(
+    typeof navigator === "undefined" ? true : navigator.onLine
+  );
+  const [cameraReady, setCameraReady] = useState(true);
+  const [microphoneReady, setMicrophoneReady] = useState(true);
+  const [mediaRecoveryError, setMediaRecoveryError] = useState("");
+  const [videoReconnectKey, setVideoReconnectKey] = useState(0);
+
+  const heartbeatIntervalRef = useRef<number | null>(null);
+  const heartbeatTimeoutRef = useRef<number | null>(null);
+  const reconnectTimeoutHandleRef = useRef<number | null>(null);
+  const reconnectCountdownIntervalRef = useRef<number | null>(null);
+  const reconnectInFlightRef = useRef(false);
+  const reconnectPauseStartedAtRef = useRef<number | null>(null);
+  const reconnectCurrentAttemptRef = useRef(0);
+  const pausedPhaseRef = useRef<VerisState>("idle");
+  const shouldResumeListeningRef = useRef(false);
+  const shouldResumeAudioAnalysisRef = useRef(false);
+  const reconnectRequestIdRef = useRef(
+    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `session-${Date.now()}`
+  );
 
   useEffect(() => {
     if (typeof document === "undefined") {
@@ -496,6 +532,132 @@ export default function Page() {
     }
   };
 
+  const clearHeartbeatLoop = () => {
+    if (heartbeatIntervalRef.current !== null) {
+      window.clearInterval(heartbeatIntervalRef.current);
+      heartbeatIntervalRef.current = null;
+    }
+
+    if (heartbeatTimeoutRef.current !== null) {
+      window.clearTimeout(heartbeatTimeoutRef.current);
+      heartbeatTimeoutRef.current = null;
+    }
+  };
+
+  const clearReconnectSchedulers = () => {
+    if (reconnectTimeoutHandleRef.current !== null) {
+      window.clearTimeout(reconnectTimeoutHandleRef.current);
+      reconnectTimeoutHandleRef.current = null;
+    }
+
+    if (reconnectCountdownIntervalRef.current !== null) {
+      window.clearInterval(reconnectCountdownIntervalRef.current);
+      reconnectCountdownIntervalRef.current = null;
+    }
+  };
+
+  const recordReconnectState = async (
+    reason: string,
+    metadata: Record<string, unknown> = {}
+  ) => {
+    if (!attemptId) {
+      return;
+    }
+
+    await postJson("/api/interview/reconnect-state", {
+      attemptId,
+      reason,
+      source: "candidate_calm_room",
+      metadata: {
+        ...metadata,
+        sessionQuestionId: sessionQuestionId || null,
+        requestId: reconnectRequestIdRef.current,
+      },
+    });
+  };
+
+  const sendHeartbeat = async ({
+    reconnecting = false,
+  }: {
+    reconnecting?: boolean;
+  } = {}) => {
+    if (!attemptId || !interviewId || interviewFinished || interviewInterrupted) {
+      return;
+    }
+
+    const heartbeatPromise = postJson("/api/interview/heartbeat", {
+      interviewId,
+      attemptId,
+      sessionId: reconnectRequestIdRef.current,
+      timestamp: new Date().toISOString(),
+      reconnecting,
+    });
+
+    const timeoutPromise = new Promise((_, reject) => {
+      heartbeatTimeoutRef.current = window.setTimeout(() => {
+        reject(new Error("Heartbeat timed out"));
+      }, HEARTBEAT_TIMEOUT_MS);
+    });
+
+    await Promise.race([heartbeatPromise, timeoutPromise]).finally(() => {
+      if (heartbeatTimeoutRef.current !== null) {
+        window.clearTimeout(heartbeatTimeoutRef.current);
+        heartbeatTimeoutRef.current = null;
+      }
+    });
+  };
+
+  const pauseInterviewFlow = () => {
+    // Freeze timers and capture the active answer state so reconnect can resume
+    // without silently skipping question time.
+    pausedPhaseRef.current = verisState;
+    shouldResumeListeningRef.current =
+      verisState === "listening" && !showCoding && !sessionTimeEnded;
+    shouldResumeAudioAnalysisRef.current =
+      verisState === "listening" && !showCoding && !sessionTimeEnded;
+    reconnectPauseStartedAtRef.current = Date.now();
+
+    stopAll();
+    stopAudioAnalysis();
+    clearInterval(timerRef.current);
+    clearTimeout(inactivityTimeoutRef.current);
+    clearHeartbeatLoop();
+    setVerisState("thinking");
+  };
+
+  const resumeInterviewFlow = () => {
+    // Shift server-relative timers forward by the disconnect duration so the
+    // interview clock and per-question window remain fair after recovery.
+    const pausedAt = reconnectPauseStartedAtRef.current;
+    if (pausedAt) {
+      const delta = Date.now() - pausedAt;
+      interviewStartTimeRef.current = interviewStartTimeRef.current
+        ? interviewStartTimeRef.current + delta
+        : interviewStartTimeRef.current;
+      questionStartTimeRef.current = questionStartTimeRef.current
+        ? questionStartTimeRef.current + delta
+        : questionStartTimeRef.current;
+      setSessionEndsAt((current) => (current ? current + delta : current));
+    }
+
+    reconnectPauseStartedAtRef.current = null;
+    setVerisState(pausedPhaseRef.current === "idle" ? "thinking" : pausedPhaseRef.current);
+    startRecordingTimer();
+    resetInactivityTimeout();
+
+    if (shouldResumeListeningRef.current && !showCoding && !sessionTimeEnded) {
+      setVerisState("listening");
+      startListening();
+    }
+
+    if (shouldResumeAudioAnalysisRef.current && !showCoding && !sessionTimeEnded) {
+      void startAudioAnalysis();
+    }
+
+    shouldResumeListeningRef.current = false;
+    shouldResumeAudioAnalysisRef.current = false;
+  };
+
   const sendSignal = async (type: string, value: unknown) => {
     if (!sessionQuestionId || !attemptId || isAdvancingRef.current) {
       return;
@@ -640,10 +802,159 @@ export default function Page() {
     });
   };
 
+  const exitReconnectMode = async () => {
+    clearReconnectSchedulers();
+    reconnectInFlightRef.current = false;
+    reconnectCurrentAttemptRef.current = 0;
+    setReconnectAttempt(0);
+    setReconnectCountdownMs(0);
+    setReconnectReason("");
+    setMediaRecoveryError("");
+    setIsReconnecting(false);
+
+    resumeInterviewFlow();
+
+    try {
+      await sendHeartbeat({ reconnecting: true });
+    } catch {
+      // The next scheduled heartbeat will retry if this one races with recovery.
+    }
+  };
+
+  const performReconnectAttempt = async (attemptNumber: number) => {
+    if (
+      reconnectInFlightRef.current ||
+      interviewFinished ||
+      interviewInterrupted ||
+      !attemptId
+    ) {
+      return;
+    }
+
+    reconnectInFlightRef.current = true;
+    reconnectCurrentAttemptRef.current = attemptNumber;
+    setReconnectAttempt(attemptNumber);
+    setMediaRecoveryError("");
+
+    try {
+      if (!navigator.onLine) {
+        throw new Error("Waiting for internet connection");
+      }
+
+      await flushPendingRecoveryEvent();
+      await flushPendingTermination();
+      await flushPendingCompletion();
+      await sendHeartbeat({ reconnecting: true });
+
+      setVideoReconnectKey((current) => current + 1);
+      setCameraReady(false);
+      setMicrophoneReady(false);
+
+      window.setTimeout(() => {
+        setCameraReady(true);
+        setMicrophoneReady(true);
+      }, 1200);
+
+      await exitReconnectMode();
+    } catch (error) {
+      reconnectInFlightRef.current = false;
+
+      if (attemptNumber >= MAX_RECONNECT_ATTEMPTS) {
+        setMediaRecoveryError(
+          "We could not restore your secure session automatically. The interview will be safely closed."
+        );
+        void terminateInterview("network_disconnect_timeout", {
+          message:
+            "Interview ended because the connection could not be restored in time.",
+        });
+        return;
+      }
+
+      const delay =
+        RECONNECT_BACKOFF_MS[Math.min(attemptNumber - 1, RECONNECT_BACKOFF_MS.length - 1)];
+      setReconnectReason(
+        error instanceof Error ? error.message : "Reconnection attempt failed"
+      );
+      setReconnectCountdownMs(delay);
+
+      if (reconnectCountdownIntervalRef.current !== null) {
+        window.clearInterval(reconnectCountdownIntervalRef.current);
+      }
+
+      reconnectCountdownIntervalRef.current = window.setInterval(() => {
+        setReconnectCountdownMs((current) => Math.max(0, current - 1000));
+      }, 1000);
+
+      reconnectTimeoutHandleRef.current = window.setTimeout(() => {
+        reconnectInFlightRef.current = false;
+        void performReconnectAttempt(attemptNumber + 1);
+      }, delay);
+    }
+  };
+
+  const enterReconnectMode = async (
+    reason: string,
+    source: string,
+    metadata: Record<string, unknown> = {}
+  ) => {
+    if (
+      !started ||
+      !attemptId ||
+      interviewFinished ||
+      interviewInterrupted ||
+      terminationInFlightRef.current ||
+      isReconnecting
+    ) {
+      return;
+    }
+
+    setIsReconnecting(true);
+    setReconnectReason(reason);
+    setReconnectAttempt(1);
+    setReconnectCountdownMs(0);
+    setMediaRecoveryError("");
+    setNetworkOnline(typeof navigator === "undefined" ? true : navigator.onLine);
+    pauseInterviewFlow();
+
+    try {
+      await recordReconnectState(reason, {
+        source,
+        ...metadata,
+      });
+    } catch {
+      // The reconnect overlay should still proceed even if forensic logging is delayed.
+    }
+
+    const eventPayload = {
+      attemptId,
+      classifier: "RECONNECTING",
+      reason,
+      source,
+      idempotencyKey: `${attemptId}:RECONNECTING:${Date.now()}`,
+      metadata: {
+        sessionQuestionId: sessionQuestionId || null,
+        questionId: questionId || null,
+        currentQuestion: currentQuestion || null,
+        transcriptBuffer: transcriptRef.current.trim() || transcript.trim() || null,
+        currentPhase: getCurrentPhaseFromState(verisState, showCoding),
+        ...metadata,
+      },
+    };
+
+    try {
+      await postRecoveryEventPayload(eventPayload);
+      clearPendingRecoveryEvent();
+    } catch {
+      persistPendingRecoveryEvent(eventPayload);
+    }
+
+    void performReconnectAttempt(1);
+  };
+
   const resetInactivityTimeout = () => {
     clearTimeout(inactivityTimeoutRef.current);
 
-    if (!started || showCoding || terminationInFlightRef.current) {
+    if (!started || showCoding || terminationInFlightRef.current || isReconnecting) {
       return;
     }
 
@@ -767,6 +1078,7 @@ export default function Page() {
     setCurrentQuestionType(InterviewQuestionType.TECHNICAL_DISCUSSION);
     setSessionQuestionId("");
     setQuestionId("");
+    setInterviewId("");
     setSessionEndsAt(null);
     setSessionTimeEnded(false);
     setAnswerWindowEnded(false);
@@ -779,9 +1091,17 @@ export default function Page() {
     clearInterval(timerRef.current);
     clearTimeout(inactivityTimeoutRef.current);
     clearTimeout(disconnectTimeoutRef.current);
+    clearHeartbeatLoop();
+    clearReconnectSchedulers();
+    reconnectInFlightRef.current = false;
     interviewStartTimeRef.current = null;
     questionStartTimeRef.current = null;
     setTimeLeft(0);
+    setIsReconnecting(false);
+    setReconnectAttempt(0);
+    setReconnectReason("");
+    setReconnectCountdownMs(0);
+    setMediaRecoveryError("");
 
     const score = calculateFraudScore(events, {
       questionType: currentQuestionType,
@@ -804,6 +1124,13 @@ export default function Page() {
     void flushPendingTermination();
     void flushPendingCompletion();
     void flushPendingRecoveryEvent();
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      clearHeartbeatLoop();
+      clearReconnectSchedulers();
+    };
   }, []);
 
   useEffect(() => {
@@ -838,28 +1165,39 @@ export default function Page() {
     return () => {
       clearTimeout(inactivityTimeoutRef.current);
     };
-  }, [started, sessionQuestionId, transcript, showCoding]);
+  }, [isReconnecting, started, sessionQuestionId, transcript, showCoding]);
 
   useEffect(() => {
-    if (!started || !attemptId) {
+    if (!started || !attemptId || interviewFinished || interviewInterrupted) {
       return;
     }
 
     const handleOffline = () => {
+      setNetworkOnline(false);
       clearTimeout(disconnectTimeoutRef.current);
       disconnectTimeoutRef.current = setTimeout(() => {
-        void markInterviewInterrupted(
-          "NETWORK_ISSUE",
-          "Network disconnect detected"
+        void enterReconnectMode(
+          "Network connection interrupted.",
+          "browser_offline",
+          {
+            browserOnline: false,
+          }
         );
       }, DISCONNECT_GRACE_MS);
     };
 
     const handleOnline = () => {
+      setNetworkOnline(true);
       clearTimeout(disconnectTimeoutRef.current);
       void flushPendingTermination();
       void flushPendingCompletion();
       void flushPendingRecoveryEvent();
+
+      if (isReconnecting) {
+        clearReconnectSchedulers();
+        reconnectInFlightRef.current = false;
+        void performReconnectAttempt(Math.max(1, reconnectCurrentAttemptRef.current || 1));
+      }
     };
 
     window.addEventListener("offline", handleOffline);
@@ -870,7 +1208,14 @@ export default function Page() {
       window.removeEventListener("offline", handleOffline);
       window.removeEventListener("online", handleOnline);
     };
-  }, [attemptId, started, transcript, sessionQuestionId, verisState, showCoding]);
+  }, [
+    attemptId,
+    enterReconnectMode,
+    interviewFinished,
+    interviewInterrupted,
+    isReconnecting,
+    started,
+  ]);
 
   useEffect(() => {
     if (!started || !attemptId) {
@@ -889,10 +1234,10 @@ export default function Page() {
 
       persistPendingRecoveryEvent({
         attemptId: payload.attemptId,
-        classifier: "BROWSER_CRASH",
+        classifier: "BROWSER_CLOSE",
         reason: "Browser page closed or refreshed",
         source: "candidate_calm_room",
-        idempotencyKey: `${payload.attemptId}:BROWSER_CRASH:${sessionQuestionId || "no-question"}`,
+        idempotencyKey: `${payload.attemptId}:BROWSER_CLOSE:${sessionQuestionId || "no-question"}`,
         metadata: {
           sessionQuestionId: sessionQuestionId || null,
           transcriptBuffer: transcriptRef.current.trim() || transcript.trim() || null,
@@ -900,8 +1245,9 @@ export default function Page() {
           pageLifecycle: "pagehide",
         },
       });
-      void markInterviewInterrupted("BROWSER_CRASH", "Browser page closed or refreshed", {
+      void terminateInterview("tab_close", {
         useBeacon: true,
+        message: "Browser page closed or refreshed.",
       });
     };
 
@@ -1025,6 +1371,7 @@ export default function Page() {
       });
 
       setAttemptId(session.attemptId);
+      setInterviewId(session.interviewId);
       serverClockOffsetMsRef.current = session.serverNow
         ? new Date(session.serverNow).getTime() - Date.now()
         : 0;
@@ -1261,11 +1608,13 @@ export default function Page() {
         setTranscript(nextTranscript);
       }
     );
+    setMicrophoneReady(Boolean(recognitionRef.current));
   };
 
   const stopAll = () => {
     stopRecognition(recognitionRef.current);
     recognitionRef.current = null;
+    setMicrophoneReady(false);
 
     clearTimeout(questionTimeoutRef.current);
     clearTimeout(silenceTimer.current);
@@ -1292,6 +1641,7 @@ export default function Page() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       audioStreamRef.current = stream;
+      setMicrophoneReady(true);
 
       const audioContext = new AudioContext();
       audioContextRef.current = audioContext;
@@ -1315,6 +1665,7 @@ export default function Page() {
 
       update();
     } catch (err) {
+      setMicrophoneReady(false);
       console.error(err);
     }
   };
@@ -1322,6 +1673,7 @@ export default function Page() {
   const stopAudioAnalysis = () => {
     audioStreamRef.current?.getTracks().forEach((t) => t.stop());
     audioStreamRef.current = null;
+    setMicrophoneReady(false);
 
     const context = audioContextRef.current;
     audioContextRef.current = null;
@@ -1606,6 +1958,10 @@ export default function Page() {
     }
 
     const tick = () => {
+      if (isReconnecting) {
+        return;
+      }
+
       const now = Date.now() + serverClockOffsetMsRef.current;
 
       setSessionTimeEnded(Boolean(sessionEndsAt && now >= sessionEndsAt));
@@ -1621,7 +1977,60 @@ export default function Page() {
     const timer = window.setInterval(tick, 1000);
 
     return () => window.clearInterval(timer);
-  }, [sessionEndsAt, sessionQuestionId, started]);
+  }, [isReconnecting, sessionEndsAt, sessionQuestionId, started]);
+
+  useEffect(() => {
+    if (
+      !started ||
+      !attemptId ||
+      !interviewId ||
+      interviewFinished ||
+      interviewInterrupted ||
+      isReconnecting
+    ) {
+      clearHeartbeatLoop();
+      return;
+    }
+
+    let cancelled = false;
+
+    const pulse = async () => {
+      // Application-level heartbeat protects against silent websocket or network
+      // failures that do not always surface through browser events.
+      try {
+        await sendHeartbeat();
+      } catch (error) {
+        if (!cancelled) {
+          await enterReconnectMode(
+            error instanceof Error
+              ? error.message
+              : "Unable to verify secure session health.",
+            "heartbeat_failure",
+            {
+              browserOnline: typeof navigator === "undefined" ? true : navigator.onLine,
+            }
+          );
+        }
+      }
+    };
+
+    void pulse();
+    heartbeatIntervalRef.current = window.setInterval(() => {
+      void pulse();
+    }, HEARTBEAT_INTERVAL_MS);
+
+    return () => {
+      cancelled = true;
+      clearHeartbeatLoop();
+    };
+  }, [
+    attemptId,
+    interviewFinished,
+    interviewId,
+    interviewInterrupted,
+    isReconnecting,
+    started,
+  ]);
 
   useEffect(() => {
     if (!started || !attemptId) {
@@ -1708,11 +2117,54 @@ export default function Page() {
         <CalmHeader />
 
         <WarningOverlay {...warning} />
+        <ReconnectOverlay
+          visible={isReconnecting}
+          attempt={Math.max(1, reconnectAttempt)}
+          maxAttempts={MAX_RECONNECT_ATTEMPTS}
+          countdownSeconds={Math.max(1, Math.ceil(reconnectCountdownMs / 1000))}
+          networkOnline={networkOnline}
+          cameraReady={cameraReady}
+          microphoneReady={microphoneReady}
+          reason={reconnectReason}
+          mediaRecoveryError={mediaRecoveryError || null}
+          onRetry={() => {
+            reconnectInFlightRef.current = false;
+            clearReconnectSchedulers();
+            void performReconnectAttempt(
+              Math.max(1, reconnectCurrentAttemptRef.current || 1)
+            );
+          }}
+        />
 
         <VideoPanel
           attemptId={attemptId}
           timeLeft={timeLeft}
+          reconnectKey={videoReconnectKey}
           onVideoReady={(ref) => (videoRef.current = ref.current)}
+          onCameraStatusChange={(ready) => {
+            setCameraReady(ready);
+            if (!ready && started && !interviewFinished && !interviewInterrupted) {
+              void enterReconnectMode("Camera stream interrupted.", "camera_stream");
+            }
+          }}
+          onRoomConnectionChange={(state) => {
+            if (state === "connected") {
+              setNetworkOnline(true);
+              return;
+            }
+
+            if (started && !interviewFinished && !interviewInterrupted) {
+              void enterReconnectMode(
+                state === "reconnecting"
+                  ? "Realtime interview link is reconnecting."
+                  : "Realtime interview link was interrupted.",
+                "livekit_room",
+                {
+                  roomState: state,
+                }
+              );
+            }
+          }}
         />
 
         <SystemIndicators
@@ -1731,7 +2183,7 @@ export default function Page() {
         />
 
         <InterviewControls
-          disabled={isTransitioning}
+          disabled={isTransitioning || isReconnecting}
           nextDisabled={answerWindowEnded && !sessionTimeEnded}
           skipDisabled={sessionTimeEnded}
           primaryLabel={sessionTimeEnded ? "Finish Answer" : "Next Question"}

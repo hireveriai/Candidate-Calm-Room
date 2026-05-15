@@ -480,9 +480,18 @@ model interview_attempts {
   ended_at                    DateTime?                    @db.Timestamptz(6)
   ends_at                     DateTime?                    @default(dbgenerated("(now() + '00:30:00'::interval)")) @db.Timestamptz(6)
   status                      String                       @default("started")
+  last_activity_at            DateTime?                    @db.Timestamptz(6)
   current_phase               String                       @default("warmup")
   difficulty_level            Int                          @default(3)
   termination_type            String?
+  inactivity_seconds          Int?
+  disconnect_reason           String?
+  reconnect_count             Int                          @default(0)
+  reconnect_events            Json                         @default("[]")
+  total_disconnect_duration   Int                          @default(0)
+  recovered_successfully      Boolean                      @default(false)
+  last_disconnect_at          DateTime?                    @db.Timestamptz(6)
+  last_reconnect_at           DateTime?                    @db.Timestamptz(6)
   termination_detected_at     DateTime?                    @db.Timestamptz(6)
   termination_phase           String?
   time_elapsed_seconds        Int?
@@ -514,6 +523,7 @@ model interview_attempts {
   @@unique([interview_id, attempt_number], map: "uq_interview_attempt")
   @@unique([interview_id, attempt_number], map: "uq_interview_attempts_interview_attempt")
   @@index([interview_id, status], map: "idx_attempt_interview_status")
+  @@index([status, last_activity_at], map: "idx_attempt_status_activity")
 }
 
 model interview_recovery_events {

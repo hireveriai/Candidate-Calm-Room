@@ -1,6 +1,7 @@
 export const INTERVIEW_STATES = [
   "CREATED",
   "READY",
+  "RECONNECTING",
   "QUESTION_GENERATING",
   "QUESTION_ACTIVE",
   "ANSWER_RECORDING",
@@ -43,12 +44,13 @@ const uuidPattern =
 
 const allowedTransitions: Record<InterviewState, InterviewState[]> = {
   CREATED: ["READY", "QUESTION_GENERATING", "FAILED", "TIME_EXPIRED"],
-  READY: ["QUESTION_GENERATING", "QUESTION_ACTIVE", "COMPLETING", "FAILED", "TIME_EXPIRED"],
-  QUESTION_GENERATING: ["QUESTION_ACTIVE", "FOLLOWUP_GENERATING", "COMPLETING", "FAILED", "TIME_EXPIRED"],
-  QUESTION_ACTIVE: ["ANSWER_RECORDING", "ANSWER_PROCESSING", "QUESTION_GENERATING", "COMPLETING", "FAILED", "TIME_EXPIRED"],
-  ANSWER_RECORDING: ["ANSWER_PROCESSING", "COMPLETING", "FAILED", "TIME_EXPIRED"],
-  ANSWER_PROCESSING: ["FOLLOWUP_GENERATING", "QUESTION_GENERATING", "QUESTION_ACTIVE", "COMPLETING", "FAILED", "TIME_EXPIRED"],
-  FOLLOWUP_GENERATING: ["QUESTION_ACTIVE", "QUESTION_GENERATING", "COMPLETING", "FAILED", "TIME_EXPIRED"],
+  READY: ["RECONNECTING", "QUESTION_GENERATING", "QUESTION_ACTIVE", "COMPLETING", "FAILED", "TIME_EXPIRED"],
+  RECONNECTING: ["READY", "QUESTION_ACTIVE", "ANSWER_RECORDING", "ANSWER_PROCESSING", "FOLLOWUP_GENERATING", "COMPLETING", "FAILED", "TIME_EXPIRED"],
+  QUESTION_GENERATING: ["RECONNECTING", "QUESTION_ACTIVE", "FOLLOWUP_GENERATING", "COMPLETING", "FAILED", "TIME_EXPIRED"],
+  QUESTION_ACTIVE: ["RECONNECTING", "ANSWER_RECORDING", "ANSWER_PROCESSING", "QUESTION_GENERATING", "COMPLETING", "FAILED", "TIME_EXPIRED"],
+  ANSWER_RECORDING: ["RECONNECTING", "ANSWER_PROCESSING", "COMPLETING", "FAILED", "TIME_EXPIRED"],
+  ANSWER_PROCESSING: ["RECONNECTING", "FOLLOWUP_GENERATING", "QUESTION_GENERATING", "QUESTION_ACTIVE", "COMPLETING", "FAILED", "TIME_EXPIRED"],
+  FOLLOWUP_GENERATING: ["RECONNECTING", "QUESTION_ACTIVE", "QUESTION_GENERATING", "COMPLETING", "FAILED", "TIME_EXPIRED"],
   COMPLETING: ["FINALIZING", "FAILED", "TIME_EXPIRED"],
   FINALIZING: ["FINALIZED", "FAILED", "TIME_EXPIRED"],
   FINALIZED: ["FINALIZED"],
@@ -81,9 +83,15 @@ export function normalizeInterviewState(value: string | null | undefined): Inter
 
   switch ((value ?? "").trim().toLowerCase()) {
     case "started":
+    case "in_progress":
     case "active":
       return "QUESTION_ACTIVE";
+    case "reconnecting":
+      return "RECONNECTING";
     case "completed":
+    case "terminated":
+    case "abandoned":
+    case "expired":
     case "ended":
     case "finished":
     case "finalized":
@@ -97,7 +105,15 @@ export function normalizeInterviewState(value: string | null | undefined): Inter
 
 export function isAttemptStatusFinalized(value: string | null | undefined) {
   const normalized = (value ?? "").trim().toUpperCase();
-  return ["COMPLETED", "FINALIZED", "FAILED", "TIME_EXPIRED"].includes(normalized);
+  return [
+    "COMPLETED",
+    "TERMINATED",
+    "ABANDONED",
+    "EXPIRED",
+    "FINALIZED",
+    "FAILED",
+    "TIME_EXPIRED",
+  ].includes(normalized);
 }
 
 export function canTransitionInterviewState(

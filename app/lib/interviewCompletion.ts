@@ -8,12 +8,17 @@ import {
   logInterviewEvent,
   normalizeInterviewState,
 } from "@/app/lib/interviewReliability";
+import { mapCompletionStatus } from "@/app/lib/interviewSessionReliability";
 
 type TerminationType =
+  | "completed"
   | "manual_exit"
+  | "browser_close"
   | "tab_close"
   | "disconnect"
   | "timeout"
+  | "watchdog_timeout"
+  | "network_disconnect_timeout"
   | null;
 
 type AttemptContextRow = {
@@ -956,6 +961,11 @@ export async function finalizeInterviewAttempt(params: {
       reason,
     });
 
+    const completionStatus = mapCompletionStatus({
+      earlyExit: params.earlyExit,
+      terminationType: params.terminationType,
+    });
+
     const aggregateAudit = {
       asked_questions: askedQuestions,
       questions_answered: questionsAnswered,
@@ -981,7 +991,7 @@ export async function finalizeInterviewAttempt(params: {
       update public.interview_attempts
       set status = 'FINALIZING',
           ended_at = coalesce(ended_at, now()),
-          termination_type = ${params.terminationType ?? null}::text,
+          termination_type = ${completionStatus.terminationType}::text,
           termination_detected_at = case
             when ${params.earlyExit} then now()
             else termination_detected_at
@@ -993,6 +1003,7 @@ export async function finalizeInterviewAttempt(params: {
           completion_percentage = ${round(completionPercentage, 4)},
           reliability_score = ${reliabilityScore},
           early_exit = ${params.earlyExit},
+          last_activity_at = coalesce(last_activity_at, now()),
           transcript_status = 'FINALIZED',
           recording_status = case
             when exists (
@@ -1150,7 +1161,7 @@ export async function finalizeInterviewAttempt(params: {
 
     await tx.$executeRaw`
       update public.interview_attempts
-      set status = 'FINALIZED'
+      set status = ${completionStatus.status}::text
       where attempt_id = ${attemptId}::uuid
     `;
 
@@ -1183,7 +1194,7 @@ export async function finalizeInterviewAttempt(params: {
       reason,
       completed: true,
       early_exit: params.earlyExit,
-      termination_type: params.terminationType ?? null,
+      termination_type: completionStatus.terminationType,
       time_elapsed: elapsedSeconds,
       questions_answered: questionsAnswered,
       current_phase: currentPhase,

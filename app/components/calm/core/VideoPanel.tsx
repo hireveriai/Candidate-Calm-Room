@@ -7,7 +7,12 @@ import type { RefObject } from "react";
 type Props = {
   attemptId?: string;
   timeLeft?: number;
+  reconnectKey?: number;
   onVideoReady?: (ref: RefObject<HTMLVideoElement | null>) => void;
+  onCameraStatusChange?: (ready: boolean) => void;
+  onRoomConnectionChange?: (
+    state: "connected" | "reconnecting" | "disconnected"
+  ) => void;
 };
 
 const uuidPattern =
@@ -82,9 +87,18 @@ async function stopServerRecording(egressId: string) {
   });
 }
 
-export default function VideoPanel({ attemptId, timeLeft, onVideoReady }: Props) {
+export default function VideoPanel({
+  attemptId,
+  timeLeft,
+  reconnectKey = 0,
+  onVideoReady,
+  onCameraStatusChange,
+  onRoomConnectionChange,
+}: Props) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const onVideoReadyRef = useRef(onVideoReady);
+  const onCameraStatusChangeRef = useRef(onCameraStatusChange);
+  const onRoomConnectionChangeRef = useRef(onRoomConnectionChange);
   const cameraStreamRef = useRef<MediaStream | null>(null);
   const recordingEgressIdRef = useRef<string | null>(null);
   const recordingStartedRef = useRef(false);
@@ -98,6 +112,14 @@ export default function VideoPanel({ attemptId, timeLeft, onVideoReady }: Props)
   useEffect(() => {
     onVideoReadyRef.current = onVideoReady;
   }, [onVideoReady]);
+
+  useEffect(() => {
+    onCameraStatusChangeRef.current = onCameraStatusChange;
+  }, [onCameraStatusChange]);
+
+  useEffect(() => {
+    onRoomConnectionChangeRef.current = onRoomConnectionChange;
+  }, [onRoomConnectionChange]);
 
   useEffect(() => {
     const videoElement = videoRef.current;
@@ -122,8 +144,11 @@ export default function VideoPanel({ attemptId, timeLeft, onVideoReady }: Props)
             }
           };
         }
+
+        onCameraStatusChangeRef.current?.(true);
       } catch (err) {
         console.error("Camera error:", err);
+        onCameraStatusChangeRef.current?.(false);
       }
     }
 
@@ -136,8 +161,9 @@ export default function VideoPanel({ attemptId, timeLeft, onVideoReady }: Props)
 
       cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
       cameraStreamRef.current = null;
+      onCameraStatusChangeRef.current?.(false);
     };
-  }, []);
+  }, [reconnectKey]);
 
   useEffect(() => {
     if (!isValidAttemptId(attemptId)) {
@@ -200,7 +226,9 @@ export default function VideoPanel({ attemptId, timeLeft, onVideoReady }: Props)
         }
 
         const token = await fetchLiveKitPublisherToken(safeAttemptId);
+        onRoomConnectionChangeRef.current?.("reconnecting");
         await room.connect(liveKitUrl!, token);
+        onRoomConnectionChangeRef.current?.("connected");
 
         const stream =
           cameraStreamRef.current ??
@@ -229,8 +257,19 @@ export default function VideoPanel({ attemptId, timeLeft, onVideoReady }: Props)
         await ensureRecordingStarted();
       } catch (error) {
         console.error("Unable to publish LiveKit camera feed:", error);
+        onRoomConnectionChangeRef.current?.("disconnected");
       }
     }
+
+    room.on("reconnecting", () => {
+      onRoomConnectionChangeRef.current?.("reconnecting");
+    });
+    room.on("reconnected", () => {
+      onRoomConnectionChangeRef.current?.("connected");
+    });
+    room.on("disconnected", () => {
+      onRoomConnectionChangeRef.current?.("disconnected");
+    });
 
     void publishCamera();
 
@@ -238,8 +277,9 @@ export default function VideoPanel({ attemptId, timeLeft, onVideoReady }: Props)
       cancelled = true;
       void ensureRecordingStopped();
       room.disconnect();
+      onRoomConnectionChangeRef.current?.("disconnected");
     };
-  }, [attemptId]);
+  }, [attemptId, reconnectKey]);
 
   return (
     <div className="mt-10 flex w-full justify-center">

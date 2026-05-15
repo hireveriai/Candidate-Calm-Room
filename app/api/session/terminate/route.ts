@@ -8,7 +8,9 @@ type TerminationType =
   | "manual_exit"
   | "tab_close"
   | "disconnect"
-  | "timeout";
+  | "timeout"
+  | "watchdog_timeout"
+  | "network_disconnect_timeout";
 
 type RequestBody = {
   attemptId?: string;
@@ -37,6 +39,8 @@ function normalizeTerminationType(value: string | undefined): TerminationType {
     case "tab_close":
     case "disconnect":
     case "timeout":
+    case "watchdog_timeout":
+    case "network_disconnect_timeout":
       return value;
     default:
       return "manual_exit";
