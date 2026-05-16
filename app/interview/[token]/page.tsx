@@ -156,6 +156,13 @@ function extractFirstName(fullName: string | null | undefined) {
   return trimmed.split(/\s+/)[0] ?? "";
 }
 
+function isDatabaseCapacityError(error: unknown) {
+  const message =
+    error instanceof Error ? error.message : typeof error === "string" ? error : "";
+
+  return /EMAXCONNSESSION|max clients reached|pool_size/i.test(message);
+}
+
 function getCurrentPhaseFromState(
   verisState: VerisState,
   showCoding: boolean
@@ -802,7 +809,11 @@ export default function Page() {
     });
   };
 
-  const exitReconnectMode = async () => {
+  const exitReconnectMode = async ({
+    verifyHeartbeat = true,
+  }: {
+    verifyHeartbeat?: boolean;
+  } = {}) => {
     clearReconnectSchedulers();
     reconnectInFlightRef.current = false;
     reconnectCurrentAttemptRef.current = 0;
@@ -814,10 +825,12 @@ export default function Page() {
 
     resumeInterviewFlow();
 
-    try {
-      await sendHeartbeat({ reconnecting: true });
-    } catch {
-      // The next scheduled heartbeat will retry if this one races with recovery.
+    if (verifyHeartbeat) {
+      try {
+        await sendHeartbeat({ reconnecting: true });
+      } catch {
+        // The next scheduled heartbeat will retry if this one races with recovery.
+      }
     }
   };
 
@@ -858,6 +871,18 @@ export default function Page() {
       await exitReconnectMode();
     } catch (error) {
       reconnectInFlightRef.current = false;
+
+      if (isDatabaseCapacityError(error)) {
+        clearReconnectSchedulers();
+        setWarning({
+          type: "soft",
+          message:
+            "Session health check is delayed. Your interview can continue while the system retries in the background.",
+          visible: true,
+        });
+        await exitReconnectMode({ verifyHeartbeat: false });
+        return;
+      }
 
       if (attemptNumber >= MAX_RECONNECT_ATTEMPTS) {
         setMediaRecoveryError(
@@ -2000,6 +2025,11 @@ export default function Page() {
       try {
         await sendHeartbeat();
       } catch (error) {
+        if (isDatabaseCapacityError(error)) {
+          console.warn("Heartbeat skipped because the database pool is saturated.", error);
+          return;
+        }
+
         if (!cancelled) {
           await enterReconnectMode(
             error instanceof Error
