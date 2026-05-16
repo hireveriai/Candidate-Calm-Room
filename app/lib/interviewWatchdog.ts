@@ -94,7 +94,15 @@ export async function recordInterviewHeartbeat(input: HeartbeatInput) {
     set status = case
           when upper(coalesce(status, '')) in ('STARTED', 'QUESTION_ACTIVE', 'READY', 'CREATED', 'RECONNECTING')
             then ${input.reconnecting ? "RECONNECTING" : "IN_PROGRESS"}::text
-          else status
+          when upper(coalesce(status, '')) in ('IN_PROGRESS', 'ANSWER_RECORDING', 'ANSWER_PROCESSING', 'QUESTION_GENERATING', 'FOLLOWUP_GENERATING', 'RECOVERY_ALLOWED', 'RECOVERY_USED', 'INTERRUPTED')
+            then ${input.reconnecting ? "RECONNECTING" : "IN_PROGRESS"}::text
+          when upper(coalesce(status, '')) in ('COMPLETING', 'FINALIZING')
+            then status
+          when upper(coalesce(status, '')) in ('COMPLETED', 'TERMINATED', 'ABANDONED', 'EXPIRED', 'FINALIZED', 'FAILED', 'TIME_EXPIRED')
+            then status
+          when nullif(trim(coalesce(status, '')), '') is null
+            then ${input.reconnecting ? "RECONNECTING" : "IN_PROGRESS"}::text
+          else ${input.reconnecting ? "RECONNECTING" : "IN_PROGRESS"}::text
         end,
         last_activity_at = now(),
         last_reconnect_at = case
