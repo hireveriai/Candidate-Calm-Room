@@ -72,7 +72,7 @@ export async function recordInterviewHeartbeat(input: HeartbeatInput) {
     : [];
 
   const shouldRecover =
-    String(attempt.status ?? "").trim().toUpperCase() === "RECONNECTING";
+    !input.reconnecting && attempt.last_disconnect_at !== null;
 
   if (shouldRecover) {
     const reconnectLatencyMs = attempt.last_disconnect_at
@@ -93,22 +93,22 @@ export async function recordInterviewHeartbeat(input: HeartbeatInput) {
   await prisma.$executeRaw`
     update public.interview_attempts
     set status = case
-          when upper(coalesce(status, '')) in ('STARTED', 'QUESTION_ACTIVE', 'READY', 'CREATED', 'RECONNECTING')
-            then ${input.reconnecting ? "RECONNECTING" : "IN_PROGRESS"}::text
-          when upper(coalesce(status, '')) in ('IN_PROGRESS', 'ANSWER_RECORDING', 'ANSWER_PROCESSING', 'QUESTION_GENERATING', 'FOLLOWUP_GENERATING', 'RECOVERY_ALLOWED', 'RECOVERY_USED', 'INTERRUPTED')
-            then ${input.reconnecting ? "RECONNECTING" : "IN_PROGRESS"}::text
           when upper(coalesce(status, '')) in ('COMPLETING', 'FINALIZING')
             then status
           when upper(coalesce(status, '')) in ('COMPLETED', 'TERMINATED', 'ABANDONED', 'EXPIRED', 'FINALIZED', 'FAILED', 'TIME_EXPIRED')
             then status
           when nullif(trim(coalesce(status, '')), '') is null
-            then ${input.reconnecting ? "RECONNECTING" : "IN_PROGRESS"}::text
-          else ${input.reconnecting ? "RECONNECTING" : "IN_PROGRESS"}::text
+            then 'QUESTION_ACTIVE'
+          else status
         end,
         last_activity_at = now(),
         last_reconnect_at = case
           when ${shouldRecover} then now()
           else last_reconnect_at
+        end,
+        last_disconnect_at = case
+          when ${shouldRecover} then null
+          else last_disconnect_at
         end,
         recovered_successfully = case
           when ${shouldRecover} then true
@@ -134,7 +134,7 @@ export async function recordInterviewHeartbeat(input: HeartbeatInput) {
   return {
     ok: true,
     finalized: false,
-    status: input.reconnecting ? "RECONNECTING" : "IN_PROGRESS",
+    status: input.reconnecting ? "RECONNECTING" : attempt.status ?? "QUESTION_ACTIVE",
     heartbeatIntervalMs: HEARTBEAT_INTERVAL_MS,
   };
 }
@@ -178,8 +178,7 @@ export async function markAttemptReconnecting(params: {
 
   await prisma.$executeRaw`
     update public.interview_attempts
-    set status = 'RECONNECTING',
-        last_disconnect_at = now(),
+    set last_disconnect_at = now(),
         disconnect_reason = ${params.reason}::text,
         reconnect_count = coalesce(reconnect_count, 0) + 1,
         recovered_successfully = false,
@@ -192,7 +191,7 @@ export async function markAttemptReconnecting(params: {
     attemptId,
     reason: params.reason,
     state: attempt.status,
-    nextState: "RECONNECTING",
+    nextState: attempt.status,
   });
 
   return { ok: true };
@@ -263,17 +262,13 @@ export async function runInterviewWatchdog() {
       Date.now() - new Date(row.last_disconnect_at).getTime() <
         RECONNECT_GRACE_WINDOW_SECONDS * 1000;
 
-    if (
-      String(row.status ?? "").trim().toUpperCase() === "RECONNECTING" &&
-      recentReconnect &&
-      (row.reconnect_count ?? 0) < 5
-    ) {
+    if (recentReconnect && (row.reconnect_count ?? 0) < 5) {
       skipped += 1;
       continue;
     }
 
     const finalStatus =
-      row.close_reason === "SESSION_TIME_EXPIRED" ? "EXPIRED" : "ABANDONED";
+      row.close_reason === "SESSION_TIME_EXPIRED" ? "TIME_EXPIRED" : "ABANDONED";
     const terminationType =
       row.close_reason === "SESSION_TIME_EXPIRED" ? "timeout" : "watchdog_timeout";
     const disconnectReason =

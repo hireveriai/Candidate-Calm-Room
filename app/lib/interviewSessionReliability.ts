@@ -86,17 +86,17 @@ export function mapCompletionStatus(params: {
   switch ((params.terminationType ?? "").trim().toLowerCase()) {
     case "manual_exit":
       return {
-        status: "TERMINATED" as const,
+        status: "ABANDONED" as const,
         terminationType: "manual_exit" as const,
       };
     case "tab_close":
       return {
-        status: "TERMINATED" as const,
+        status: "ABANDONED" as const,
         terminationType: "browser_close" as const,
       };
     case "timeout":
       return {
-        status: "EXPIRED" as const,
+        status: "TIME_EXPIRED" as const,
         terminationType: "timeout" as const,
       };
     case "watchdog_timeout":

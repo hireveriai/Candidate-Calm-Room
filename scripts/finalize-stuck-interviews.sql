@@ -28,7 +28,7 @@ candidate_attempts as (
     case
       when ia.ends_at is not null
         and ia.ends_at < now() - (settings.session_end_buffer_seconds * interval '1 second')
-        then 'EXPIRED'
+        then 'TIME_EXPIRED'
       else 'ABANDONED'
     end as final_attempt_status,
     case
@@ -80,11 +80,11 @@ finalized_attempts as (
       termination_detected_at = coalesce(ia.termination_detected_at, now()),
       recovered_successfully = false,
       early_exit = case
-        when ca.final_attempt_status = 'EXPIRED' then ia.early_exit
+        when ca.final_attempt_status = 'TIME_EXPIRED' then ia.early_exit
         else true
       end,
       inactivity_seconds = case
-        when ca.final_attempt_status = 'EXPIRED' then
+        when ca.final_attempt_status = 'TIME_EXPIRED' then
           greatest(extract(epoch from (now() - coalesce(ia.ends_at, now())))::int, 0)
         else greatest(extract(epoch from (now() - coalesce(ia.last_activity_at, ia.started_at)))::int, 0)
       end
