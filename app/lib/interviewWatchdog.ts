@@ -3,6 +3,7 @@ import { assertUuid, logInterviewEvent } from "@/app/lib/interviewReliability";
 import {
   HEARTBEAT_INTERVAL_MS,
   RECONNECT_GRACE_WINDOW_SECONDS,
+  SESSION_END_BUFFER_SECONDS,
   STALE_ATTEMPT_THRESHOLD_SECONDS,
   isFinalSessionStatus,
 } from "@/app/lib/interviewSessionReliability";
@@ -206,6 +207,8 @@ export async function runInterviewWatchdog() {
       last_activity_at: Date | null;
       last_disconnect_at: Date | null;
       reconnect_count: number | null;
+      ends_at: Date | null;
+      close_reason: "STALE_HEARTBEAT" | "SESSION_TIME_EXPIRED";
     }[]
   >`
     select
@@ -214,12 +217,37 @@ export async function runInterviewWatchdog() {
       status,
       last_activity_at,
       last_disconnect_at,
-      reconnect_count
+      reconnect_count,
+      ends_at,
+      case
+        when ends_at is not null
+          and ends_at < now() - (${SESSION_END_BUFFER_SECONDS} * interval '1 second')
+          then 'SESSION_TIME_EXPIRED'
+        else 'STALE_HEARTBEAT'
+      end as close_reason
     from public.interview_attempts
-    where upper(coalesce(status, '')) in ('STARTED', 'IN_PROGRESS', 'RECONNECTING', 'QUESTION_ACTIVE', 'ANSWER_RECORDING', 'ANSWER_PROCESSING', 'FOLLOWUP_GENERATING', 'READY')
+    where upper(coalesce(status, '')) in (
+        'STARTED',
+        'IN_PROGRESS',
+        'RECONNECTING',
+        'QUESTION_ACTIVE',
+        'ANSWER_RECORDING',
+        'ANSWER_PROCESSING',
+        'QUESTION_GENERATING',
+        'FOLLOWUP_GENERATING',
+        'READY',
+        'CREATED',
+        'RECOVERY_USED',
+        'INTERRUPTED'
+      )
       and (
-        last_activity_at is null
-        or last_activity_at < now() - (${STALE_ATTEMPT_THRESHOLD_SECONDS} * interval '1 second')
+        (
+          ends_at is not null
+          and ends_at < now() - (${SESSION_END_BUFFER_SECONDS} * interval '1 second')
+        )
+        or (
+          coalesce(last_activity_at, started_at) < now() - (${STALE_ATTEMPT_THRESHOLD_SECONDS} * interval '1 second')
+        )
       )
     order by coalesce(last_activity_at, started_at) asc
     limit 100
@@ -244,30 +272,78 @@ export async function runInterviewWatchdog() {
       continue;
     }
 
-    const result = await prisma.$executeRaw`
-      update public.interview_attempts
-      set status = 'ABANDONED',
-          ended_at = coalesce(ended_at, now()),
-          termination_type = 'watchdog_timeout',
-          inactivity_seconds = case
-            when last_activity_at is null then ${STALE_ATTEMPT_THRESHOLD_SECONDS}::int
-            else greatest(extract(epoch from (now() - last_activity_at))::int, 0)
-          end,
-          disconnect_reason = 'heartbeat_timeout',
-          termination_detected_at = coalesce(termination_detected_at, now()),
-          recovered_successfully = false
-      where attempt_id = ${row.attempt_id}::uuid
-        and upper(coalesce(status, '')) not in ('COMPLETED', 'TERMINATED', 'ABANDONED', 'EXPIRED', 'FINALIZED', 'FAILED', 'TIME_EXPIRED')
-    `;
+    const finalStatus =
+      row.close_reason === "SESSION_TIME_EXPIRED" ? "EXPIRED" : "ABANDONED";
+    const terminationType =
+      row.close_reason === "SESSION_TIME_EXPIRED" ? "timeout" : "watchdog_timeout";
+    const disconnectReason =
+      row.close_reason === "SESSION_TIME_EXPIRED" ? "session_time_expired" : "heartbeat_timeout";
 
-    if (Number(result) > 0) {
+    const updatedRows = await prisma.$transaction(async (tx: typeof prisma) => {
+      const result = await tx.$executeRaw`
+        update public.interview_attempts
+        set status = ${finalStatus}::text,
+            ended_at = coalesce(ended_at, least(now(), coalesce(ends_at, now()))),
+            termination_type = ${terminationType}::text,
+            inactivity_seconds = case
+              when ${row.close_reason}::text = 'SESSION_TIME_EXPIRED' then
+                greatest(extract(epoch from (now() - coalesce(ends_at, now())))::int, 0)
+              else greatest(extract(epoch from (now() - coalesce(last_activity_at, started_at)))::int, 0)
+            end,
+            disconnect_reason = ${disconnectReason}::text,
+            termination_detected_at = coalesce(termination_detected_at, now()),
+            recovered_successfully = false,
+            early_exit = case
+              when ${row.close_reason}::text = 'SESSION_TIME_EXPIRED' then early_exit
+              else true
+            end
+        where attempt_id = ${row.attempt_id}::uuid
+          and upper(coalesce(status, '')) not in ('COMPLETED', 'TERMINATED', 'ABANDONED', 'EXPIRED', 'FINALIZED', 'FAILED', 'TIME_EXPIRED')
+      `;
+
+      if (Number(result) > 0) {
+        await tx.$executeRaw`
+          update public.interviews i
+          set status = 'COMPLETED',
+              final_status = coalesce(final_status, ${finalStatus}::text)
+          where i.interview_id = ${row.interview_id}::uuid
+            and not exists (
+              select 1
+              from public.interview_attempts active
+              where active.interview_id = i.interview_id
+                and active.attempt_id <> ${row.attempt_id}::uuid
+                and upper(coalesce(active.status, '')) not in ('COMPLETED', 'TERMINATED', 'ABANDONED', 'EXPIRED', 'FINALIZED', 'FAILED', 'TIME_EXPIRED')
+            )
+        `;
+
+        await tx.$executeRaw`
+          update public.interview_recordings
+          set status = case
+                when coalesce(status, 'recording') = 'failed' then status
+                else 'completed'
+              end,
+              ended_at = coalesce(ended_at, timezone('utc', now()))
+          where attempt_id = ${row.attempt_id}::uuid
+            and ended_at is null
+        `;
+      }
+
+      return result;
+    });
+
+    if (Number(updatedRows) > 0) {
       abandoned += 1;
       attempts.push(row.attempt_id);
       logInterviewEvent("warn", "watchdog.abandoned_attempt", {
         attemptId: row.attempt_id,
         interviewId: row.interview_id,
         state: row.status,
-        nextState: "ABANDONED",
+        nextState: finalStatus,
+        timerState: {
+          endsAt: row.ends_at,
+          closeReason: row.close_reason,
+          bufferSeconds: SESSION_END_BUFFER_SECONDS,
+        },
       });
     } else {
       skipped += 1;
