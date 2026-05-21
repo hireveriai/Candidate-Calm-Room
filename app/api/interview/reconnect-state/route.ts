@@ -1,4 +1,5 @@
 import { markAttemptReconnecting } from "@/app/lib/interviewWatchdog";
+import { requireCandidateSession } from "@/app/lib/candidateSession";
 import { logInterviewEvent } from "@/app/lib/interviewReliability";
 
 export const dynamic = "force-dynamic";
@@ -18,6 +19,10 @@ export async function POST(request: Request) {
     if (!body.attemptId?.trim()) {
       return Response.json({ error: "attemptId is required" }, { status: 400 });
     }
+    await requireCandidateSession(request, {
+      attemptId: body.attemptId.trim(),
+      operation: "interview.reconnect_state",
+    });
 
     const result = await markAttemptReconnecting({
       attemptId: body.attemptId.trim(),

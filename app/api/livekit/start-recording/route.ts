@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/app/lib/prisma";
+import { requireCandidateSession } from "@/app/lib/candidateSession";
 import { startRecording, stopRecording } from "@/app/lib/livekit/egress";
 
 type StartRecordingBody = {
@@ -58,6 +59,10 @@ export async function POST(request: NextRequest) {
         { status: 202 },
       );
     }
+    await requireCandidateSession(request, {
+      attemptId,
+      operation: "livekit.start_recording",
+    });
 
     await ensureRecordingSchema();
 

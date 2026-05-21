@@ -1,0 +1,568 @@
+{
+  "inspectedAt": "2026-05-21T10:42:42.636Z",
+  "database": {
+    "name": "postgres",
+    "user_name": "postgres"
+  },
+  "activity": {
+    "total_connections": 16,
+    "active_connections": 1,
+    "waiting_connections": 15
+  },
+  "tableCounts": {
+    "interview_answers": {
+      "rows": 109
+    },
+    "session_questions": {
+      "rows": 151
+    },
+    "interview_attempts": {
+      "rows": 78
+    },
+    "interview_invites": {
+      "rows": 202
+    },
+    "interview_signals": {
+      "rows": 873
+    },
+    "interview_recordings": {
+      "rows": 13
+    },
+    "interview_recovery_events": {
+      "rows": 17
+    },
+    "forensic_transcripts": {
+      "rows": 0
+    },
+    "interviews": {
+      "rows": 202
+    },
+    "candidates": {
+      "rows": 202
+    },
+    "job_positions": {
+      "rows": 21
+    }
+  },
+  "integrity": {
+    "duplicateAnswers": {
+      "duplicate_groups": 0,
+      "duplicate_rows": 0
+    },
+    "duplicateAttempts": {
+      "duplicate_groups": 0,
+      "duplicate_rows": 0
+    },
+    "duplicateSessionQuestionOrders": {
+      "duplicate_groups": 0,
+      "duplicate_rows": 0
+    }
+  },
+  "missingRequiredForScript": [],
+  "optionalTablesMissing": [],
+  "schema": {
+    "interview_answers": {
+      "exists": true,
+      "columns": [
+        "answer_id",
+        "attempt_id",
+        "question_id",
+        "answer_text",
+        "answer_payload",
+        "answered_at",
+        "session_question_id",
+        "status"
+      ],
+      "indexes": [
+        {
+          "indexname": "idx_answers_attempt",
+          "indexdef": "CREATE INDEX idx_answers_attempt ON public.interview_answers USING btree (attempt_id)"
+        },
+        {
+          "indexname": "idx_interview_answers_attempt_answered_at",
+          "indexdef": "CREATE INDEX idx_interview_answers_attempt_answered_at ON public.interview_answers USING btree (attempt_id, answered_at DESC)"
+        },
+        {
+          "indexname": "idx_interview_answers_attempt_session_status",
+          "indexdef": "CREATE INDEX idx_interview_answers_attempt_session_status ON public.interview_answers USING btree (attempt_id, session_question_id, status)"
+        },
+        {
+          "indexname": "idx_interview_answers_status",
+          "indexdef": "CREATE INDEX idx_interview_answers_status ON public.interview_answers USING btree (status)"
+        },
+        {
+          "indexname": "interview_answers_pkey",
+          "indexdef": "CREATE UNIQUE INDEX interview_answers_pkey ON public.interview_answers USING btree (answer_id)"
+        },
+        {
+          "indexname": "uq_attempt_question",
+          "indexdef": "CREATE UNIQUE INDEX uq_attempt_question ON public.interview_answers USING btree (attempt_id, question_id)"
+        },
+        {
+          "indexname": "uq_attempt_question_answer",
+          "indexdef": "CREATE UNIQUE INDEX uq_attempt_question_answer ON public.interview_answers USING btree (attempt_id, question_id)"
+        },
+        {
+          "indexname": "uq_interview_answers_attempt_question",
+          "indexdef": "CREATE UNIQUE INDEX uq_interview_answers_attempt_question ON public.interview_answers USING btree (attempt_id, question_id)"
+        }
+      ]
+    },
+    "session_questions": {
+      "exists": true,
+      "columns": [
+        "session_question_id",
+        "attempt_id",
+        "question_id",
+        "content",
+        "source",
+        "asked_at",
+        "parent_session_question_id",
+        "question_kind",
+        "question_order",
+        "source_context",
+        "mapped_skill_id",
+        "phase",
+        "difficulty_level",
+        "probe_type",
+        "contradiction_probe",
+        "classifier_confidence",
+        "recruiter_override",
+        "rendering_mode"
+      ],
+      "indexes": [
+        {
+          "indexname": "idx_session_questions_attempt_order_phase",
+          "indexdef": "CREATE INDEX idx_session_questions_attempt_order_phase ON public.session_questions USING btree (attempt_id, question_order, question_kind)"
+        },
+        {
+          "indexname": "idx_session_questions_mapped_skill",
+          "indexdef": "CREATE INDEX idx_session_questions_mapped_skill ON public.session_questions USING btree (attempt_id, mapped_skill_id)"
+        },
+        {
+          "indexname": "session_questions_pkey",
+          "indexdef": "CREATE UNIQUE INDEX session_questions_pkey ON public.session_questions USING btree (session_question_id)"
+        },
+        {
+          "indexname": "uq_session_questions_attempt_order",
+          "indexdef": "CREATE UNIQUE INDEX uq_session_questions_attempt_order ON public.session_questions USING btree (attempt_id, question_order)"
+        }
+      ]
+    },
+    "interview_attempts": {
+      "exists": true,
+      "columns": [
+        "attempt_id",
+        "interview_id",
+        "attempt_number",
+        "started_at",
+        "ended_at",
+        "status",
+        "candidate_experience",
+        "mission_snapshot_id",
+        "termination_type",
+        "termination_detected_at",
+        "termination_phase",
+        "time_elapsed_seconds",
+        "questions_answered",
+        "expected_questions",
+        "completion_percentage",
+        "reliability_score",
+        "early_exit",
+        "termination_metadata",
+        "current_phase",
+        "difficulty_level",
+        "interview_blueprint",
+        "adaptive_state",
+        "last_answer_score",
+        "ends_at",
+        "interruption_reason",
+        "interruption_detected_at",
+        "transcript_status",
+        "recording_status",
+        "timer_remaining_seconds",
+        "inherited_from_attempt_id",
+        "recovery_link_issued_at",
+        "recovery_link_expires_at",
+        "recovery_decision",
+        "recovery_decided_by",
+        "recovery_decided_at",
+        "recovery_token_hash",
+        "recovery_token_used_at",
+        "recovery_policy",
+        "last_activity_at",
+        "inactivity_seconds",
+        "disconnect_reason",
+        "reconnect_count",
+        "reconnect_events",
+        "total_disconnect_duration",
+        "recovered_successfully",
+        "last_disconnect_at",
+        "last_reconnect_at"
+      ],
+      "indexes": [
+        {
+          "indexname": "idx_attempt_interview_status",
+          "indexdef": "CREATE INDEX idx_attempt_interview_status ON public.interview_attempts USING btree (interview_id, status)"
+        },
+        {
+          "indexname": "idx_interview_attempts_ends_at",
+          "indexdef": "CREATE INDEX idx_interview_attempts_ends_at ON public.interview_attempts USING btree (ends_at)"
+        },
+        {
+          "indexname": "idx_interview_attempts_last_disconnect",
+          "indexdef": "CREATE INDEX idx_interview_attempts_last_disconnect ON public.interview_attempts USING btree (last_disconnect_at)"
+        },
+        {
+          "indexname": "idx_interview_attempts_status_last_activity",
+          "indexdef": "CREATE INDEX idx_interview_attempts_status_last_activity ON public.interview_attempts USING btree (status, last_activity_at)"
+        },
+        {
+          "indexname": "idx_interview_attempts_termination_type",
+          "indexdef": "CREATE INDEX idx_interview_attempts_termination_type ON public.interview_attempts USING btree (termination_type)"
+        },
+        {
+          "indexname": "idx_interview_attempts_timer_status",
+          "indexdef": "CREATE INDEX idx_interview_attempts_timer_status ON public.interview_attempts USING btree (status, ends_at)"
+        },
+        {
+          "indexname": "interview_attempts_pkey",
+          "indexdef": "CREATE UNIQUE INDEX interview_attempts_pkey ON public.interview_attempts USING btree (attempt_id)"
+        },
+        {
+          "indexname": "uq_interview_attempt",
+          "indexdef": "CREATE UNIQUE INDEX uq_interview_attempt ON public.interview_attempts USING btree (interview_id, attempt_number)"
+        },
+        {
+          "indexname": "uq_interview_attempts_interview_attempt",
+          "indexdef": "CREATE UNIQUE INDEX uq_interview_attempts_interview_attempt ON public.interview_attempts USING btree (interview_id, attempt_number)"
+        },
+        {
+          "indexname": "ux_interview_active_recovery_token",
+          "indexdef": "CREATE UNIQUE INDEX ux_interview_active_recovery_token ON public.interview_attempts USING btree (recovery_token_hash) WHERE ((recovery_token_hash IS NOT NULL) AND (recovery_token_used_at IS NULL))"
+        }
+      ]
+    },
+    "interview_invites": {
+      "exists": true,
+      "columns": [
+        "invite_id",
+        "interview_id",
+        "token",
+        "used_at",
+        "created_at",
+        "expires_at",
+        "max_attempts",
+        "attempts_used",
+        "status",
+        "issued_by",
+        "access_type",
+        "start_time",
+        "end_time",
+        "candidate_id",
+        "updated_at",
+        "revoked_at",
+        "revoked_reason",
+        "job_id",
+        "email",
+        "invite_link",
+        "ai_screening_match_id",
+        "ai_screening_email_status",
+        "ai_screening_sent_at",
+        "company_id",
+        "candidate_email",
+        "sent_at"
+      ],
+      "indexes": [
+        {
+          "indexname": "idx_interview_invites_ai_screening_candidate",
+          "indexdef": "CREATE INDEX idx_interview_invites_ai_screening_candidate ON public.interview_invites USING btree (candidate_id, created_at DESC) WHERE (candidate_id IS NOT NULL)"
+        },
+        {
+          "indexname": "idx_interview_invites_ai_screening_job",
+          "indexdef": "CREATE INDEX idx_interview_invites_ai_screening_job ON public.interview_invites USING btree (job_id, created_at DESC) WHERE (job_id IS NOT NULL)"
+        },
+        {
+          "indexname": "idx_interview_invites_candidate_email_lookup",
+          "indexdef": "CREATE INDEX idx_interview_invites_candidate_email_lookup ON public.interview_invites USING btree (lower(COALESCE(candidate_email, email))) WHERE (COALESCE(candidate_email, email) IS NOT NULL)"
+        },
+        {
+          "indexname": "idx_interview_invites_company_candidate_email_sent_at",
+          "indexdef": "CREATE INDEX idx_interview_invites_company_candidate_email_sent_at ON public.interview_invites USING btree (company_id, candidate_email, sent_at DESC)"
+        },
+        {
+          "indexname": "idx_interview_invites_company_email_sent_at",
+          "indexdef": "CREATE INDEX idx_interview_invites_company_email_sent_at ON public.interview_invites USING btree (company_id, lower(candidate_email), sent_at DESC)"
+        },
+        {
+          "indexname": "idx_interview_invites_company_job_sent_at",
+          "indexdef": "CREATE INDEX idx_interview_invites_company_job_sent_at ON public.interview_invites USING btree (company_id, job_id, sent_at DESC)"
+        },
+        {
+          "indexname": "idx_interview_invites_interview_id",
+          "indexdef": "CREATE INDEX idx_interview_invites_interview_id ON public.interview_invites USING btree (interview_id)"
+        },
+        {
+          "indexname": "idx_interview_invites_status_created_at",
+          "indexdef": "CREATE INDEX idx_interview_invites_status_created_at ON public.interview_invites USING btree (status, created_at DESC)"
+        },
+        {
+          "indexname": "idx_interview_invites_token",
+          "indexdef": "CREATE INDEX idx_interview_invites_token ON public.interview_invites USING btree (token)"
+        },
+        {
+          "indexname": "idx_invite_interview",
+          "indexdef": "CREATE INDEX idx_invite_interview ON public.interview_invites USING btree (interview_id)"
+        },
+        {
+          "indexname": "idx_invite_token",
+          "indexdef": "CREATE INDEX idx_invite_token ON public.interview_invites USING btree (token)"
+        },
+        {
+          "indexname": "interview_invites_pkey",
+          "indexdef": "CREATE UNIQUE INDEX interview_invites_pkey ON public.interview_invites USING btree (invite_id)"
+        },
+        {
+          "indexname": "interview_invites_token_key",
+          "indexdef": "CREATE UNIQUE INDEX interview_invites_token_key ON public.interview_invites USING btree (token)"
+        },
+        {
+          "indexname": "unique_token",
+          "indexdef": "CREATE UNIQUE INDEX unique_token ON public.interview_invites USING btree (token)"
+        }
+      ]
+    },
+    "interview_signals": {
+      "exists": true,
+      "columns": [
+        "signal_id",
+        "attempt_id",
+        "type",
+        "value",
+        "created_at"
+      ],
+      "indexes": [
+        {
+          "indexname": "idx_interview_signals_attempt_type_created",
+          "indexdef": "CREATE INDEX idx_interview_signals_attempt_type_created ON public.interview_signals USING btree (attempt_id, type, created_at DESC)"
+        },
+        {
+          "indexname": "interview_signals_pkey",
+          "indexdef": "CREATE UNIQUE INDEX interview_signals_pkey ON public.interview_signals USING btree (signal_id)"
+        }
+      ]
+    },
+    "interview_recordings": {
+      "exists": true,
+      "columns": [
+        "recording_id",
+        "attempt_id",
+        "audio_url",
+        "transcript",
+        "retention_days",
+        "expires_at",
+        "created_at",
+        "room_name",
+        "egress_id",
+        "status",
+        "video_url",
+        "started_at",
+        "ended_at",
+        "file_path"
+      ],
+      "indexes": [
+        {
+          "indexname": "idx_interview_recordings_attempt_started",
+          "indexdef": "CREATE INDEX idx_interview_recordings_attempt_started ON public.interview_recordings USING btree (attempt_id, started_at DESC)"
+        },
+        {
+          "indexname": "idx_interview_recordings_attempt_status",
+          "indexdef": "CREATE INDEX idx_interview_recordings_attempt_status ON public.interview_recordings USING btree (attempt_id, status)"
+        },
+        {
+          "indexname": "idx_interview_recordings_egress_id",
+          "indexdef": "CREATE UNIQUE INDEX idx_interview_recordings_egress_id ON public.interview_recordings USING btree (egress_id) WHERE (egress_id IS NOT NULL)"
+        },
+        {
+          "indexname": "interview_recordings_pkey",
+          "indexdef": "CREATE UNIQUE INDEX interview_recordings_pkey ON public.interview_recordings USING btree (recording_id)"
+        }
+      ]
+    },
+    "interview_recovery_events": {
+      "exists": true,
+      "columns": [
+        "recovery_event_id",
+        "interview_id",
+        "attempt_id",
+        "inherited_from_attempt_id",
+        "event_type",
+        "classifier",
+        "reason",
+        "source",
+        "idempotency_key",
+        "occurred_at",
+        "actor_id",
+        "metadata"
+      ],
+      "indexes": [
+        {
+          "indexname": "interview_recovery_events_pkey",
+          "indexdef": "CREATE UNIQUE INDEX interview_recovery_events_pkey ON public.interview_recovery_events USING btree (recovery_event_id)"
+        },
+        {
+          "indexname": "ux_recovery_events_idempotency",
+          "indexdef": "CREATE UNIQUE INDEX ux_recovery_events_idempotency ON public.interview_recovery_events USING btree (interview_id, idempotency_key) WHERE (idempotency_key IS NOT NULL)"
+        }
+      ]
+    },
+    "forensic_transcripts": {
+      "exists": true,
+      "columns": [
+        "transcript_id",
+        "attempt_id",
+        "segment_index",
+        "start_ms",
+        "end_ms",
+        "transcript",
+        "confidence",
+        "stress",
+        "hesitation",
+        "cognitive_flag",
+        "sealed"
+      ],
+      "indexes": [
+        {
+          "indexname": "forensic_transcripts_pkey",
+          "indexdef": "CREATE UNIQUE INDEX forensic_transcripts_pkey ON public.forensic_transcripts USING btree (transcript_id)"
+        },
+        {
+          "indexname": "ux_forensic_transcripts_attempt_segment",
+          "indexdef": "CREATE UNIQUE INDEX ux_forensic_transcripts_attempt_segment ON public.forensic_transcripts USING btree (attempt_id, segment_index)"
+        }
+      ]
+    },
+    "interviews": {
+      "exists": true,
+      "columns": [
+        "interview_id",
+        "organization_id",
+        "job_id",
+        "candidate_id",
+        "interview_type",
+        "created_by",
+        "is_active",
+        "created_at",
+        "duration_minutes",
+        "question_count",
+        "ai_strictness",
+        "resume_ai_enabled",
+        "max_attempts",
+        "proctoring_enabled",
+        "status",
+        "required_follow_up_questions",
+        "question_status",
+        "email_status",
+        "failure_reason",
+        "last_error",
+        "questions_generated_at",
+        "email_sent_at",
+        "idempotency_key",
+        "recovery_allowed",
+        "recovery_used",
+        "final_status",
+        "forensic_timeline_id"
+      ],
+      "indexes": [
+        {
+          "indexname": "idx_interviews_org_idempotency_key",
+          "indexdef": "CREATE UNIQUE INDEX idx_interviews_org_idempotency_key ON public.interviews USING btree (organization_id, idempotency_key) WHERE (idempotency_key IS NOT NULL)"
+        },
+        {
+          "indexname": "interviews_pkey",
+          "indexdef": "CREATE UNIQUE INDEX interviews_pkey ON public.interviews USING btree (interview_id)"
+        }
+      ]
+    },
+    "candidates": {
+      "exists": true,
+      "columns": [
+        "candidate_id",
+        "organization_id",
+        "full_name",
+        "email",
+        "phone",
+        "created_at",
+        "status",
+        "resume_url",
+        "resume_text",
+        "extracted_json",
+        "ai_screening_status",
+        "created_by",
+        "updated_at",
+        "upload_batch_id",
+        "first_name",
+        "last_name",
+        "primary_role_id",
+        "experience_level_code"
+      ],
+      "indexes": [
+        {
+          "indexname": "candidates_pkey",
+          "indexdef": "CREATE UNIQUE INDEX candidates_pkey ON public.candidates USING btree (candidate_id)"
+        },
+        {
+          "indexname": "idx_candidates_ai_screening_email",
+          "indexdef": "CREATE INDEX idx_candidates_ai_screening_email ON public.candidates USING btree (organization_id, lower(email)) WHERE (email IS NOT NULL)"
+        },
+        {
+          "indexname": "idx_candidates_ai_screening_org_created_at",
+          "indexdef": "CREATE INDEX idx_candidates_ai_screening_org_created_at ON public.candidates USING btree (organization_id, created_at DESC)"
+        },
+        {
+          "indexname": "idx_candidates_ai_screening_upload_batch",
+          "indexdef": "CREATE INDEX idx_candidates_ai_screening_upload_batch ON public.candidates USING btree (organization_id, upload_batch_id, created_at DESC) WHERE (upload_batch_id IS NOT NULL)"
+        },
+        {
+          "indexname": "idx_candidates_org_email",
+          "indexdef": "CREATE INDEX idx_candidates_org_email ON public.candidates USING btree (organization_id, lower(email)) WHERE (email IS NOT NULL)"
+        },
+        {
+          "indexname": "idx_candidates_org_email_lookup",
+          "indexdef": "CREATE INDEX idx_candidates_org_email_lookup ON public.candidates USING btree (organization_id, lower(email)) WHERE (email IS NOT NULL)"
+        }
+      ]
+    },
+    "job_positions": {
+      "exists": true,
+      "columns": [
+        "job_id",
+        "organization_id",
+        "job_title",
+        "job_description",
+        "is_active",
+        "created_at",
+        "core_skills",
+        "difficulty_profile",
+        "created_by",
+        "status",
+        "experience_level_id",
+        "coding_required",
+        "coding_assessment_type",
+        "coding_difficulty",
+        "coding_duration_minutes",
+        "coding_languages",
+        "coding_recommended",
+        "coding_recommendation_reason",
+        "interview_duration_minutes",
+        "question_type_default"
+      ],
+      "indexes": [
+        {
+          "indexname": "job_positions_pkey",
+          "indexdef": "CREATE UNIQUE INDEX job_positions_pkey ON public.job_positions USING btree (job_id)"
+        }
+      ]
+    }
+  }
+}

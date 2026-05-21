@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/app/lib/prisma";
+import { requireCandidateSession } from "@/app/lib/candidateSession";
 import { stopRecording } from "@/app/lib/livekit/egress";
 
 export const runtime = "nodejs";
@@ -21,15 +22,22 @@ export async function POST(request: NextRequest) {
 
   try {
     const rows = await prisma.$queryRaw<
-      Array<{ status: string | null }>
+      Array<{ status: string | null; attempt_id: string | null }>
     >`
-      select status
+      select status, attempt_id::text
       from public.interview_recordings
       where egress_id = ${egressId}
       limit 1
     `;
 
     const existingRecording = rows[0];
+    if (!existingRecording?.attempt_id) {
+      return NextResponse.json({ error: "Recording not found" }, { status: 404 });
+    }
+    await requireCandidateSession(request, {
+      attemptId: existingRecording.attempt_id,
+      operation: "livekit.stop_recording",
+    });
 
     if (existingRecording?.status === "completed") {
       return NextResponse.json({ success: true, status: "completed" });

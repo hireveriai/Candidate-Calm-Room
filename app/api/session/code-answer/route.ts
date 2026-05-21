@@ -6,6 +6,7 @@ import {
   type JsonValue,
 } from "@/app/lib/calmAnswerPipeline";
 import { canSubmitAnswer } from "@/app/lib/calmTiming";
+import { requireCandidateSession } from "@/app/lib/candidateSession";
 import { prisma } from "@/app/lib/prisma";
 
 export const dynamic = "force-dynamic";
@@ -133,6 +134,11 @@ export async function POST(request: Request) {
       attemptId: body.attemptId?.trim(),
       candidateId: body.candidateId?.trim(),
       questionId: body.questionId?.trim(),
+    });
+    await requireCandidateSession(request, {
+      attemptId: context.attempt_id,
+      candidateId: context.candidate_id,
+      operation: "session.code_answer",
     });
 
     if (

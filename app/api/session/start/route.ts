@@ -1,5 +1,9 @@
 import { prisma } from "@/app/lib/prisma";
 import {
+  candidateSessionCookie,
+  createCandidateSessionToken,
+} from "@/app/lib/candidateSession";
+import {
   isAttemptStatusFinalized,
   logInterviewEvent,
 } from "@/app/lib/interviewReliability";
@@ -226,142 +230,153 @@ export async function POST(request: Request) {
       } else {
 
       const now = new Date();
-      const invite = await prisma.interview_invites.findUnique({
-        where: {
-          token,
-        },
-        select: {
-          invite_id: true,
-          interview_id: true,
-          status: true,
-          expires_at: true,
-          max_attempts: true,
-          attempts_used: true,
-          interviews: {
-            select: {
-              candidate_id: true,
-              duration_minutes: true,
-              candidates: {
-                select: {
-                  full_name: true,
-                },
-              },
-            },
-          },
-        },
-      });
+      attempt = await prisma.$transaction(async (tx: typeof prisma) => {
+        const inviteRows = await tx.$queryRaw<Array<{
+          invite_id: string;
+          interview_id: string;
+          status: string | null;
+          expires_at: Date | null;
+          max_attempts: number | null;
+          attempts_used: number | null;
+          candidate_id: string | null;
+          duration_minutes: number | null;
+          candidate_name: string | null;
+        }>>`
+          select
+            ii.invite_id::text,
+            ii.interview_id::text,
+            ii.status,
+            ii.expires_at,
+            ii.max_attempts,
+            ii.attempts_used,
+            i.candidate_id::text,
+            i.duration_minutes,
+            c.full_name as candidate_name
+          from public.interview_invites ii
+          join public.interviews i
+            on i.interview_id = ii.interview_id
+          left join public.candidates c
+            on c.candidate_id = i.candidate_id
+          where ii.token = ${token}::text
+          limit 1
+          for update of ii
+        `;
+        const invite = inviteRows[0];
 
-      if (!invite) {
-        return Response.json({ error: "Invite not found" }, { status: 404 });
-      }
+        if (!invite) {
+          throw new Error("Invite not found");
+        }
 
-      if (invite.status && invite.status !== "ACTIVE") {
-        return Response.json({ error: "Invite is not active" }, { status: 400 });
-      }
+        if (invite.status && invite.status !== "ACTIVE") {
+          throw new Error("Invite is not active");
+        }
 
-      if (invite.expires_at && invite.expires_at <= now) {
-        return Response.json({ error: "Invite has expired" }, { status: 400 });
-      }
+        if (invite.expires_at && invite.expires_at <= now) {
+          throw new Error("Invite has expired");
+        }
 
-      const latestAttempt = await prisma.interview_attempts.findFirst({
-        where: {
-          interview_id: invite.interview_id,
-        },
-        orderBy: [
-          {
-            attempt_number: "desc",
-          },
-          {
-            started_at: "desc",
-          },
-        ],
-        select: {
-          attempt_id: true,
-          interview_id: true,
-          attempt_number: true,
-          status: true,
-        },
-      });
+        const latestAttempts = await tx.$queryRaw<Array<{
+          attempt_id: string;
+          interview_id: string;
+          attempt_number: number;
+          status: string | null;
+          ends_at: Date | null;
+        }>>`
+          select
+            attempt_id::text,
+            interview_id::text,
+            attempt_number,
+            status,
+            ends_at
+          from public.interview_attempts
+          where interview_id = ${invite.interview_id}::uuid
+          order by attempt_number desc, started_at desc
+          limit 1
+          for update
+        `;
+        const latestAttempt = latestAttempts[0];
 
-      if (
-        latestAttempt &&
-        !isAttemptStatusFinalized(latestAttempt.status) &&
-        !["COMPLETING", "FINALIZING"].includes(String(latestAttempt.status ?? "").toUpperCase())
-      ) {
-        attempt = {
-          attempt_id: latestAttempt.attempt_id,
-          interview_id: latestAttempt.interview_id,
-          attempt_number: latestAttempt.attempt_number,
-          reused: true,
-          candidate_name: invite.interviews.candidates.full_name,
-          candidate_id: invite.interviews.candidate_id,
-        };
-      } else {
+        if (
+          latestAttempt &&
+          !isAttemptStatusFinalized(latestAttempt.status) &&
+          !["COMPLETING", "FINALIZING"].includes(String(latestAttempt.status ?? "").toUpperCase())
+        ) {
+          logInterviewEvent("info", "session.start_fallback_reused_locked_attempt", {
+            attemptId: latestAttempt.attempt_id,
+            interviewId: latestAttempt.interview_id,
+            candidateId: invite.candidate_id,
+          });
+          return {
+            attempt_id: latestAttempt.attempt_id,
+            interview_id: latestAttempt.interview_id,
+            attempt_number: latestAttempt.attempt_number,
+            reused: true,
+            candidate_name: invite.candidate_name,
+            candidate_id: invite.candidate_id,
+            ends_at: latestAttempt.ends_at,
+          } satisfies SessionStartRow;
+        }
+
         const attemptsUsed = invite.attempts_used ?? 0;
         const maxAttempts = invite.max_attempts ?? 1;
 
         if (attemptsUsed >= maxAttempts) {
-          return Response.json(
-            { error: "Maximum attempts reached for this invite" },
-            { status: 400 }
-          );
+          throw new Error("Maximum attempts reached for this invite");
         }
 
         const nextAttemptNumber = (latestAttempt?.attempt_number ?? 0) + 1;
+        const endsAt = new Date(
+          now.getTime() + Math.max(invite.duration_minutes ?? 30, 1) * 60 * 1000
+        );
+        const createdRows = await tx.$queryRaw<Array<{
+          attempt_id: string;
+          interview_id: string;
+          attempt_number: number;
+          ends_at: Date | null;
+        }>>`
+          insert into public.interview_attempts (
+            interview_id,
+            attempt_number,
+            status,
+            ends_at
+          )
+          values (
+            ${invite.interview_id}::uuid,
+            ${nextAttemptNumber}::integer,
+            'started',
+            ${endsAt}::timestamptz
+          )
+          on conflict (interview_id, attempt_number)
+          do update
+          set status = public.interview_attempts.status
+          returning attempt_id::text, interview_id::text, attempt_number, ends_at
+        `;
+        const createdAttempt = createdRows[0];
 
-        const [createdAttempt] = await prisma.$transaction([
-          prisma.interview_attempts.create({
-            data: {
-              interview_id: invite.interview_id,
-              attempt_number: nextAttemptNumber,
-              status: "started",
-              ends_at: new Date(
-                now.getTime() +
-                  Math.max(invite.interviews.duration_minutes ?? 30, 1) *
-                    60 *
-                    1000
-              ),
-            },
-            select: {
-              attempt_id: true,
-              interview_id: true,
-              attempt_number: true,
-            },
-          }),
-          prisma.interview_invites.update({
-            where: {
-              invite_id: invite.invite_id,
-            },
-            data: {
-              attempts_used: {
-                increment: 1,
-              },
-              used_at: now,
-            },
-            select: {
-              invite_id: true,
-            },
-          }),
-        ]);
+        await tx.$executeRaw`
+          update public.interview_invites
+          set attempts_used = coalesce(attempts_used, 0) + 1,
+              used_at = coalesce(used_at, ${now}::timestamptz)
+          where invite_id = ${invite.invite_id}::uuid
+        `;
 
-        attempt = {
+        logInterviewEvent("info", "session.start_fallback_created_locked_attempt", {
+          attemptId: createdAttempt.attempt_id,
+          interviewId: createdAttempt.interview_id,
+          candidateId: invite.candidate_id,
+          attemptNumber: createdAttempt.attempt_number,
+        });
+
+        return {
           attempt_id: createdAttempt.attempt_id,
           interview_id: createdAttempt.interview_id,
           attempt_number: createdAttempt.attempt_number,
           reused: false,
-          candidate_name: invite.interviews.candidates.full_name,
-          candidate_id: invite.interviews.candidate_id,
-        };
-
-        const timingRows = await prisma.$queryRaw<AttemptTimingRow[]>`
-          select attempt_id, ends_at, ${invite.interviews.duration_minutes ?? 30}::int as duration_minutes
-          from public.interview_attempts
-          where attempt_id = ${createdAttempt.attempt_id}::uuid
-          limit 1
-        `;
-
-        attempt.ends_at = timingRows[0]?.ends_at ?? null;
-      }
+          candidate_name: invite.candidate_name,
+          candidate_id: invite.candidate_id,
+          ends_at: createdAttempt.ends_at,
+        } satisfies SessionStartRow;
+      });
       }
     }
 
@@ -461,6 +476,13 @@ export async function POST(request: Request) {
       candidateId = candidateId ?? inviteWithCandidate?.interviews.candidate_id ?? null;
     }
 
+    const candidateSessionToken = createCandidateSessionToken({
+      attemptId,
+      interviewId,
+      candidateId,
+      inviteToken: token,
+    });
+
     return Response.json({
       attemptId,
       interviewId,
@@ -470,15 +492,28 @@ export async function POST(request: Request) {
       serverNow: new Date().toISOString(),
       candidateId,
       candidateName,
+    }, {
+      headers: {
+        "Set-Cookie": candidateSessionCookie(candidateSessionToken),
+        "Cache-Control": "no-store",
+      },
     });
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Failed to start interview session";
+    const status =
+      message === "Invite not found"
+        ? 404
+        : message.includes("Invite is not active") ||
+            message.includes("Invite has expired") ||
+            message.includes("Maximum attempts reached")
+          ? 400
+          : 500;
 
     logInterviewEvent("error", "session.start_failed", {
       prismaFailure: error,
     });
 
-    return Response.json({ error: message }, { status: 500 });
+    return Response.json({ error: message }, { status });
   }
 }

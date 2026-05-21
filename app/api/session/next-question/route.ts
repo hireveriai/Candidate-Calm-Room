@@ -1,6 +1,7 @@
 import { finalizeInterviewAttempt } from "@/app/lib/interviewCompletion";
 import { canAskNextQuestion } from "@/app/lib/calmTiming";
 import { prisma } from "@/app/lib/prisma";
+import { requireCandidateSession } from "@/app/lib/candidateSession";
 import {
   assertUuid,
   getTimerState,
@@ -684,6 +685,10 @@ export async function POST(request: Request) {
     }
 
     assertUuid(attemptId, "attemptId");
+    await requireCandidateSession(request, {
+      attemptId,
+      operation: "session.next_question",
+    });
     void syncWarRoomActionsToCalm({ attemptId }).catch((error) => {
       logInterviewEvent("warn", "war_room.sync_failed", {
         attemptId,

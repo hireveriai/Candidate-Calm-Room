@@ -810,21 +810,20 @@ export async function finalizeInterviewAttempt(params: {
       where attempt_id = ${attemptId}::uuid
     `;
 
-    let aggregates = await loadScoreAggregates(tx, attemptId);
-    for (let attemptIndex = 0; attemptIndex < 3; attemptIndex += 1) {
-      const aggregate = aggregates[0];
-      const answeredQuestions = aggregate?.questions_answered ?? 0;
-      const hasComputedScores =
-        asNumber(aggregate?.avg_skill_score) > 0 ||
-        asNumber(aggregate?.avg_cognitive_score) > 0 ||
-        asNumber(aggregate?.avg_fraud_score) > 0;
+    const aggregates = await loadScoreAggregates(tx, attemptId);
+    const firstAggregate = aggregates[0];
+    const waitingForScores =
+      (firstAggregate?.questions_answered ?? 0) > 0 &&
+      asNumber(firstAggregate?.avg_skill_score) === 0 &&
+      asNumber(firstAggregate?.avg_cognitive_score) === 0 &&
+      asNumber(firstAggregate?.avg_fraud_score) === 0;
 
-      if (!answeredQuestions || hasComputedScores) {
-        break;
-      }
-
-      await sleep(200 * (attemptIndex + 1));
-      aggregates = await loadScoreAggregates(tx, attemptId);
+    if (waitingForScores) {
+      logInterviewEvent("warn", "interview.completion_scores_not_ready", {
+        attemptId,
+        state: lockedAttempt.status,
+        nextState: "FINALIZING",
+      });
     }
 
     const [attempt, latestQuestion, transcriptAggregate, signalTypes] =

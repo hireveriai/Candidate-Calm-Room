@@ -7,6 +7,7 @@ import {
   type JsonValue,
 } from "@/app/lib/calmAnswerPipeline";
 import { canSubmitAnswer } from "@/app/lib/calmTiming";
+import { requireCandidateSession } from "@/app/lib/candidateSession";
 import { assertUuid, logInterviewEvent } from "@/app/lib/interviewReliability";
 
 export const dynamic = "force-dynamic";
@@ -80,6 +81,12 @@ export async function POST(request: Request) {
       attemptId: body.attemptId?.trim(),
       candidateId: body.candidateId?.trim(),
       questionId: body.questionId?.trim(),
+    });
+    await requireCandidateSession(request, {
+      attemptId: context.attempt_id,
+      interviewId: null,
+      candidateId: context.candidate_id,
+      operation: "session.answer",
     });
 
     if (

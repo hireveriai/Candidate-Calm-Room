@@ -1,5 +1,6 @@
 import { prisma } from "@/app/lib/prisma";
 import { canAskNextQuestion } from "@/app/lib/calmTiming";
+import { requireCandidateSession } from "@/app/lib/candidateSession";
 import { assertUuid, logInterviewEvent } from "@/app/lib/interviewReliability";
 import {
   classifyInterviewQuestion,
@@ -66,6 +67,10 @@ export async function POST(request: Request) {
     }
 
     assertUuid(attemptId, "attemptId");
+    await requireCandidateSession(request, {
+      attemptId,
+      operation: "session.question",
+    });
 
     const fallbackStartedAt = Date.now();
     const existingQuestions = await prisma.$queryRaw<ExistingSessionQuestionRow[]>`

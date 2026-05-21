@@ -1,3 +1,4 @@
+import { requireCandidateSession } from "@/app/lib/candidateSession";
 import { recordInterviewInterruption } from "@/app/lib/interviewRecovery";
 
 export const dynamic = "force-dynamic";
@@ -19,6 +20,10 @@ export async function POST(request: Request) {
     if (!body.attemptId?.trim()) {
       return Response.json({ error: "attemptId is required" }, { status: 400 });
     }
+    await requireCandidateSession(request, {
+      attemptId: body.attemptId.trim(),
+      operation: "session.recovery_event",
+    });
 
     const result = await recordInterviewInterruption({
       attemptId: body.attemptId,

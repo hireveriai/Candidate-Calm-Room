@@ -1,4 +1,5 @@
 import { prisma } from "@/app/lib/prisma";
+import { requireCandidateSession } from "@/app/lib/candidateSession";
 import { assertUuid, logInterviewEvent } from "@/app/lib/interviewReliability";
 import {
   classifyInterviewQuestion,
@@ -384,6 +385,10 @@ export async function POST(request: Request) {
     if (!context) {
       return Response.json({ error: "Answer context not found" }, { status: 404 });
     }
+    await requireCandidateSession(request, {
+      attemptId: context.attempt_id,
+      operation: "session.evaluate_answer",
+    });
 
     const resolvedQuestionType = normalizeInterviewQuestionType(
       context.question_type,

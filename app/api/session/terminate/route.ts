@@ -1,4 +1,5 @@
 import { finalizeInterviewAttempt } from "@/app/lib/interviewCompletion";
+import { requireCandidateSession } from "@/app/lib/candidateSession";
 import { assertUuid, logInterviewEvent } from "@/app/lib/interviewReliability";
 
 export const dynamic = "force-dynamic";
@@ -57,6 +58,10 @@ export async function POST(request: Request) {
     }
 
     assertUuid(attemptId, "attemptId");
+    await requireCandidateSession(request, {
+      attemptId,
+      operation: "session.terminate",
+    });
 
     const result = await finalizeInterviewAttempt({
       attemptId,

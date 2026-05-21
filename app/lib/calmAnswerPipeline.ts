@@ -299,46 +299,6 @@ async function setAnswerStatus(params: {
 }
 
 async function ensureGeneratingAnswer(input: GenerateAnswerInput) {
-  const existingRows = await prisma.$queryRaw<AnswerRecord[]>`
-    select
-      answer_id,
-      attempt_id,
-      question_id,
-      session_question_id,
-      answer_text,
-      answer_payload,
-      answered_at,
-      status
-    from public.interview_answers
-    where session_question_id = ${input.session_question_id ?? null}::uuid
-    limit 1
-  `;
-  const existing = existingRows[0] ?? null;
-
-  if (existing?.status === "completed" && normalizeText(existing.answer_text)) {
-    return {
-      record: existing,
-      alreadyCompleted: true,
-    };
-  }
-
-  if (existing?.answer_id) {
-    const record = await setAnswerStatus({
-      answerId: existing.answer_id,
-      status: "generating",
-      answerText: null,
-      answerPayload: {
-        answer_mode: input.answer_mode ?? "generated",
-        status_started_at: new Date().toISOString(),
-      },
-    });
-
-    return {
-      record,
-      alreadyCompleted: false,
-    };
-  }
-
   const answerId = randomUUID();
   const startingPayload = {
     answer_mode: input.answer_mode ?? "generated",
@@ -365,6 +325,32 @@ async function ensureGeneratingAnswer(input: GenerateAnswerInput) {
       ${JSON.stringify(startingPayload)}::jsonb,
       ${"generating"}::text
     )
+    on conflict (session_question_id) where session_question_id is not null
+    do update
+    set status = case
+          when public.interview_answers.status = 'completed'
+            and nullif(trim(coalesce(public.interview_answers.answer_text, '')), '') is not null
+          then public.interview_answers.status
+          else excluded.status
+        end,
+        answer_text = case
+          when public.interview_answers.status = 'completed'
+            and nullif(trim(coalesce(public.interview_answers.answer_text, '')), '') is not null
+          then public.interview_answers.answer_text
+          else excluded.answer_text
+        end,
+        answer_payload = case
+          when public.interview_answers.status = 'completed'
+            and nullif(trim(coalesce(public.interview_answers.answer_text, '')), '') is not null
+          then public.interview_answers.answer_payload
+          else excluded.answer_payload
+        end,
+        answered_at = case
+          when public.interview_answers.status = 'completed'
+            and nullif(trim(coalesce(public.interview_answers.answer_text, '')), '') is not null
+          then public.interview_answers.answered_at
+          else public.interview_answers.answered_at
+        end
     returning
       answer_id,
       attempt_id,
