@@ -869,6 +869,8 @@ export function shouldCompleteInterview(params: {
   askedTotalQuestions: number;
   askedCoreTotal: number;
   totalQuestions: number;
+  requiredFollowUpQuestions?: number | null;
+  maxQuestionInteractions?: number | null;
   elapsedSeconds: number;
   durationMinutes: number | null;
   requiredSkillIds: string[];
@@ -877,16 +879,28 @@ export function shouldCompleteInterview(params: {
 }) {
   const budget = buildDeterministicInterviewBudget(params.durationMinutes);
   const durationSeconds = normalizePositiveInteger(params.durationMinutes) * 60;
+  const configuredInteractionCap = normalizePositiveInteger(
+    params.maxQuestionInteractions
+  );
+  const effectiveHardCap =
+    configuredInteractionCap > 0
+      ? Math.min(budget.hardTotalQuestionCap, configuredInteractionCap)
+      : budget.hardTotalQuestionCap;
   const timeExceeded = durationSeconds > 0 && params.elapsedSeconds >= durationSeconds;
   const timeRemainingSeconds =
     durationSeconds > 0
       ? Math.max(durationSeconds - params.elapsedSeconds, 0)
       : Number.MAX_SAFE_INTEGER;
   const enoughQuestions = params.askedCoreTotal >= params.totalQuestions;
-  const hardCapReached = params.askedTotalQuestions >= budget.hardTotalQuestionCap;
+  const hardCapReached = params.askedTotalQuestions >= effectiveHardCap;
   const coverageSatisfied =
     params.requiredSkillIds.length === 0 ||
     params.requiredSkillIds.every((skillId) => params.coveredSkillIds.has(skillId));
+  const requiredFollowUps = normalizePositiveInteger(params.requiredFollowUpQuestions);
+  const askedFollowUps = params.askedQuestions.filter(
+    (question) => question.questionKind === "follow_up"
+  ).length;
+  const requiredFollowUpsSatisfied = askedFollowUps >= requiredFollowUps;
   const followUpsForCurrentCore = countFollowUpsForCurrentCore(params.askedQuestions);
   const maxFollowUpsPerCore = budget.maxFollowUpsPerPrimary;
   const followUpSeconds = estimateQuestionTimeSeconds({
@@ -919,12 +933,13 @@ export function shouldCompleteInterview(params: {
       timeExceeded ||
       hardCapReached ||
       shouldWrapUp ||
-      (enoughQuestions && coverageSatisfied) ||
-      (!canFitCoreQuestion && coverageSatisfied),
+      (enoughQuestions && coverageSatisfied && requiredFollowUpsSatisfied) ||
+      (!canFitCoreQuestion && coverageSatisfied && requiredFollowUpsSatisfied),
     timeExceeded,
     hardCapReached,
     coverageSatisfied,
     enoughQuestions,
+    requiredFollowUpsSatisfied,
     timeRemainingSeconds,
     lowTime,
     allowFollowUp,
@@ -933,7 +948,8 @@ export function shouldCompleteInterview(params: {
     followUpsForCurrentCore,
     maxFollowUpsPerCore,
     shouldWrapUp,
-    remainingQuestionBudget: Math.max(budget.hardTotalQuestionCap - params.askedTotalQuestions, 0),
+    maxQuestionInteractions: effectiveHardCap,
+    remainingQuestionBudget: Math.max(effectiveHardCap - params.askedTotalQuestions, 0),
     remainingPrimaryBudget: Math.max(params.totalQuestions - params.askedCoreTotal, 0),
   };
 }

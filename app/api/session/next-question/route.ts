@@ -938,11 +938,18 @@ export async function POST(request: Request) {
     const deterministicBudget = buildDeterministicInterviewBudget(
       attempt.duration_minutes
     );
+    const maxQuestionInteractions = Math.max(
+      totalLimit + requiredFollowUps,
+      totalLimit,
+      1
+    );
 
     const completion = shouldCompleteInterview({
       askedTotalQuestions: askedTotal,
       askedCoreTotal: coreAskedTotal,
       totalQuestions: totalLimit,
+      requiredFollowUpQuestions: requiredFollowUps,
+      maxQuestionInteractions,
       elapsedSeconds,
       durationMinutes: attempt.duration_minutes,
       requiredSkillIds: requiredSkills.map((skill: RequiredSkillRow) => skill.skill_id),
@@ -1400,6 +1407,7 @@ export async function POST(request: Request) {
           pacing: {
             targetPrimaryQuestions: totalLimit,
             hardTotalQuestionCap: deterministicBudget.hardTotalQuestionCap,
+            maxQuestionInteractions: completion.maxQuestionInteractions,
             remainingQuestionBudget: completion.remainingQuestionBudget,
             remainingPrimaryBudget: completion.remainingPrimaryBudget,
             maxFollowUpsPerPrimary: deterministicBudget.maxFollowUpsPerPrimary,
