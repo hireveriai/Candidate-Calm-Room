@@ -237,6 +237,7 @@ export default function Page() {
   const transcriptRef = useRef("");
   const isAdvancingRef = useRef(false);
   const terminationInFlightRef = useRef(false);
+  const completionInFlightRef = useRef(false);
   const lastSignalSentRef = useRef<Record<string, number>>({});
   const lastSignalPayloadRef = useRef<Record<string, string>>({});
   const lastWarRoomSyncAtRef = useRef<string | null>(null);
@@ -759,6 +760,41 @@ export default function Page() {
     }
   };
 
+  const completeInterview = async (
+    message = "Finished. Interview completed."
+  ) => {
+    if (completionInFlightRef.current) {
+      return;
+    }
+
+    completionInFlightRef.current = true;
+
+    const payload = attemptId
+      ? {
+          attemptId,
+          currentPhase: getCurrentPhaseFromState(verisState, showCoding),
+        }
+      : null;
+
+    try {
+      if (payload) {
+        try {
+          await postCompletionPayload(payload);
+          clearPendingCompletion();
+        } catch {
+          persistPendingCompletion(payload);
+        }
+      }
+
+      await endInterview({
+        completed: true,
+        message,
+      });
+    } finally {
+      completionInFlightRef.current = false;
+    }
+  };
+
   const markInterviewInterrupted = async (
     classifier: string,
     reason: string,
@@ -1139,10 +1175,7 @@ export default function Page() {
   };
 
   const handleExit = async () => {
-    await terminateInterview("manual_exit", {
-      message:
-        "Interview exited early. A partial evaluation has been generated from your submitted responses.",
-    });
+    await completeInterview("Finished. Interview completed.");
   };
 
   useEffect(() => {
@@ -2006,6 +2039,31 @@ export default function Page() {
 
   useEffect(() => {
     if (
+      !sessionTimeEnded ||
+      !started ||
+      !attemptId ||
+      interviewFinished ||
+      interviewInterrupted ||
+      isReconnecting ||
+      isAdvancingRef.current
+    ) {
+      return;
+    }
+
+    void completeInterview(
+      "Interview time ended. Finished. Interview completed."
+    );
+  }, [
+    attemptId,
+    interviewFinished,
+    interviewInterrupted,
+    isReconnecting,
+    sessionTimeEnded,
+    started,
+  ]);
+
+  useEffect(() => {
+    if (
       !started ||
       !attemptId ||
       !interviewId ||
@@ -2116,7 +2174,21 @@ export default function Page() {
   }, [attemptId, started]);
 
   if (interviewFinished) {
-    return <div className="h-screen w-screen bg-[#0B0F1A]" />;
+    return (
+      <div className="flex h-screen w-screen flex-col items-center justify-center bg-[#0B0F1A] px-6 text-white">
+        <div className="max-w-xl text-center">
+          <p className="mb-4 text-xs uppercase tracking-[0.28em] text-emerald-300/80">
+            Finished
+          </p>
+          <h1 className="mb-4 text-3xl font-medium tracking-[0.04em]">
+            Interview Completed
+          </h1>
+          <p className="text-sm leading-7 text-white/72 md:text-base">
+            {completionMessage}
+          </p>
+        </div>
+      </div>
+    );
   }
 
   if (interviewInterrupted) {
