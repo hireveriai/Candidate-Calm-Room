@@ -41,6 +41,101 @@ function clampScore(value: unknown) {
   return Math.max(0, Math.min(1, value));
 }
 
+function hasMissingCodingReviewFunction(error: unknown) {
+  return (
+    error instanceof Error &&
+    error.message.includes("record_coding_review") &&
+    error.message.includes("does not exist")
+  );
+}
+
+async function ensureCodingSubmissionSchema() {
+  await prisma.$executeRaw`
+    create table if not exists public.interview_code_submissions (
+      code_submission_id uuid primary key default gen_random_uuid(),
+      answer_id uuid not null unique references public.interview_answers(answer_id) on delete cascade,
+      attempt_id uuid not null references public.interview_attempts(attempt_id) on delete cascade,
+      session_question_id uuid not null references public.session_questions(session_question_id) on delete cascade,
+      question_id uuid null references public.questions(question_id) on delete set null,
+      language text not null,
+      code_text text not null,
+      code_quality_score numeric(5, 2),
+      correctness_score numeric(5, 2),
+      problem_solving_score numeric(5, 2),
+      confidence_score numeric(5, 2),
+      fraud_score numeric(5, 2),
+      review_summary text,
+      review_payload jsonb not null default '{}'::jsonb,
+      review_status text not null default 'pending',
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now()
+    )
+  `;
+
+  await prisma.$executeRaw`
+    create index if not exists idx_interview_code_submissions_attempt
+      on public.interview_code_submissions (attempt_id)
+  `;
+
+  await prisma.$executeRaw`
+    create index if not exists idx_interview_code_submissions_session_question
+      on public.interview_code_submissions (session_question_id)
+  `;
+
+  await prisma.$executeRaw`
+    do $$
+    begin
+      if not exists (
+        select 1
+        from pg_constraint
+        where conname = 'chk_interview_code_submissions_status'
+      ) then
+        alter table public.interview_code_submissions
+          add constraint chk_interview_code_submissions_status
+          check (review_status in ('pending', 'reviewed'));
+      end if;
+    end $$
+  `;
+}
+
+async function recordCodingReviewFallback(answerId: string, review: CodeReviewResult) {
+  await prisma.$executeRaw`
+    update public.interview_code_submissions
+    set code_quality_score = round(${review.code_quality_score}::numeric * 100, 2),
+        correctness_score = round(${review.correctness_score}::numeric * 100, 2),
+        problem_solving_score = round(${review.problem_solving_score}::numeric * 100, 2),
+        confidence_score = round(${review.confidence_score}::numeric * 100, 2),
+        fraud_score = round(${review.fraud_score}::numeric * 100, 2),
+        review_summary = ${review.review_summary}::text,
+        review_payload = ${JSON.stringify(review.review_json)}::jsonb,
+        review_status = 'reviewed',
+        updated_at = now()
+    where answer_id = ${answerId}::uuid
+  `;
+
+  await prisma.$executeRaw`
+    insert into public.interview_answer_evaluations (
+      answer_id,
+      evaluator_type,
+      score,
+      feedback,
+      evaluated_at
+    )
+    select
+      ${answerId}::uuid,
+      ${"AI"}::text,
+      ${review.correctness_score}::numeric,
+      ${review.review_summary}::text,
+      now()
+    where not exists (
+      select 1
+      from public.interview_answer_evaluations
+      where answer_id = ${answerId}::uuid
+        and evaluator_type = ${"AI"}::text
+    )
+  `;
+}
+
 async function reviewCodeSubmission(input: {
   prompt: string;
   language: string;
@@ -154,6 +249,8 @@ export async function POST(request: Request) {
     }
 
     const logicalQuestionId = getLogicalQuestionId(context);
+    await ensureCodingSubmissionSchema();
+
     const result = await generateAnswer({
       question_id: logicalQuestionId,
       question_text: context.question_text,
@@ -214,18 +311,26 @@ export async function POST(request: Request) {
       });
 
       if (review) {
-        await prisma.$queryRaw`
-          select public.record_coding_review(
-            ${result.record.answer_id}::uuid,
-            ${review.code_quality_score}::numeric,
-            ${review.correctness_score}::numeric,
-            ${review.problem_solving_score}::numeric,
-            ${review.confidence_score}::numeric,
-            ${review.fraud_score}::numeric,
-            ${review.review_summary}::text,
-            ${JSON.stringify(review.review_json)}::jsonb
-          )
-        `;
+        try {
+          await prisma.$queryRaw`
+            select public.record_coding_review(
+              ${result.record.answer_id}::uuid,
+              ${review.code_quality_score}::numeric,
+              ${review.correctness_score}::numeric,
+              ${review.problem_solving_score}::numeric,
+              ${review.confidence_score}::numeric,
+              ${review.fraud_score}::numeric,
+              ${review.review_summary}::text,
+              ${JSON.stringify(review.review_json)}::jsonb
+            )
+          `;
+        } catch (error) {
+          if (!hasMissingCodingReviewFunction(error)) {
+            console.warn("Coding review function failed; using direct persistence fallback:", error);
+          }
+
+          await recordCodingReviewFallback(result.record.answer_id, review);
+        }
       }
     } catch (error) {
       console.error("Coding review error:", error);
