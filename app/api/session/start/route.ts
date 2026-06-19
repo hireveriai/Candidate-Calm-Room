@@ -476,6 +476,25 @@ export async function POST(request: Request) {
       candidateId = candidateId ?? inviteWithCandidate?.interviews.candidate_id ?? null;
     }
 
+    if (candidateId) {
+      try {
+        await prisma.$executeRaw`
+          select public.link_identity_verification_attempt(
+            ${interviewId}::uuid,
+            ${candidateId}::uuid,
+            ${attemptId}::uuid
+          )
+        `;
+      } catch (linkError) {
+        logInterviewEvent("warn", "identity_verification.attempt_link_failed", {
+          attemptId,
+          interviewId,
+          candidateId,
+          error: linkError,
+        });
+      }
+    }
+
     const candidateSessionToken = createCandidateSessionToken({
       attemptId,
       interviewId,

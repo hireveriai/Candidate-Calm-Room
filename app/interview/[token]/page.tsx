@@ -12,6 +12,7 @@ import SystemIndicators from "@/app/components/calm/core/SystemIndicators";
 import InterviewControls from "@/app/components/calm/core/InterviewControls";
 import PrecheckScreen from "@/app/components/calm/flow/PrecheckScreen";
 import ExitModal from "@/app/components/calm/flow/ExitModal";
+import InterviewEntryGate from "@/components/interview/InterviewEntryGate";
 
 import WarningOverlay from "@/app/components/calm/system/WarningOverlay";
 import ReconnectOverlay from "./ReconnectOverlay";
@@ -190,6 +191,7 @@ export default function Page() {
   const params = useParams<{ token: string }>();
   const inviteToken = typeof params?.token === "string" ? params.token : "";
   const [candidateName, setCandidateName] = useState("");
+  const [entryReady, setEntryReady] = useState(false);
 
   const [started, setStarted] = useState(false);
   const [interviewFinished, setInterviewFinished] = useState(false);
@@ -2206,6 +2208,15 @@ export default function Page() {
           </p>
         </div>
       </div>
+    );
+  }
+
+  if (!entryReady) {
+    return (
+      <InterviewEntryGate
+        token={inviteToken}
+        onReadyForPrecheck={() => setEntryReady(true)}
+      />
     );
   }
 
