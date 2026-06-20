@@ -288,8 +288,18 @@ export default function VideoPanel({
   }, [attemptId, reconnectKey]);
 
   return (
-    <div className="mt-10 flex w-full justify-center">
-      <div className="relative h-[260px] w-[420px] overflow-hidden rounded-2xl border border-cyan-500/10 bg-black shadow-[0_0_40px_rgba(0,255,255,0.08)]">
+    <section className="overflow-hidden rounded-[20px] border border-white/[0.11] bg-[#0c121d] shadow-[0_24px_70px_rgba(0,0,0,0.3)]">
+      <div className="flex h-12 items-center justify-between border-b border-white/[0.07] px-4 sm:px-5">
+        <div className="flex items-center gap-2.5">
+          <span className="h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.45)]" />
+          <span className="text-xs font-medium text-slate-200">Candidate camera</span>
+        </div>
+        <span className="text-[10px] uppercase tracking-[0.16em] text-slate-500">
+          Live preview
+        </span>
+      </div>
+
+      <div className="relative aspect-video w-full overflow-hidden bg-[#05080d]">
         <video
           ref={videoRef}
           autoPlay
@@ -298,19 +308,29 @@ export default function VideoPanel({
           className="h-full w-full object-cover"
         />
 
-        <div className="absolute left-3 top-3 flex items-center gap-2 rounded-full border border-red-500/35 bg-black/55 px-3 py-1.5 shadow-[0_0_18px_rgba(239,68,68,0.22)] backdrop-blur-sm">
-          <span className="relative flex h-2.5 w-2.5">
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-500/75" />
-            <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-red-500" />
+        <div className="pointer-events-none absolute inset-0 ring-1 ring-inset ring-white/[0.06]" />
+        <div className="absolute left-4 top-4 flex items-center gap-2 rounded-md border border-white/10 bg-[#080b10]/80 px-2.5 py-1.5 backdrop-blur-md">
+          <span className="relative flex h-1.5 w-1.5">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400/60" />
+            <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-red-400" />
           </span>
-          <span className="text-[10px] font-semibold tracking-[0.22em] text-red-400">
-            REC
+          <span className="text-[10px] font-medium uppercase tracking-[0.15em] text-slate-300">
+            Recording
           </span>
-          <span className="text-sm font-semibold tabular-nums text-red-300">
+          <span className="border-l border-white/10 pl-2 font-mono text-[11px] tabular-nums text-white/75">
             {minutes}:{seconds}
           </span>
         </div>
+
+        <div className="absolute inset-x-0 bottom-0 flex items-end justify-between bg-gradient-to-t from-black/55 to-transparent px-4 pb-3 pt-12">
+          <span className="text-[11px] text-white/65">
+            Keep your face centered and well lit
+          </span>
+          <span className="rounded bg-black/35 px-2 py-1 text-[10px] text-white/55 backdrop-blur-sm">
+            You
+          </span>
+        </div>
       </div>
-    </div>
+    </section>
   );
 }

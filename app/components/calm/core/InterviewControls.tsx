@@ -20,16 +20,16 @@ export default function InterviewControls({
   message,
 }: Props) {
   return (
-    <div className="mt-6 flex flex-col items-center justify-center gap-3">
+    <div className="mt-auto flex w-full flex-col gap-3 pt-6">
       {message ? (
-        <div className="text-xs tracking-wide text-cyan-200/80">{message}</div>
+        <div className="text-xs text-amber-200/80">{message}</div>
       ) : null}
 
-      <div className="flex items-center justify-center gap-4">
+      <div className="flex items-center gap-3">
         <button
           onClick={onSkip}
           disabled={disabled || skipDisabled}
-          className="px-4 py-2 text-sm text-gray-400 border border-white/10 rounded-full hover:bg-white/5 transition disabled:cursor-not-allowed disabled:opacity-40"
+          className="rounded-lg border border-white/10 px-4 py-2.5 text-xs font-medium text-slate-400 transition hover:border-white/20 hover:bg-white/[0.04] hover:text-slate-200 disabled:cursor-not-allowed disabled:opacity-40"
         >
           Skip
         </button>
@@ -37,7 +37,7 @@ export default function InterviewControls({
         <button
           onClick={onNext}
           disabled={disabled || nextDisabled}
-          className="px-5 py-2 text-sm bg-white/10 text-white rounded-full border border-white/20 hover:bg-white/20 transition disabled:cursor-not-allowed disabled:opacity-40"
+          className="flex-1 rounded-lg border border-sky-200/20 bg-sky-200/[0.12] px-5 py-2.5 text-xs font-semibold text-sky-50 transition hover:border-sky-200/30 hover:bg-sky-200/[0.17] disabled:cursor-not-allowed disabled:opacity-40"
         >
           {primaryLabel}
         </button>

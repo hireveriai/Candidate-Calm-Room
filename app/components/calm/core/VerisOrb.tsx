@@ -34,9 +34,9 @@ export default function VerisOrb({ state, audioLevel = 0 }: Props) {
   const waveDuration = isSpeaking ? 1.4 : isListening ? 2 : 2.4;
 
   return (
-    <div className="mt-2 flex items-center justify-center">
+    <div className="flex items-center justify-center">
       <motion.div
-        className="relative flex h-32 w-32 items-center justify-center md:h-36 md:w-36"
+        className="relative flex h-[72px] w-[72px] items-center justify-center"
         animate={{ scale: sphereScale }}
         transition={{ duration: 0.24, ease: "easeOut" }}
       >
@@ -65,13 +65,13 @@ export default function VerisOrb({ state, audioLevel = 0 }: Props) {
               "radial-gradient(circle at 50% 28%, rgba(255,255,255,0.08) 0%, rgba(125,211,252,0.05) 18%, rgba(14,20,46,0.74) 58%, rgba(4,8,24,0.97) 100%)",
             border: "1.5px solid rgba(34, 211, 238, 0.88)",
             boxShadow:
-              "0 0 26px rgba(34,211,238,0.38), inset 0 0 28px rgba(34,211,238,0.08), inset 0 -18px 32px rgba(0,0,0,0.34)",
+              "0 0 18px rgba(34,211,238,0.22), inset 0 0 24px rgba(34,211,238,0.06), inset 0 -14px 26px rgba(0,0,0,0.34)",
           }}
           animate={{
             boxShadow: [
-              "0 0 22px rgba(34,211,238,0.3), inset 0 0 28px rgba(34,211,238,0.08), inset 0 -18px 32px rgba(0,0,0,0.34)",
-              "0 0 34px rgba(34,211,238,0.46), inset 0 0 34px rgba(34,211,238,0.12), inset 0 -18px 32px rgba(0,0,0,0.34)",
-              "0 0 22px rgba(34,211,238,0.3), inset 0 0 28px rgba(34,211,238,0.08), inset 0 -18px 32px rgba(0,0,0,0.34)",
+              "0 0 14px rgba(34,211,238,0.18), inset 0 0 22px rgba(34,211,238,0.06), inset 0 -14px 26px rgba(0,0,0,0.34)",
+              "0 0 22px rgba(34,211,238,0.28), inset 0 0 26px rgba(34,211,238,0.09), inset 0 -14px 26px rgba(0,0,0,0.34)",
+              "0 0 14px rgba(34,211,238,0.18), inset 0 0 22px rgba(34,211,238,0.06), inset 0 -14px 26px rgba(0,0,0,0.34)",
             ],
           }}
           transition={{

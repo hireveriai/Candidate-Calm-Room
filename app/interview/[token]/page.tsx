@@ -2249,71 +2249,102 @@ export default function Page() {
           }}
         />
 
-        <VideoPanel
-          attemptId={attemptId}
-          timeLeft={timeLeft}
-          reconnectKey={videoReconnectKey}
-          onVideoReady={(ref) => (videoRef.current = ref.current)}
-          onCameraStatusChange={(ready) => {
-            setCameraReady(ready);
-            if (!ready && started && !interviewFinished && !interviewInterrupted) {
-              void enterReconnectMode("Camera stream interrupted.", "camera_stream");
-            }
-          }}
-          onRoomConnectionChange={(state) => {
-            if (state === "connected") {
-              setNetworkOnline(true);
-              return;
-            }
-
-            if (started && !interviewFinished && !interviewInterrupted) {
-              void enterReconnectMode(
-                state === "reconnecting"
-                  ? "Realtime interview link is reconnecting."
-                  : "Realtime interview link was interrupted.",
-                "livekit_room",
-                {
-                  roomState: state,
+        <main className="relative z-[1] mx-auto grid w-full max-w-[1440px] flex-1 grid-cols-1 gap-4 px-4 py-4 sm:px-6 lg:min-h-0 lg:grid-cols-[minmax(0,1.7fr)_minmax(340px,0.85fr)] lg:gap-5 lg:px-8 lg:py-5">
+          <div className="flex min-w-0 flex-col justify-center">
+            <VideoPanel
+              attemptId={attemptId}
+              timeLeft={timeLeft}
+              reconnectKey={videoReconnectKey}
+              onVideoReady={(ref) => (videoRef.current = ref.current)}
+              onCameraStatusChange={(ready) => {
+                setCameraReady(ready);
+                if (!ready && started && !interviewFinished && !interviewInterrupted) {
+                  void enterReconnectMode("Camera stream interrupted.", "camera_stream");
                 }
-              );
-            }
-          }}
-        />
+              }}
+              onRoomConnectionChange={(state) => {
+                if (state === "connected") {
+                  setNetworkOnline(true);
+                  return;
+                }
 
-        <SystemIndicators
-          faceCount={faceCount}
-          micActive={verisState === "listening"}
-          attention={attention}
-          secure={true}
-          verisState={verisState}
-        />
+                if (started && !interviewFinished && !interviewInterrupted) {
+                  void enterReconnectMode(
+                    state === "reconnecting"
+                      ? "Realtime interview link is reconnecting."
+                      : "Realtime interview link was interrupted.",
+                    "livekit_room",
+                    {
+                      roomState: state,
+                    }
+                  );
+                }
+              }}
+            />
 
-        <VerisOrb state={verisState} audioLevel={audioLevel} />
+            <SystemIndicators
+              faceCount={faceCount}
+              micActive={verisState === "listening"}
+              attention={attention}
+              secure={true}
+              verisState={verisState}
+            />
+          </div>
 
-        <QuestionRenderer
-          question={currentQuestion}
-          questionType={currentQuestionType}
-        />
+          <aside className="flex min-h-[360px] flex-col rounded-[20px] border border-white/[0.09] bg-[#0d131e]/95 p-5 shadow-[0_24px_70px_rgba(0,0,0,0.24)] sm:p-6">
+            <div className="flex items-center gap-4 border-b border-white/[0.07] pb-5">
+              <VerisOrb state={verisState} audioLevel={audioLevel} />
+              <div>
+                <p className="text-sm font-semibold text-slate-100">
+                  {verisState === "listening"
+                    ? "Veris is listening"
+                    : verisState === "speaking"
+                      ? "Veris is speaking"
+                      : "Veris is preparing"}
+                </p>
+                <p className="mt-1 text-xs leading-5 text-slate-500">
+                  {verisState === "listening"
+                    ? "Take your time and answer naturally."
+                    : "Please listen carefully to the full question."}
+                </p>
+              </div>
+            </div>
 
-        <InterviewControls
-          disabled={isTransitioning || isReconnecting}
-          nextDisabled={answerWindowEnded && !sessionTimeEnded}
-          skipDisabled={sessionTimeEnded}
-          primaryLabel={sessionTimeEnded ? "Finish Answer" : "Next Question"}
-          message={
-            answerWindowEnded
-              ? "Answer window expired"
-              : sessionTimeEnded
-                ? "Finish your current answer"
-                : undefined
-          }
-          onNext={() => void handleAutoNext()}
-          onSkip={() => void handleAutoNext()}
-        />
+            <div className="flex flex-1 flex-col pt-6">
+              <QuestionRenderer
+                question={currentQuestion}
+                questionType={currentQuestionType}
+              />
+
+              <div className="mt-6 rounded-lg border border-white/[0.06] bg-black/10 px-3.5 py-3">
+                <p className="text-[11px] leading-5 text-slate-500">
+                  Your response is recorded securely. You may pause briefly to
+                  organize your thoughts before continuing.
+                </p>
+              </div>
+
+              <InterviewControls
+                disabled={isTransitioning || isReconnecting}
+                nextDisabled={answerWindowEnded && !sessionTimeEnded}
+                skipDisabled={sessionTimeEnded}
+                primaryLabel={sessionTimeEnded ? "Finish Answer" : "Next Question"}
+                message={
+                  answerWindowEnded
+                    ? "Answer window expired"
+                    : sessionTimeEnded
+                      ? "Finish your current answer"
+                      : undefined
+                }
+                onNext={() => void handleAutoNext()}
+                onSkip={() => void handleAutoNext()}
+              />
+            </div>
+          </aside>
+        </main>
 
         <button
           onClick={() => setShowExit(true)}
-          className="absolute top-4 right-6 text-sm text-red-400 border border-red-400/30 px-3 py-1 rounded-full"
+          className="absolute right-4 top-[19px] z-20 rounded-md border border-white/10 px-3 py-2 text-[11px] font-medium text-slate-400 transition hover:border-red-300/20 hover:bg-red-300/[0.06] hover:text-red-200 sm:right-8"
         >
           Exit
         </button>
