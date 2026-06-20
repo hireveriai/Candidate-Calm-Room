@@ -2255,6 +2255,9 @@ export default function Page() {
               attemptId={attemptId}
               timeLeft={timeLeft}
               reconnectKey={videoReconnectKey}
+              questionText={currentQuestion}
+              transcript={transcript}
+              verisState={verisState}
               onVideoReady={(ref) => (videoRef.current = ref.current)}
               onCameraStatusChange={(ready) => {
                 setCameraReady(ready);

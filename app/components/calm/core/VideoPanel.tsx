@@ -8,6 +8,9 @@ type Props = {
   attemptId?: string;
   timeLeft?: number;
   reconnectKey?: number;
+  questionText?: string;
+  transcript?: string;
+  verisState?: "idle" | "listening" | "thinking" | "speaking";
   onVideoReady?: (ref: RefObject<HTMLVideoElement | null>) => void;
   onCameraStatusChange?: (ready: boolean) => void;
   onRoomConnectionChange?: (
@@ -91,6 +94,9 @@ export default function VideoPanel({
   attemptId,
   timeLeft,
   reconnectKey = 0,
+  questionText = "",
+  transcript = "",
+  verisState = "idle",
   onVideoReady,
   onCameraStatusChange,
   onRoomConnectionChange,
@@ -100,15 +106,50 @@ export default function VideoPanel({
   const onCameraStatusChangeRef = useRef(onCameraStatusChange);
   const onRoomConnectionChangeRef = useRef(onRoomConnectionChange);
   const hasConnectedRoomRef = useRef(false);
+  const roomRef = useRef<Room | null>(null);
   const cameraStreamRef = useRef<MediaStream | null>(null);
   const recordingEgressIdRef = useRef<string | null>(null);
   const recordingStartedRef = useRef(false);
   const stopRequestedRef = useRef(false);
+  const recordingContextRef = useRef({
+    questionText,
+    transcript,
+    verisState,
+  });
   const elapsedSeconds = timeLeft ?? 0;
   const minutes = Math.floor(elapsedSeconds / 60)
     .toString()
     .padStart(2, "0");
   const seconds = (elapsedSeconds % 60).toString().padStart(2, "0");
+
+  useEffect(() => {
+    recordingContextRef.current = {
+      questionText,
+      transcript,
+      verisState,
+    };
+
+    const room = roomRef.current;
+    if (!room || !hasConnectedRoomRef.current) {
+      return;
+    }
+
+    const payload = new TextEncoder().encode(
+      JSON.stringify({
+        type: "veris.interview_context",
+        ...recordingContextRef.current,
+      }),
+    );
+
+    void room.localParticipant
+      .publishData(payload, {
+        reliable: true,
+        topic: "veris-interview-context",
+      })
+      .catch((error) => {
+        console.warn("Unable to update recording context:", error);
+      });
+  }, [questionText, transcript, verisState]);
 
   useEffect(() => {
     onVideoReadyRef.current = onVideoReady;
@@ -127,10 +168,33 @@ export default function VideoPanel({
 
     async function startCamera() {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: true,
-          audio: false,
-        });
+        let stream: MediaStream;
+
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: {
+              width: { ideal: 1280 },
+              height: { ideal: 720 },
+              frameRate: { ideal: 30, max: 30 },
+            },
+            audio: {
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true,
+              channelCount: 1,
+            },
+          });
+        } catch (combinedMediaError) {
+          console.warn(
+            "Microphone was unavailable; retrying camera-only preview:",
+            combinedMediaError,
+          );
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: true,
+            audio: false,
+          });
+        }
+
         cameraStreamRef.current = stream;
 
         if (videoRef.current) {
@@ -180,6 +244,22 @@ export default function VideoPanel({
 
     let cancelled = false;
     const room = new Room();
+    roomRef.current = room;
+    let contextTimer: ReturnType<typeof setInterval> | null = null;
+
+    async function publishRecordingContext() {
+      const payload = new TextEncoder().encode(
+        JSON.stringify({
+          type: "veris.interview_context",
+          ...recordingContextRef.current,
+        }),
+      );
+
+      await room.localParticipant.publishData(payload, {
+        reliable: true,
+        topic: "veris-interview-context",
+      });
+    }
 
     async function ensureRecordingStarted() {
       const safeAttemptId = attemptId?.trim();
@@ -235,7 +315,12 @@ export default function VideoPanel({
           cameraStreamRef.current ??
           (await navigator.mediaDevices.getUserMedia({
             video: true,
-            audio: false,
+            audio: {
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true,
+              channelCount: 1,
+            },
           }));
 
         cameraStreamRef.current = stream;
@@ -254,6 +339,24 @@ export default function VideoPanel({
         await room.localParticipant.publishTrack(videoTrack, {
           source: Track.Source.Camera,
         });
+
+        const [audioTrack] = stream.getAudioTracks();
+        if (audioTrack) {
+          await room.localParticipant.publishTrack(audioTrack, {
+            source: Track.Source.Microphone,
+          });
+        } else {
+          console.warn(
+            "LiveKit recording started without a microphone track.",
+          );
+        }
+
+        await publishRecordingContext();
+        contextTimer = setInterval(() => {
+          void publishRecordingContext().catch((error) => {
+            console.warn("Unable to refresh recording context:", error);
+          });
+        }, 2_000);
 
         await ensureRecordingStarted();
       } catch (error) {
@@ -281,8 +384,12 @@ export default function VideoPanel({
 
     return () => {
       cancelled = true;
+      if (contextTimer) {
+        clearInterval(contextTimer);
+      }
       void ensureRecordingStopped();
       room.disconnect();
+      roomRef.current = null;
       hasConnectedRoomRef.current = false;
     };
   }, [attemptId, reconnectKey]);
