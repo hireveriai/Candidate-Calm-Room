@@ -4,22 +4,8 @@
 
 ▲ Next.js 16.1.1
 - Local:         http://localhost:3101
-- Network:       http://192.168.1.131:3101
+- Network:       http://192.168.1.3:3101
 
 ✓ Starting...
-✓ Ready in 681ms
-(node:69760) Warning: SECURITY WARNING: The SSL modes 'prefer', 'require', and 'verify-ca' are treated as aliases for 'verify-full'.
-In the next major version (pg-connection-string v3.0.0 and pg v9.0.0), these modes will adopt standard libpq semantics, which have weaker security guarantees.
-
-To prepare for this change:
-- If you want the current behavior, explicitly use 'sslmode=verify-full'
-- If you want libpq compatibility now, use 'uselibpqcompat=true&sslmode=require'
-
-See https://www.postgresql.org/docs/current/libpq-ssl.html for libpq SSL mode definitions.
-(Use `node --trace-warnings ...` to show where the warning was created)
-(node:69760) Warning: Setting the NODE_TLS_REJECT_UNAUTHORIZED environment variable to '0' makes TLS connections and HTTPS requests insecure by disabling certificate verification.
-{"event":"startup.diagnostics","ok":true,"generatedAt":"2026-05-08T13:04:59.458Z","warnings":["tls_verification_disabled"]}
-{"attemptId":"aa821fe5-4910-4701-ab1f-cff98366f7d6","terminationType":null,"earlyExit":false,"event":"interview.completion_started","at":"2026-05-08T13:05:18.781Z","interviewId":null,"orgId":null,"recruiterId":null,"candidateId":null,"questionSequence":null,"timerState":null,"aiLatencyMs":null,"websocketEvent":null,"livekitEvent":null,"state":null,"nextState":null,"prismaFailure":null}
-{"attemptId":"ee94db36-4162-4b9b-b439-50d7fffac0db","terminationType":null,"earlyExit":false,"event":"interview.completion_started","at":"2026-05-08T13:05:18.828Z","interviewId":null,"orgId":null,"recruiterId":null,"candidateId":null,"questionSequence":null,"timerState":null,"aiLatencyMs":null,"websocketEvent":null,"livekitEvent":null,"state":null,"nextState":null,"prismaFailure":null}
-{"attemptId":"aa821fe5-4910-4701-ab1f-cff98366f7d6","interviewId":"a749fdff-4efc-421d-b007-bd92e8966ddd","orgId":"8cad69fd-80b6-4636-a56f-0a067583d191","candidateId":"9ba65462-8281-4cb7-aab8-895622e339af","state":"completed","nextState":"FINALIZED","event":"interview.completion_reused","at":"2026-05-08T13:05:18.841Z","recruiterId":null,"questionSequence":null,"timerState":null,"aiLatencyMs":null,"websocketEvent":null,"livekitEvent":null,"prismaFailure":null}
-{"attemptId":"ee94db36-4162-4b9b-b439-50d7fffac0db","interviewId":"795a281e-f612-46fb-8f98-60539a7917c1","orgId":"8cad69fd-80b6-4636-a56f-0a067583d191","candidateId":"ac697594-9807-4a99-a352-539f9a1316c3","state":"FINALIZING","nextState":"FINALIZED","timerState":{"elapsedSeconds":19837,"durationMinutes":10},"score":20,"riskLevel":"LOW","questionsAnswered":8,"expectedQuestions":4,"transcriptCoverage":1,"aggregateAudit":{"asked_questions":9,"questions_answered":8,"avg_skill_score":0,"avg_cognitive_score":0,"avg_fraud_score":0,"transcript_segments":0,"transcript_events":8,"transcript_coverage":1,"completion_factor":1,"base_score":20,"final_score":20,"risk_flags":[],"risk_score":0,"risk_level":"LOW","behavioral_flags":[],"reason":"Insufficient capability demonstrated despite stable behavior","source_of_truth":"persisted_answers_evaluations_transcripts_signals","finalized_at":"2026-05-08T13:05:20.368Z"},"event":"interview.completed","at":"2026-05-08T13:05:20.651Z","recruiterId":null,"questionSequence":null,"aiLatencyMs":null,"websocketEvent":null,"livekitEvent":null,"prismaFailure":null}
+✓ Ready in 2.5s
+{"event":"startup.diagnostics","ok":true,"generatedAt":"2026-06-21T11:44:53.881Z","warnings":[]}

@@ -206,6 +206,7 @@ export default function Page() {
   const [sessionQuestionId, setSessionQuestionId] = useState("");
   const [questionId, setQuestionId] = useState("");
   const [transcript, setTranscript] = useState("");
+  const [recordingTranscript, setRecordingTranscript] = useState("");
   const [timeLeft, setTimeLeft] = useState(0);
   const [isTransitioning, setIsTransitioning] = useState(false);
   const [attemptId, setAttemptId] = useState("");
@@ -1146,6 +1147,7 @@ export default function Page() {
     setSessionTimeEnded(false);
     setAnswerWindowEnded(false);
     setTranscript("");
+    setRecordingTranscript("");
     transcriptRef.current = "";
     isAdvancingRef.current = false;
 
@@ -1377,6 +1379,7 @@ export default function Page() {
     isAdvancingRef.current = false;
 
     setTranscript("");
+    setRecordingTranscript("");
     transcriptRef.current = "";
     setSessionQuestionId(nextSessionQuestionId);
     setQuestionId(nextQuestionId || nextSessionQuestionId);
@@ -1666,7 +1669,9 @@ export default function Page() {
 
         transcriptRef.current = nextTranscript;
         setTranscript(nextTranscript);
-      }
+      },
+      undefined,
+      (text) => setRecordingTranscript(text.trim())
     );
     setMicrophoneReady(Boolean(recognitionRef.current));
   };
@@ -2256,7 +2261,7 @@ export default function Page() {
               timeLeft={timeLeft}
               reconnectKey={videoReconnectKey}
               questionText={currentQuestion}
-              transcript={transcript}
+              transcript={recordingTranscript}
               verisState={verisState}
               onVideoReady={(ref) => (videoRef.current = ref.current)}
               onCameraStatusChange={(ready) => {

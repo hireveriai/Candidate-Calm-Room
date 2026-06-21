@@ -20,6 +20,10 @@ const EMPTY_CONTEXT: InterviewContext = {
   verisState: "thinking",
 };
 
+function normalizeDisplayText(value: string) {
+  return value.replace(/\s+/g, " ").trim();
+}
+
 function getStateContent(state: InterviewContext["verisState"]) {
   if (state === "speaking") {
     return {
@@ -134,11 +138,11 @@ export default function VerisRecordingView() {
             questionText:
               typeof message.questionText === "string" &&
               message.questionText.trim()
-                ? message.questionText
+                ? normalizeDisplayText(message.questionText)
                 : EMPTY_CONTEXT.questionText,
             transcript:
               typeof message.transcript === "string"
-                ? message.transcript
+                ? normalizeDisplayText(message.transcript)
                 : "",
             verisState:
               message.verisState === "speaking" ||
@@ -177,7 +181,7 @@ export default function VerisRecordingView() {
     <main className="relative h-screen w-screen overflow-hidden bg-[#070b12] text-white">
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_80%_0%,rgba(48,92,140,0.16),transparent_36%)]" />
 
-      <header className="relative z-10 flex h-[92px] items-center justify-between border-b border-white/10 px-12">
+      <header className="relative z-10 flex h-[76px] items-center justify-between border-b border-white/10 px-10">
         <div className="flex items-center gap-4">
           <div className="flex h-11 w-11 items-center justify-center rounded-xl border border-sky-300/20 bg-sky-300/[0.08] text-xs font-semibold">
             HV
@@ -196,13 +200,13 @@ export default function VerisRecordingView() {
         </div>
       </header>
 
-      <section className="relative z-10 grid h-[calc(100vh-92px)] grid-cols-[minmax(0,1.65fr)_minmax(420px,0.75fr)] gap-7 p-8">
-        <div className="relative overflow-hidden rounded-[24px] border border-white/10 bg-black shadow-2xl">
+      <section className="relative z-10 grid h-[calc(100vh-76px)] grid-cols-[minmax(0,1.35fr)_minmax(360px,0.85fr)] gap-5 p-6">
+        <div className="relative flex min-h-0 items-center justify-center overflow-hidden rounded-[22px] border border-white/10 bg-[#030507] shadow-2xl">
           <video
             ref={videoRef}
             autoPlay
             playsInline
-            className="h-full w-full object-cover"
+            className="h-full w-full object-contain"
           />
           <div className="pointer-events-none absolute inset-0 ring-1 ring-inset ring-white/[0.06]" />
           <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 via-black/35 to-transparent px-7 pb-6 pt-28">
@@ -216,9 +220,9 @@ export default function VerisRecordingView() {
           </div>
         </div>
 
-        <aside className="flex flex-col rounded-[24px] border border-white/10 bg-[#0d1420]/95 p-8 shadow-2xl">
-          <div className="flex items-center gap-4 border-b border-white/10 pb-7">
-            <div className="flex h-14 w-14 items-center justify-center rounded-full border border-sky-300/35 bg-sky-300/[0.08]">
+        <aside className="flex min-h-0 flex-col overflow-hidden rounded-[22px] border border-white/10 bg-[#0d1420]/95 p-7 shadow-2xl">
+          <div className="flex items-center gap-4 border-b border-white/10 pb-5">
+            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-sky-300/35 bg-sky-300/[0.08]">
               <span className="h-2.5 w-2.5 rounded-full bg-sky-300 shadow-[0_0_16px_rgba(125,211,252,0.75)]" />
             </div>
             <div>
@@ -231,16 +235,16 @@ export default function VerisRecordingView() {
             </div>
           </div>
 
-          <div className="pt-8">
+          <div className="min-h-0 pt-6">
             <p className="text-[11px] font-medium uppercase tracking-[0.2em] text-sky-300/65">
               Current question
             </p>
-            <h1 className="mt-4 text-[26px] font-medium leading-[1.42] tracking-[-0.02em] text-slate-50">
+            <h1 className="mt-3 overflow-hidden text-[23px] font-medium leading-[1.36] tracking-[-0.02em] text-slate-50 [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:5]">
               {context.questionText}
             </h1>
           </div>
 
-          <div className="mt-auto border-t border-white/10 pt-7">
+          <div className="mt-6 min-h-0 border-t border-white/10 pt-5">
             <div className="flex items-center justify-between">
               <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-slate-500">
                 Candidate response
@@ -252,7 +256,7 @@ export default function VerisRecordingView() {
                 </span>
               ) : null}
             </div>
-            <p className="mt-4 min-h-24 text-sm leading-7 text-slate-300">
+            <p className="mt-3 overflow-hidden text-sm leading-6 text-slate-300 [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:7]">
               {context.transcript.trim() ||
                 (context.verisState === "listening"
                   ? "Response transcription will appear here as the candidate speaks."

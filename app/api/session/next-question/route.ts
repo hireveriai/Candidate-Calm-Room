@@ -136,6 +136,46 @@ type FollowUpGenerationResult = {
   intent: FollowUpIntent;
 };
 
+async function completeInterviewWithoutStrandingCandidate(params: {
+  attemptId: string;
+  reason?: string;
+  message?: string;
+}) {
+  try {
+    const completionResult = await finalizeInterviewAttempt({
+      attemptId: params.attemptId,
+      earlyExit: false,
+      currentPhase: "closing",
+    });
+
+    return Response.json({
+      complete: true,
+      ...completionResult,
+      ...(params.reason ? { reason: params.reason } : {}),
+      ...(params.message ? { message: params.message } : {}),
+    });
+  } catch (error) {
+    logInterviewEvent("error", "question.completion_deferred", {
+      attemptId: params.attemptId,
+      state: "COMPLETING",
+      nextState: "FINALIZING",
+      prismaFailure: error,
+    });
+
+    return Response.json(
+      {
+        complete: true,
+        completionPending: true,
+        reason: params.reason ?? "completion_deferred",
+        message:
+          params.message ??
+          "Interview complete. Your responses were saved and final processing will continue securely.",
+      },
+      { status: 202 }
+    );
+  }
+}
+
 const SKILL_KEYWORDS = [
   "database administration",
   "database management",
@@ -779,15 +819,8 @@ export async function POST(request: Request) {
     });
 
     if (!canAskNextQuestion({ ends_at: attempt.ends_at })) {
-      const completionResult = await finalizeInterviewAttempt({
+      return completeInterviewWithoutStrandingCandidate({
         attemptId,
-        earlyExit: false,
-        currentPhase: "closing",
-      });
-
-      return Response.json({
-        complete: true,
-        ...completionResult,
         reason: "session_time_ended",
         message: "Session time has ended. No new questions can be asked.",
       });
@@ -1428,15 +1461,11 @@ export async function POST(request: Request) {
     }
 
     if (sessionQuestion.is_complete || !sessionQuestion.session_question_id) {
-      const completionResult = await finalizeInterviewAttempt({
+      return completeInterviewWithoutStrandingCandidate({
         attemptId,
-        earlyExit: false,
-        currentPhase: "closing",
-      });
-
-      return Response.json({
-        complete: true,
-        ...completionResult,
+        reason: "question_budget_completed",
+        message:
+          "Interview complete. Your responses, including follow-up questions, have been recorded.",
       });
     }
 

@@ -28,7 +28,8 @@ export function speak(text: string): Promise<void> {
 
 export function startRecognition(
   onResult: (text: string) => void,
-  onEnd?: () => void
+  onEnd?: () => void,
+  onFinalResult?: (text: string) => void
 ) {
   const SpeechRecognition =
     (window as any).webkitSpeechRecognition ||
@@ -68,7 +69,9 @@ export function startRecognition(
       }
     }
 
+    const finalizedText = finalizedChunks.join(" ").trim();
     onResult([...finalizedChunks, ...interimChunks].join(" ").trim());
+    onFinalResult?.(finalizedText);
   };
 
   recognition.onend = () => {

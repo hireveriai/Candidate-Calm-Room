@@ -237,14 +237,14 @@ function buildRecordingVideoUrl(filePath: string) {
 
 function buildRecordingEncodingOptions() {
   return new EncodingOptions({
-    width: getPositiveIntegerEnv("RECORDING_VIDEO_WIDTH", 854),
-    height: getPositiveIntegerEnv("RECORDING_VIDEO_HEIGHT", 480),
+    width: getPositiveIntegerEnv("RECORDING_VIDEO_WIDTH", 1280),
+    height: getPositiveIntegerEnv("RECORDING_VIDEO_HEIGHT", 720),
     framerate: getPositiveIntegerEnv("RECORDING_VIDEO_FRAMERATE", 24),
     audioCodec: AudioCodec.OPUS,
-    audioBitrate: getPositiveIntegerEnv("RECORDING_AUDIO_BITRATE_KBPS", 48),
+    audioBitrate: getPositiveIntegerEnv("RECORDING_AUDIO_BITRATE_KBPS", 64),
     audioFrequency: 48_000,
     videoCodec: VideoCodec.H264_MAIN,
-    videoBitrate: getPositiveIntegerEnv("RECORDING_VIDEO_BITRATE_KBPS", 700),
+    videoBitrate: getPositiveIntegerEnv("RECORDING_VIDEO_BITRATE_KBPS", 1_200),
     keyFrameInterval: 4,
   });
 }

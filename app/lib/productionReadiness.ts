@@ -214,6 +214,17 @@ const PHASE2_ATTEMPT_STATUSES = [
   "TIME_EXPIRED",
 ];
 
+const PHASE2_TERMINATION_TYPES = [
+  "completed",
+  "manual_exit",
+  "browser_close",
+  "tab_close",
+  "disconnect",
+  "timeout",
+  "watchdog_timeout",
+  "network_disconnect_timeout",
+];
+
 let startupDiagnosticsPromise: Promise<ProductionReadinessReport> | null = null;
 
 function issue(
@@ -232,6 +243,9 @@ function issue(
 
 export async function ensurePhase2SchemaCompatibility() {
   const allowedStatuses = PHASE2_ATTEMPT_STATUSES.map((status) => `'${status}'`).join(", ");
+  const allowedTerminationTypes = PHASE2_TERMINATION_TYPES.map(
+    (terminationType) => `'${terminationType}'`
+  ).join(", ");
 
   await prisma.$executeRawUnsafe(`
     do $$
@@ -262,6 +276,36 @@ export async function ensurePhase2SchemaCompatibility() {
 
     throw error;
   });
+
+  await prisma.$executeRawUnsafe(`
+    do $$
+    declare
+      constraint_definition text;
+    begin
+      select pg_get_constraintdef(oid)
+      into constraint_definition
+      from pg_constraint
+      where conrelid = 'public.interview_attempts'::regclass
+        and conname = 'chk_interview_attempts_termination_type';
+
+      if constraint_definition is null
+         or position('completed' in lower(constraint_definition)) = 0
+         or position('browser_close' in lower(constraint_definition)) = 0
+         or position('watchdog_timeout' in lower(constraint_definition)) = 0
+         or position('network_disconnect_timeout' in lower(constraint_definition)) = 0 then
+        alter table public.interview_attempts
+          drop constraint if exists chk_interview_attempts_termination_type;
+
+        alter table public.interview_attempts
+          add constraint chk_interview_attempts_termination_type
+          check (
+            termination_type is null
+            or termination_type in (${allowedTerminationTypes})
+          );
+      end if;
+    end
+    $$;
+  `);
 }
 
 async function checkDatabaseConnectivity() {
