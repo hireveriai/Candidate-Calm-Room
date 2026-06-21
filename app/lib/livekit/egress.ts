@@ -1,8 +1,12 @@
 import {
+  AudioCodec,
+  EgressStatus,
   EgressClient,
   EncodedFileOutput,
   EncodedFileType,
+  EncodingOptions,
   S3Upload,
+  VideoCodec,
 } from "livekit-server-sdk";
 
 export type RecordingStartResult = {
@@ -58,6 +62,11 @@ function getBooleanAnyEnv(names: string[], fallback = false) {
   }
 
   return value.toLowerCase() === "true";
+}
+
+function getPositiveIntegerEnv(name: string, fallback: number) {
+  const value = Number.parseInt(process.env[name]?.trim() ?? "", 10);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
 function normalizeLiveKitHost(url: string) {
@@ -226,6 +235,20 @@ function buildRecordingVideoUrl(filePath: string) {
   return `${endpointUrl.protocol}//${bucket}.${endpointUrl.host}/${filePath}`;
 }
 
+function buildRecordingEncodingOptions() {
+  return new EncodingOptions({
+    width: getPositiveIntegerEnv("RECORDING_VIDEO_WIDTH", 854),
+    height: getPositiveIntegerEnv("RECORDING_VIDEO_HEIGHT", 480),
+    framerate: getPositiveIntegerEnv("RECORDING_VIDEO_FRAMERATE", 24),
+    audioCodec: AudioCodec.OPUS,
+    audioBitrate: getPositiveIntegerEnv("RECORDING_AUDIO_BITRATE_KBPS", 48),
+    audioFrequency: 48_000,
+    videoCodec: VideoCodec.H264_MAIN,
+    videoBitrate: getPositiveIntegerEnv("RECORDING_VIDEO_BITRATE_KBPS", 700),
+    keyFrameInterval: 4,
+  });
+}
+
 export async function startRecording(
   roomName: string,
 ): Promise<RecordingStartResult> {
@@ -248,9 +271,11 @@ export async function startRecording(
       ? {
           layout: "veris-enterprise",
           customBaseUrl,
+          encodingOptions: buildRecordingEncodingOptions(),
         }
       : {
           layout: "single-speaker",
+          encodingOptions: buildRecordingEncodingOptions(),
         },
   );
 
@@ -267,5 +292,30 @@ export async function startRecording(
 
 export async function stopRecording(egressId: string) {
   const client = getEgressClient();
-  await client.stopEgress(egressId);
+  const stopped = await client.stopEgress(egressId);
+
+  if (
+    stopped.status === EgressStatus.EGRESS_COMPLETE ||
+    stopped.status === EgressStatus.EGRESS_FAILED ||
+    stopped.status === EgressStatus.EGRESS_ABORTED ||
+    stopped.status === EgressStatus.EGRESS_LIMIT_REACHED
+  ) {
+    return stopped;
+  }
+
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    const [current] = await client.listEgress({ egressId });
+
+    if (
+      current?.status === EgressStatus.EGRESS_COMPLETE ||
+      current?.status === EgressStatus.EGRESS_FAILED ||
+      current?.status === EgressStatus.EGRESS_ABORTED ||
+      current?.status === EgressStatus.EGRESS_LIMIT_REACHED
+    ) {
+      return current;
+    }
+  }
+
+  return stopped;
 }

@@ -310,17 +310,6 @@ export async function runInterviewWatchdog() {
                 and upper(coalesce(active.status, '')) not in ('COMPLETED', 'TERMINATED', 'ABANDONED', 'EXPIRED', 'FINALIZED', 'FAILED', 'TIME_EXPIRED')
             )
         `;
-
-        await tx.$executeRaw`
-          update public.interview_recordings
-          set status = case
-                when coalesce(status, 'recording') = 'failed' then status
-                else 'completed'
-              end,
-              ended_at = coalesce(ended_at, timezone('utc', now()))
-          where attempt_id = ${row.attempt_id}::uuid
-            and ended_at is null
-        `;
       }
 
       return result;

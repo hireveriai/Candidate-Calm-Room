@@ -1018,13 +1018,20 @@ export async function finalizeInterviewAttempt(params: {
 
     await tx.$executeRaw`
       update public.interview_recordings
-      set status = case
-            when coalesce(status, 'recording') = 'failed' then status
-            else 'completed'
-          end,
-          ended_at = coalesce(ended_at, timezone('utc', now()))
+      set transcript = coalesce(
+            nullif(btrim(transcript), ''),
+            (
+              select nullif(
+                btrim(string_agg(ans.answer_text, E'\n\n' order by ans.answered_at asc nulls last)),
+                ''
+              )
+              from public.interview_answers ans
+              where ans.attempt_id = ${attemptId}::uuid
+                and ans.answer_text is not null
+                and btrim(ans.answer_text) <> ''
+            )
+          )
       where attempt_id = ${attemptId}::uuid
-        and ended_at is null
     `;
 
     await tx.$executeRaw`

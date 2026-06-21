@@ -34,6 +34,7 @@ async function ensureRecordingSchema() {
       add column if not exists status text default 'recording',
       add column if not exists video_url text,
       add column if not exists file_path text,
+      add column if not exists failure_reason text,
       add column if not exists started_at timestamptz default timezone('utc', now()),
       add column if not exists ended_at timestamptz
   `;
