@@ -1023,6 +1023,11 @@ export default function Page() {
     }
 
     inactivityTimeoutRef.current = setTimeout(() => {
+      void sendSignal("unresponsive", {
+        severity: "high",
+        inactivitySeconds: Math.round(INACTIVITY_TIMEOUT_MS / 1000),
+        detectedAt: new Date().toISOString(),
+      });
       void terminateInterview("timeout", {
         message:
           "Interview ended due to inactivity. A partial evaluation has been generated from your recorded responses.",
@@ -1179,7 +1184,11 @@ export default function Page() {
   };
 
   const handleExit = async () => {
-    await completeInterview("Finished. Interview completed.");
+    setShowExit(false);
+    await terminateInterview("manual_exit", {
+      message:
+        "Interview ended early. Your completed responses were saved and scored as a partial interview.",
+    });
   };
 
   useEffect(() => {
@@ -1820,6 +1829,11 @@ export default function Page() {
             severity: "high",
             meta: { count: newCount },
           });
+          void sendSignal("tab_switch", {
+            severity: "high",
+            count: newCount,
+            detectedAt: new Date().toISOString(),
+          });
 
           if (newCount >= 3) {
             setWarning({
@@ -1942,6 +1956,11 @@ export default function Page() {
             type: "long_gaze_away",
             severity: "medium",
             meta: { duration: 30000 },
+          });
+          void sendSignal("long_gaze_away", {
+            severity: "medium",
+            durationMs: 30000,
+            detectedAt: new Date().toISOString(),
           });
 
           setWarning({

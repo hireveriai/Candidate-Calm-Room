@@ -50,7 +50,6 @@ function getStateContent(state: InterviewContext["verisState"]) {
 
 export default function VerisRecordingView() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const audioElementsRef = useRef<HTMLMediaElement[]>([]);
   const recordingStartedRef = useRef(false);
   const [context, setContext] = useState<InterviewContext>(EMPTY_CONTEXT);
   const stateContent = getStateContent(context.verisState);
@@ -102,18 +101,25 @@ export default function VerisRecordingView() {
     };
 
     const attachTrack = (track: RemoteTrack) => {
-      if (track.kind === Track.Kind.Video && videoRef.current) {
-        track.attach(videoRef.current);
-        videoRef.current.onloadeddata = beginRecording;
+      const mediaElement = videoRef.current;
+
+      if (!mediaElement) {
         return;
       }
 
-      if (track.kind === Track.Kind.Audio) {
-        const element = track.attach();
-        element.autoplay = true;
-        element.style.display = "none";
-        document.body.appendChild(element);
-        audioElementsRef.current = [...audioElementsRef.current, element];
+      if (
+        track.kind === Track.Kind.Video ||
+        track.kind === Track.Kind.Audio
+      ) {
+        // Keep remote audio and video on one media element so Chromium uses a
+        // single playback clock when LiveKit captures the composite.
+        track.attach(mediaElement);
+        mediaElement.autoplay = true;
+        mediaElement.muted = false;
+
+        if (track.kind === Track.Kind.Video) {
+          mediaElement.onloadeddata = beginRecording;
+        }
       }
     };
 
@@ -171,8 +177,6 @@ export default function VerisRecordingView() {
 
     return () => {
       console.log("END_RECORDING");
-      audioElementsRef.current.forEach((element) => element.remove());
-      audioElementsRef.current = [];
       room.disconnect();
     };
   }, []);

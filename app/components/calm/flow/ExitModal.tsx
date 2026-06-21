@@ -12,7 +12,8 @@ export default function ExitModal({
       <div className="bg-[#111827] p-6 rounded-xl text-white max-w-sm w-full">
         <h2 className="text-lg mb-2">Exit Interview?</h2>
         <p className="text-sm text-gray-400 mb-4">
-          This will end your session and cannot be resumed.
+          This will end your session and submit only the answers completed so
+          far. Your score will be reduced based on interview completion.
         </p>
 
         <div className="flex justify-end gap-3">

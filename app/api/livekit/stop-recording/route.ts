@@ -11,6 +11,15 @@ type StopRecordingBody = {
   egressId?: string;
 };
 
+function liveKitTimestampToDate(value: bigint) {
+  if (value <= BigInt(0)) {
+    return null;
+  }
+
+  const milliseconds = Number(value / BigInt(1_000_000));
+  return Number.isFinite(milliseconds) ? new Date(milliseconds) : null;
+}
+
 export async function POST(request: NextRequest) {
   const body = (await request.json().catch(() => ({}))) as StopRecordingBody;
   const egressId = body.egressId?.trim();
@@ -54,12 +63,21 @@ export async function POST(request: NextRequest) {
     const failureReason = completed
       ? null
       : egress.error || `LiveKit egress ended with status ${egress.status}`;
+    const fileResult = egress.fileResults[0];
+    const mediaStartedAt =
+      liveKitTimestampToDate(fileResult?.startedAt ?? BigInt(0)) ??
+      liveKitTimestampToDate(egress.startedAt);
+    const mediaEndedAt =
+      liveKitTimestampToDate(fileResult?.endedAt ?? BigInt(0)) ??
+      liveKitTimestampToDate(egress.endedAt) ??
+      new Date();
 
     await prisma.$executeRaw`
       update public.interview_recordings
       set status = ${completed ? "completed" : "failed"},
           failure_reason = ${failureReason},
-          ended_at = timezone('utc', now())
+          started_at = coalesce(${mediaStartedAt}, started_at),
+          ended_at = ${mediaEndedAt}
       where egress_id = ${egressId}
     `;
 

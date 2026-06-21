@@ -9,6 +9,7 @@ import {
   normalizeInterviewState,
 } from "@/app/lib/interviewReliability";
 import { mapCompletionStatus } from "@/app/lib/interviewSessionReliability";
+import { calculateInterviewScore } from "@/app/lib/interviewScoring";
 
 type TerminationType =
   | "completed"
@@ -133,9 +134,8 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
 
-function normalizeScore(score: number) {
-  const normalized = score <= 10 ? score * 10 : score;
-  return clamp(round(normalized), 0, 100);
+function normalizeFinalScore(score: number) {
+  return clamp(round(score), 0, 100);
 }
 
 function getRiskLevel(riskScore: number): "LOW" | "MEDIUM" | "HIGH" {
@@ -364,14 +364,6 @@ function normalizePhase(value: string | null | undefined): string | null {
   }
 
   return null;
-}
-
-function getCompletionFactor(completionPercentage: number) {
-  if (completionPercentage >= 0.8) return 1.0;
-  if (completionPercentage >= 0.6) return 0.85;
-  if (completionPercentage >= 0.4) return 0.7;
-  if (completionPercentage >= 0.2) return 0.5;
-  return 0.3;
 }
 
 function derivePhase(params: {
@@ -685,7 +677,7 @@ async function loadPersistedCompletionResult(
   }
 
   const metadata = parseTerminationMetadata(row.termination_metadata);
-  const score = normalizeScore(
+  const score = normalizeFinalScore(
     asNumber(metadata["final_score"] as string | number | null | undefined)
   );
   const behavioralFlags = Array.isArray(metadata["behavioral_flags"])
@@ -855,12 +847,6 @@ export async function finalizeInterviewAttempt(params: {
     });
     const questionsAnswered = Math.max(aggregate.questions_answered ?? 0, 0);
     const askedQuestions = Math.max(aggregate.asked_questions ?? 0, 0);
-    const completionPercentage = clamp(
-      questionsAnswered / Math.max(expectedQuestions, 1),
-      0,
-      1
-    );
-    const completionFactor = getCompletionFactor(completionPercentage);
     const avgSkillScore = clamp(asNumber(aggregate.avg_skill_score), 0, 1);
     const avgCognitiveScore = clamp(asNumber(aggregate.avg_cognitive_score), 0, 1);
     const avgClarityScore = clamp(asNumber(aggregate.avg_clarity_score), 0, 1);
@@ -872,17 +858,22 @@ export async function finalizeInterviewAttempt(params: {
       0.85,
       1
     );
-    const baseScore = round(
-      clamp(
-        ((avgSkillScore * 0.45) +
-          (avgCognitiveScore * 0.35) +
-          ((1 - avgFraudScore) * 0.15) +
-          (transcriptCoverage * 0.05)) * 100,
-        0,
-        100
-      )
-    );
-    const finalScore = normalizeScore(baseScore * completionFactor);
+    const {
+      completionPercentage,
+      completionFactor,
+      completionScoreCap,
+      qualityScore,
+      integrityMultiplier,
+      baseScore,
+      finalScore: calculatedFinalScore,
+    } = calculateInterviewScore({
+      questionsAnswered,
+      expectedQuestions,
+      avgSkillScore,
+      avgCognitiveScore,
+      avgFraudScore,
+    });
+    const finalScore = normalizeFinalScore(calculatedFinalScore);
     const reliabilityScore = round(
       clamp(
         completionFactor * 85 + transcriptCoverage * 15,
@@ -943,7 +934,11 @@ export async function finalizeInterviewAttempt(params: {
       behavioralFlags
     );
 
-    const recommendation = getRecommendation(finalScore, riskLevel);
+    const recommendation = params.earlyExit
+      ? finalScore >= 40
+        ? "REVIEW_REQUIRED"
+        : "NO_HIRE"
+      : getRecommendation(finalScore, riskLevel);
     const evaluationDecision =
       mapRecommendationToEvaluationDecision(recommendation);
     const reason = generateReason(
@@ -975,6 +970,9 @@ export async function finalizeInterviewAttempt(params: {
       transcript_events: transcriptAggregate.transcript_events,
       transcript_coverage: round(transcriptCoverage, 4),
       completion_factor: completionFactor,
+      completion_score_cap: completionScoreCap,
+      quality_score: round(qualityScore),
+      integrity_multiplier: round(integrityMultiplier, 4),
       base_score: baseScore,
       final_score: finalScore,
       risk_flags: riskFlags,
