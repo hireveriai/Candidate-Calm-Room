@@ -16,6 +16,36 @@ export type InterviewScoreResult = {
   finalScore: number;
 };
 
+export function toFiniteNumber(value: unknown): number {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : 0;
+  }
+
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  if (value && typeof value === "object") {
+    const numericValue = value as {
+      toNumber?: () => number;
+      toString?: () => string;
+    };
+
+    if (typeof numericValue.toNumber === "function") {
+      const parsed = numericValue.toNumber();
+      return Number.isFinite(parsed) ? parsed : 0;
+    }
+
+    if (typeof numericValue.toString === "function") {
+      const parsed = Number(numericValue.toString());
+      return Number.isFinite(parsed) ? parsed : 0;
+    }
+  }
+
+  return 0;
+}
+
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }

@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
-import { calculateInterviewScore } from "../app/lib/interviewScoring.ts";
+import {
+  calculateInterviewScore,
+  toFiniteNumber,
+} from "../app/lib/interviewScoring.ts";
 
 const noAnswers = calculateInterviewScore({
   questionsAnswered: 0,
@@ -42,5 +45,12 @@ const fullStrongInterview = calculateInterviewScore({
 });
 
 assert.equal(fullStrongInterview.finalScore, 80);
+
+assert.equal(
+  toFiniteNumber({
+    toNumber: () => 0.625,
+  }),
+  0.625,
+);
 
 console.log("Interview scoring policy checks passed.");

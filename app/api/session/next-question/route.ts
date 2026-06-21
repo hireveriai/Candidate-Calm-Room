@@ -29,6 +29,7 @@ import {
   classifyInterviewQuestion,
   normalizeInterviewQuestionType,
 } from "@/app/lib/interviewQuestionTypes";
+import { toFiniteNumber } from "@/app/lib/interviewScoring";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -217,17 +218,8 @@ function hasMissingDatabaseColumnError(error: unknown) {
   );
 }
 
-function asNumber(value: string | number | null | undefined) {
-  if (typeof value === "number") {
-    return Number.isFinite(value) ? value : 0;
-  }
-
-  if (typeof value === "string") {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : 0;
-  }
-
-  return 0;
+function asNumber(value: unknown) {
+  return toFiniteNumber(value);
 }
 
 function normalizeText(value: string | null | undefined) {

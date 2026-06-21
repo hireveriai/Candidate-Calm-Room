@@ -69,6 +69,10 @@ function getPositiveIntegerEnv(name: string, fallback: number) {
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
+function clampInteger(value: number, minimum: number, maximum: number) {
+  return Math.min(Math.max(Math.round(value), minimum), maximum);
+}
+
 function normalizeLiveKitHost(url: string) {
   if (url.startsWith("wss://")) {
     return `https://${url.slice("wss://".length)}`;
@@ -235,22 +239,76 @@ function buildRecordingVideoUrl(filePath: string) {
   return `${endpointUrl.protocol}//${bucket}.${endpointUrl.host}/${filePath}`;
 }
 
-function buildRecordingEncodingOptions() {
+export function buildRecordingEncodingProfile(durationMinutes = 30) {
+  const safeDurationMinutes = clampInteger(durationMinutes, 1, 180);
+  const targetMegabytes = getPositiveIntegerEnv(
+    "RECORDING_TARGET_FILE_SIZE_MB",
+    40,
+  );
+  const targetBits = targetMegabytes * 1024 * 1024 * 8 * 0.9;
+  const totalBitrateKbps = Math.floor(
+    targetBits / (safeDurationMinutes * 60 * 1000),
+  );
+  const audioBitrate = clampInteger(totalBitrateKbps * 0.18, 24, 48);
+  const videoBitrate = clampInteger(totalBitrateKbps - audioBitrate, 64, 900);
+
+  if (videoBitrate >= 650) {
+    return {
+      width: 1280,
+      height: 720,
+      framerate: 24,
+      audioBitrate,
+      videoBitrate,
+    };
+  }
+
+  if (videoBitrate >= 300) {
+    return {
+      width: 854,
+      height: 480,
+      framerate: 20,
+      audioBitrate,
+      videoBitrate,
+    };
+  }
+
+  return {
+    width: 640,
+    height: 360,
+    framerate: 15,
+    audioBitrate,
+    videoBitrate,
+  };
+}
+
+function buildRecordingEncodingOptions(durationMinutes: number) {
+  const profile = buildRecordingEncodingProfile(durationMinutes);
+
   return new EncodingOptions({
-    width: getPositiveIntegerEnv("RECORDING_VIDEO_WIDTH", 1280),
-    height: getPositiveIntegerEnv("RECORDING_VIDEO_HEIGHT", 720),
-    framerate: getPositiveIntegerEnv("RECORDING_VIDEO_FRAMERATE", 24),
+    width: getPositiveIntegerEnv("RECORDING_VIDEO_WIDTH", profile.width),
+    height: getPositiveIntegerEnv("RECORDING_VIDEO_HEIGHT", profile.height),
+    framerate: getPositiveIntegerEnv(
+      "RECORDING_VIDEO_FRAMERATE",
+      profile.framerate,
+    ),
     audioCodec: AudioCodec.OPUS,
-    audioBitrate: getPositiveIntegerEnv("RECORDING_AUDIO_BITRATE_KBPS", 64),
+    audioBitrate: getPositiveIntegerEnv(
+      "RECORDING_AUDIO_BITRATE_KBPS",
+      profile.audioBitrate,
+    ),
     audioFrequency: 48_000,
     videoCodec: VideoCodec.H264_MAIN,
-    videoBitrate: getPositiveIntegerEnv("RECORDING_VIDEO_BITRATE_KBPS", 1_200),
+    videoBitrate: getPositiveIntegerEnv(
+      "RECORDING_VIDEO_BITRATE_KBPS",
+      profile.videoBitrate,
+    ),
     keyFrameInterval: 4,
   });
 }
 
 export async function startRecording(
   roomName: string,
+  durationMinutes = 30,
 ): Promise<RecordingStartResult> {
   const client = getEgressClient();
   const filePath = buildRecordingFilePath(roomName);
@@ -271,11 +329,11 @@ export async function startRecording(
       ? {
           layout: "veris-enterprise",
           customBaseUrl,
-          encodingOptions: buildRecordingEncodingOptions(),
+          encodingOptions: buildRecordingEncodingOptions(durationMinutes),
         }
       : {
           layout: "single-speaker",
-          encodingOptions: buildRecordingEncodingOptions(),
+          encodingOptions: buildRecordingEncodingOptions(durationMinutes),
         },
   );
 

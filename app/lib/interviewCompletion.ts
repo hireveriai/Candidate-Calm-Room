@@ -9,7 +9,10 @@ import {
   normalizeInterviewState,
 } from "@/app/lib/interviewReliability";
 import { mapCompletionStatus } from "@/app/lib/interviewSessionReliability";
-import { calculateInterviewScore } from "@/app/lib/interviewScoring";
+import {
+  calculateInterviewScore,
+  toFiniteNumber,
+} from "@/app/lib/interviewScoring";
 
 type TerminationType =
   | "completed"
@@ -112,17 +115,8 @@ export type InterviewCompletionResult = {
   reliability_score: number;
 };
 
-function asNumber(value: string | number | null | undefined): number {
-  if (typeof value === "number") {
-    return Number.isFinite(value) ? value : 0;
-  }
-
-  if (typeof value === "string") {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : 0;
-  }
-
-  return 0;
+function asNumber(value: unknown): number {
+  return toFiniteNumber(value);
 }
 
 function round(value: number, digits = 2) {
@@ -630,7 +624,8 @@ function hasDeterministicFinalizationMarker(metadata: Record<string, unknown>) {
   return (
     metadata["source_of_truth"] ===
       "persisted_answers_evaluations_transcripts_signals" &&
-    asNumber(metadata["final_score"] as string | number | null | undefined) > 0
+    metadata["scoring_version"] === "completion-weighted-v2" &&
+    typeof metadata["finalized_at"] === "string"
   );
 }
 
@@ -802,7 +797,7 @@ export async function finalizeInterviewAttempt(params: {
       where attempt_id = ${attemptId}::uuid
     `;
 
-    const aggregates = await loadScoreAggregates(tx, attemptId);
+    const aggregates = await loadScoreAggregatesWithRetry(attemptId);
     const firstAggregate = aggregates[0];
     const waitingForScores =
       (firstAggregate?.questions_answered ?? 0) > 0 &&
@@ -981,6 +976,7 @@ export async function finalizeInterviewAttempt(params: {
       behavioral_flags: behavioralFlags,
       reason,
       source_of_truth: "persisted_answers_evaluations_transcripts_signals",
+      scoring_version: "completion-weighted-v2",
       finalized_at: new Date().toISOString(),
     };
 
@@ -1007,7 +1003,14 @@ export async function finalizeInterviewAttempt(params: {
               select 1
               from public.interview_recordings ir
               where ir.attempt_id = ${attemptId}::uuid
+                and ir.status = 'completed'
             ) then 'FINALIZED'
+            when exists (
+              select 1
+              from public.interview_recordings ir
+              where ir.attempt_id = ${attemptId}::uuid
+                and ir.status = 'failed'
+            ) then 'FAILED'
             else recording_status
           end,
           termination_metadata = ${JSON.stringify(aggregateAudit)}::jsonb

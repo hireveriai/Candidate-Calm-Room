@@ -88,7 +88,20 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    const { egressId, filePath, videoUrl } = await startRecording(attemptId);
+    const durationRows = await prisma.$queryRaw<
+      Array<{ duration_minutes: number | null }>
+    >`
+      select i.duration_minutes
+      from public.interview_attempts ia
+      join public.interviews i on i.interview_id = ia.interview_id
+      where ia.attempt_id = ${attemptId}::uuid
+      limit 1
+    `;
+    const durationMinutes = durationRows[0]?.duration_minutes ?? 30;
+    const { egressId, filePath, videoUrl } = await startRecording(
+      attemptId,
+      durationMinutes,
+    );
 
     try {
       await prisma.$executeRaw`

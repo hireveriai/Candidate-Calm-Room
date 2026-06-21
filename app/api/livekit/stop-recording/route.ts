@@ -81,6 +81,12 @@ export async function POST(request: NextRequest) {
       where egress_id = ${egressId}
     `;
 
+    await prisma.$executeRaw`
+      update public.interview_attempts
+      set recording_status = ${completed ? "FINALIZED" : "FAILED"}
+      where attempt_id = ${existingRecording.attempt_id}::uuid
+    `;
+
     if (!completed) {
       console.error("LiveKit recording failed", {
         egressId,
@@ -108,6 +114,19 @@ export async function POST(request: NextRequest) {
         and ended_at is null
     `.catch((updateError: unknown) => {
       console.error("Unable to mark recording failed", updateError);
+    });
+
+    await prisma.$executeRaw`
+      update public.interview_attempts ia
+      set recording_status = 'FAILED'
+      where ia.attempt_id = (
+        select ir.attempt_id
+        from public.interview_recordings ir
+        where ir.egress_id = ${egressId}
+        limit 1
+      )
+    `.catch((updateError: unknown) => {
+      console.error("Unable to mark attempt recording failed", updateError);
     });
 
     return NextResponse.json(
