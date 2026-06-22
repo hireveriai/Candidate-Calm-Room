@@ -125,6 +125,45 @@ function hasMissingDatabaseColumnError(error: unknown, columnName: string) {
   );
 }
 
+function classifySessionStartError(error: unknown) {
+  const rawMessage =
+    error instanceof Error ? error.message : "Failed to start interview session";
+  const normalized = rawMessage.toLowerCase();
+
+  if (normalized.includes("invite not found")) {
+    return {
+      status: 404,
+      message: "This interview link is invalid or no longer available.",
+    };
+  }
+
+  if (normalized.includes("invite has expired")) {
+    return {
+      status: 410,
+      message: "This interview link has expired.",
+    };
+  }
+
+  if (normalized.includes("invite is not active")) {
+    return {
+      status: 409,
+      message: "This interview link is not active.",
+    };
+  }
+
+  if (normalized.includes("maximum attempts reached")) {
+    return {
+      status: 409,
+      message: "The maximum number of attempts for this interview has been reached.",
+    };
+  }
+
+  return {
+    status: 500,
+    message: "Failed to start interview session.",
+  };
+}
+
 async function getInviteAccessType(token: string) {
   try {
     const rows = await prisma.$queryRaw<InviteAccessRow[]>`
@@ -518,21 +557,15 @@ export async function POST(request: Request) {
       },
     });
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Failed to start interview session";
-    const status =
-      message === "Invite not found"
-        ? 404
-        : message.includes("Invite is not active") ||
-            message.includes("Invite has expired") ||
-            message.includes("Maximum attempts reached")
-          ? 400
-          : 500;
+    const classified = classifySessionStartError(error);
 
     logInterviewEvent("error", "session.start_failed", {
       prismaFailure: error,
     });
 
-    return Response.json({ error: message }, { status });
+    return Response.json(
+      { error: classified.message },
+      { status: classified.status }
+    );
   }
 }

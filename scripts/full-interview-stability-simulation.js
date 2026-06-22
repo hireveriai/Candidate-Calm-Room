@@ -82,6 +82,8 @@ function buildPgConnectionConfig(rawConnectionString) {
     connectionString: url.toString(),
     ...(ssl === undefined ? {} : { ssl }),
     connectionTimeoutMillis: 10000,
+    query_timeout: Number(process.env.HIREVERI_DB_QUERY_TIMEOUT_MS || 30000),
+    statement_timeout: Number(process.env.HIREVERI_DB_STATEMENT_TIMEOUT_MS || 25000),
   };
 }
 
@@ -109,6 +111,13 @@ function readRootCertificate(rawConnectionString) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function rollbackWithTimeout(client) {
+  await Promise.race([
+    client.query("rollback").catch(() => {}),
+    sleep(5000),
+  ]);
 }
 
 async function fetchJson(route, init = {}) {
@@ -192,8 +201,21 @@ async function seedDatabase(client) {
   if (process.env.HIREVERI_CREATE_FRESH !== "1") {
     const existingSeedPath = path.join(repoRoot, "codex-e2e-seed.json");
     if (fs.existsSync(existingSeedPath)) {
-      progress("seed: using existing recruiter/job/interview fixture");
-      return prepareExistingSeed(client, JSON.parse(fs.readFileSync(existingSeedPath, "utf8")));
+      const existingSeed = JSON.parse(fs.readFileSync(existingSeedPath, "utf8"));
+      const existingCandidate = existingSeed.candidateA || existingSeed.candidateB;
+      const existingInterview = existingCandidate?.interviewId
+        ? await client.query(
+            "select 1 from public.interviews where interview_id = $1",
+            [existingCandidate.interviewId]
+          )
+        : { rowCount: 0 };
+
+      if (existingInterview.rowCount) {
+        progress("seed: using existing recruiter/job/interview fixture");
+        return prepareExistingSeed(client, existingSeed);
+      }
+
+      progress("seed: existing fixture is stale; creating a fresh fixture");
     }
   }
 
@@ -353,17 +375,6 @@ async function seedDatabase(client) {
     ];
     const placeholders = interviewValues.map((_, index) => `$${index + 1}`);
     progress("seed: interview");
-    try {
-      await client.query("set local session_replication_role = replica");
-      progress("seed: session trigger bypass enabled");
-    } catch (error) {
-      progress(
-        `seed: session trigger bypass skipped: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      );
-    }
-
     progress("seed: insert interview row");
     const interview = (
       await client.query(
@@ -375,7 +386,6 @@ async function seedDatabase(client) {
         interviewValues
       )
     ).rows[0];
-    await client.query("set local session_replication_role = origin").catch(() => {});
 
     const skillDefinitions = [
       ["codex_stability_sql", "SQL"],
@@ -622,7 +632,7 @@ async function seedDatabase(client) {
       link: `${defaultBaseUrl}/interview/${token}`,
     };
   } catch (error) {
-    await client.query("rollback");
+    await rollbackWithTimeout(client);
     throw error;
   }
 }
@@ -769,7 +779,7 @@ async function prepareExistingSeed(client, seed) {
 
     await client.query("commit");
   } catch (error) {
-    await client.query("rollback");
+    await rollbackWithTimeout(client);
     throw error;
   }
 
