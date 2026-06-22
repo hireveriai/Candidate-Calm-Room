@@ -1,30 +1,43 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import {
-  RemoteTrack,
-  Room,
-  RoomEvent,
-  Track,
-} from "livekit-client";
+import { RemoteTrack, Room, RoomEvent, Track } from "livekit-client";
+
+type VerisState = "idle" | "listening" | "thinking" | "speaking";
 
 type InterviewContext = {
+  questionId: string;
   questionText: string;
   transcript: string;
-  verisState: "idle" | "listening" | "thinking" | "speaking";
+  verisState: VerisState;
+  publishedAt: number;
 };
 
 const EMPTY_CONTEXT: InterviewContext = {
+  questionId: "",
   questionText: "Preparing the interview question…",
   transcript: "",
   verisState: "thinking",
+  publishedAt: 0,
 };
 
 function normalizeDisplayText(value: string) {
   return value.replace(/\s+/g, " ").trim();
 }
 
-function getStateContent(state: InterviewContext["verisState"]) {
+function getRollingCaption(value: string, maximumLength = 320) {
+  const text = normalizeDisplayText(value);
+
+  if (text.length <= maximumLength) {
+    return text;
+  }
+
+  const tail = text.slice(-maximumLength);
+  const firstWordBoundary = tail.indexOf(" ");
+  return `…${tail.slice(firstWordBoundary > -1 ? firstWordBoundary + 1 : 0)}`;
+}
+
+function getStateContent(state: VerisState) {
   if (state === "speaking") {
     return {
       title: "VERIS is asking",
@@ -48,11 +61,22 @@ function getStateContent(state: InterviewContext["verisState"]) {
   };
 }
 
+function isVerisState(value: unknown): value is VerisState {
+  return (
+    value === "speaking" ||
+    value === "listening" ||
+    value === "thinking" ||
+    value === "idle"
+  );
+}
+
 export default function VerisRecordingView() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const recordingStartedRef = useRef(false);
+  const latestContextAtRef = useRef(0);
   const [context, setContext] = useState<InterviewContext>(EMPTY_CONTEXT);
   const stateContent = getStateContent(context.verisState);
+  const responseCaption = getRollingCaption(context.transcript);
 
   useEffect(() => {
     if (
@@ -80,6 +104,23 @@ export default function VerisRecordingView() {
     const searchParams = new URLSearchParams(window.location.search);
     const liveKitUrl = searchParams.get("url");
     const token = searchParams.get("token");
+    const localPreview =
+      searchParams.get("preview") === "1" &&
+      (window.location.hostname === "localhost" ||
+        window.location.hostname === "127.0.0.1");
+
+    if (localPreview) {
+      setContext({
+        questionId: "preview-question",
+        questionText:
+          "What would you do if two senior engineers proposed conflicting database designs for a business-critical platform migration?",
+        transcript:
+          "I would first clarify the business constraints and the measurable trade-offs behind each proposal. Then I would ask both engineers to compare reliability, migration risk, operating cost, and rollback strategy using the same decision framework.",
+        verisState: "listening",
+        publishedAt: Date.now(),
+      });
+      return;
+    }
 
     if (!liveKitUrl || !token) {
       console.error("Recording view is missing LiveKit connection details");
@@ -111,8 +152,6 @@ export default function VerisRecordingView() {
         track.kind === Track.Kind.Video ||
         track.kind === Track.Kind.Audio
       ) {
-        // Keep remote audio and video on one media element so Chromium uses a
-        // single playback clock when LiveKit captures the composite.
         track.attach(mediaElement);
         mediaElement.autoplay = true;
         mediaElement.muted = false;
@@ -140,23 +179,46 @@ export default function VerisRecordingView() {
             return;
           }
 
-          setContext({
-            questionText:
+          const publishedAt =
+            typeof message.publishedAt === "number"
+              ? message.publishedAt
+              : Date.now();
+
+          if (publishedAt < latestContextAtRef.current) {
+            return;
+          }
+
+          latestContextAtRef.current = publishedAt;
+          setContext((previous) => {
+            const questionId =
+              typeof message.questionId === "string"
+                ? message.questionId
+                : previous.questionId;
+            const questionChanged =
+              Boolean(questionId) && questionId !== previous.questionId;
+            const verisState = isVerisState(message.verisState)
+              ? message.verisState
+              : "thinking";
+            const questionText =
               typeof message.questionText === "string" &&
               message.questionText.trim()
                 ? normalizeDisplayText(message.questionText)
-                : EMPTY_CONTEXT.questionText,
-            transcript:
+                : previous.questionText;
+            const transcript =
+              verisState === "listening" &&
               typeof message.transcript === "string"
                 ? normalizeDisplayText(message.transcript)
-                : "",
-            verisState:
-              message.verisState === "speaking" ||
-              message.verisState === "listening" ||
-              message.verisState === "thinking" ||
-              message.verisState === "idle"
-                ? message.verisState
-                : "thinking",
+                : "";
+
+            return {
+              questionId,
+              questionText,
+              transcript: questionChanged && verisState !== "listening"
+                ? ""
+                : transcript,
+              verisState,
+              publishedAt,
+            };
           });
         } catch (error) {
           console.warn("Unable to parse interview recording context", error);
@@ -204,7 +266,7 @@ export default function VerisRecordingView() {
         </div>
       </header>
 
-      <section className="relative z-10 grid h-[calc(100vh-76px)] grid-cols-[minmax(0,1.35fr)_minmax(360px,0.85fr)] gap-5 p-6">
+      <section className="relative z-10 grid h-[calc(100vh-76px)] grid-cols-[minmax(0,1.45fr)_minmax(380px,0.8fr)] gap-5 p-6">
         <div className="relative flex min-h-0 items-center justify-center overflow-hidden rounded-[22px] border border-white/10 bg-[#030507] shadow-2xl">
           <video
             ref={videoRef}
@@ -224,7 +286,7 @@ export default function VerisRecordingView() {
           </div>
         </div>
 
-        <aside className="flex min-h-0 flex-col overflow-hidden rounded-[22px] border border-white/10 bg-[#0d1420]/95 p-7 shadow-2xl">
+        <aside className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)_170px] overflow-hidden rounded-[22px] border border-white/10 bg-[#0d1420]/95 p-7 shadow-2xl">
           <div className="flex items-center gap-4 border-b border-white/10 pb-5">
             <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-sky-300/35 bg-sky-300/[0.08]">
               <span className="h-2.5 w-2.5 rounded-full bg-sky-300 shadow-[0_0_16px_rgba(125,211,252,0.75)]" />
@@ -239,16 +301,16 @@ export default function VerisRecordingView() {
             </div>
           </div>
 
-          <div className="min-h-0 pt-6">
+          <div className="min-h-0 overflow-hidden pt-6">
             <p className="text-[11px] font-medium uppercase tracking-[0.2em] text-sky-300/65">
               Current question
             </p>
-            <h1 className="mt-3 overflow-hidden text-[23px] font-medium leading-[1.36] tracking-[-0.02em] text-slate-50 [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:5]">
+            <h1 className="mt-3 overflow-hidden text-[22px] font-medium leading-[1.35] tracking-[-0.02em] text-slate-50 [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:6]">
               {context.questionText}
             </h1>
           </div>
 
-          <div className="mt-6 min-h-0 border-t border-white/10 pt-5">
+          <div className="min-h-0 overflow-hidden border-t border-white/10 pt-5">
             <div className="flex items-center justify-between">
               <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-slate-500">
                 Candidate response
@@ -256,14 +318,14 @@ export default function VerisRecordingView() {
               {context.verisState === "listening" ? (
                 <span className="flex items-center gap-2 text-[11px] text-emerald-300/80">
                   <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />
-                  Speaking
+                  Live
                 </span>
               ) : null}
             </div>
-            <p className="mt-3 overflow-hidden text-sm leading-6 text-slate-300 [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:7]">
-              {context.transcript.trim() ||
+            <p className="mt-3 overflow-hidden text-sm leading-[1.55] text-slate-300 [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:5]">
+              {responseCaption ||
                 (context.verisState === "listening"
-                  ? "Response transcription will appear here as the candidate speaks."
+                  ? "Listening… the candidate’s words will appear here."
                   : "Waiting for the candidate’s response.")}
             </p>
           </div>

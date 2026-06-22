@@ -8,6 +8,7 @@ type Props = {
   attemptId?: string;
   timeLeft?: number;
   reconnectKey?: number;
+  sessionQuestionId?: string;
   questionText?: string;
   transcript?: string;
   verisState?: "idle" | "listening" | "thinking" | "speaking";
@@ -94,6 +95,7 @@ export default function VideoPanel({
   attemptId,
   timeLeft,
   reconnectKey = 0,
+  sessionQuestionId = "",
   questionText = "",
   transcript = "",
   verisState = "idle",
@@ -112,6 +114,7 @@ export default function VideoPanel({
   const recordingStartedRef = useRef(false);
   const stopRequestedRef = useRef(false);
   const recordingContextRef = useRef({
+    questionId: sessionQuestionId,
     questionText,
     transcript,
     verisState,
@@ -124,6 +127,7 @@ export default function VideoPanel({
 
   useEffect(() => {
     recordingContextRef.current = {
+      questionId: sessionQuestionId,
       questionText,
       transcript,
       verisState,
@@ -137,6 +141,7 @@ export default function VideoPanel({
     const payload = new TextEncoder().encode(
       JSON.stringify({
         type: "veris.interview_context",
+        publishedAt: Date.now(),
         ...recordingContextRef.current,
       }),
     );
@@ -149,7 +154,7 @@ export default function VideoPanel({
       .catch((error) => {
         console.warn("Unable to update recording context:", error);
       });
-  }, [questionText, transcript, verisState]);
+  }, [questionText, sessionQuestionId, transcript, verisState]);
 
   useEffect(() => {
     onVideoReadyRef.current = onVideoReady;
@@ -251,6 +256,7 @@ export default function VideoPanel({
       const payload = new TextEncoder().encode(
         JSON.stringify({
           type: "veris.interview_context",
+          publishedAt: Date.now(),
           ...recordingContextRef.current,
         }),
       );

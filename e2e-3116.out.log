@@ -1,0 +1,13 @@
+
+> hireveri-calm@0.1.0 start
+> next start --port 3116
+
+▲ Next.js 16.1.1
+- Local:         http://localhost:3116
+- Network:       http://192.168.0.107:3116
+
+✓ Starting...
+✓ Ready in 2.9s
+{"event":"startup.diagnostics","ok":true,"generatedAt":"2026-06-22T12:51:29.038Z","warnings":[]}
+{"attemptId":"1427d7b4-e59f-4b3f-8c45-3a3a98cc367e","terminationType":null,"earlyExit":false,"event":"interview.completion_started","at":"2026-06-22T12:51:40.944Z","interviewId":null,"orgId":null,"recruiterId":null,"candidateId":null,"questionSequence":null,"timerState":null,"aiLatencyMs":null,"websocketEvent":null,"livekitEvent":null,"state":null,"nextState":null,"prismaFailure":null}
+{"attemptId":"1427d7b4-e59f-4b3f-8c45-3a3a98cc367e","interviewId":"9244929c-46b7-489b-8ee0-61c33e5fb0ab","orgId":"622860d0-b4a0-44f5-8104-49dfca3704eb","candidateId":"c20ed8c3-120c-4970-a473-b57ee29c244b","state":"COMPLETED","nextState":"FINALIZED","event":"interview.completion_reused","at":"2026-06-22T12:51:41.005Z","recruiterId":null,"questionSequence":null,"timerState":null,"aiLatencyMs":null,"websocketEvent":null,"livekitEvent":null,"prismaFailure":null}
