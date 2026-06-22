@@ -767,6 +767,17 @@ export async function finalizeInterviewAttempt(params: {
         nextState: "FINALIZED",
       });
 
+        await tx.$executeRaw`
+          update public.interviews
+          set status = 'COMPLETED',
+              final_status = 'FINALIZED'
+          where interview_id = ${lockedAttempt.interview_id}::uuid
+            and (
+              status is distinct from 'COMPLETED'
+              or final_status is distinct from 'FINALIZED'
+            )
+        `;
+
         return loadPersistedCompletionResult(tx, attemptId);
       }
     }

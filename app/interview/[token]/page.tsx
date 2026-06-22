@@ -1118,7 +1118,19 @@ export default function Page() {
 
   const enterFullscreen = async () => {
     setInterviewFinished(false);
-    await document.documentElement.requestFullscreen();
+    try {
+      if (
+        !document.fullscreenElement &&
+        typeof document.documentElement.requestFullscreen === "function"
+      ) {
+        await document.documentElement.requestFullscreen();
+      }
+    } catch (error) {
+      console.warn(
+        "Fullscreen mode is unavailable; continuing the interview in the current window.",
+        error
+      );
+    }
     setStarted(true);
   };
 
