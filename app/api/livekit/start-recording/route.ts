@@ -10,6 +10,10 @@ type StartRecordingBody = {
   attemptId?: string;
 };
 
+function getErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : "Unable to start recording";
+}
+
 const uuidPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -152,6 +156,33 @@ export async function POST(request: NextRequest) {
     console.error("Unable to start recording", error);
 
     if (attemptId && uuidPattern.test(attemptId)) {
+      const failureReason = getErrorMessage(error);
+
+      await ensureRecordingSchema().catch((schemaError: unknown) => {
+        console.error("Unable to ensure recording schema for startup failure", schemaError);
+      });
+
+      await prisma.$executeRaw`
+        insert into public.interview_recordings (
+          attempt_id,
+          room_name,
+          status,
+          failure_reason,
+          started_at,
+          ended_at
+        )
+        values (
+          ${attemptId}::uuid,
+          ${attemptId},
+          'failed',
+          ${failureReason},
+          timezone('utc', now()),
+          timezone('utc', now())
+        )
+      `.catch((insertFailureError: unknown) => {
+        console.error("Unable to persist recording startup failure", insertFailureError);
+      });
+
       await prisma.$executeRaw`
         update public.interview_attempts
         set recording_status = 'FAILED'
@@ -163,10 +194,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json(
       {
-        error:
-          error instanceof Error
-            ? error.message
-            : "Unable to start recording",
+        error: getErrorMessage(error),
       },
       { status: 500 },
     );
