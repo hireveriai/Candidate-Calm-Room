@@ -300,17 +300,30 @@ export default function VideoPanel({
         return;
       }
 
-      recordingStartedRef.current = true;
       stopRequestedRef.current = false;
 
-      try {
-        recordingEgressIdRef.current = await startServerRecording(safeAttemptId);
-        if (recordingEgressIdRef.current) {
-          onRecordingStartedRef.current?.(Date.now());
+      for (let startAttempt = 1; startAttempt <= 3; startAttempt += 1) {
+        recordingStartedRef.current = true;
+
+        try {
+          recordingEgressIdRef.current = await startServerRecording(safeAttemptId);
+          if (recordingEgressIdRef.current) {
+            onRecordingStartedRef.current?.(Date.now());
+            return;
+          }
+        } catch (error) {
+          recordingStartedRef.current = false;
+          console.error(
+            `Unable to start LiveKit recording (attempt ${startAttempt}/3):`,
+            error,
+          );
+
+          if (startAttempt < 3) {
+            await new Promise((resolve) =>
+              setTimeout(resolve, startAttempt * 1_000),
+            );
+          }
         }
-      } catch (error) {
-        recordingStartedRef.current = false;
-        console.error("Unable to start LiveKit recording:", error);
       }
     }
 
@@ -376,24 +389,27 @@ export default function VideoPanel({
         });
 
         const [audioTrack] = stream.getAudioTracks();
-        if (!audioTrack) {
-          throw new Error(
-            "Microphone track is unavailable; recording was not started.",
+        if (audioTrack) {
+          await room.localParticipant.publishTrack(audioTrack, {
+            source: Track.Source.Microphone,
+          });
+        } else {
+          console.warn(
+            "Microphone track is unavailable; continuing with video-only recording.",
           );
         }
 
-        await room.localParticipant.publishTrack(audioTrack, {
-          source: Track.Source.Microphone,
-        });
+        await ensureRecordingStarted();
 
-        await publishRecordingContext();
+        await publishRecordingContext().catch((error) => {
+          console.warn("Unable to publish initial recording context:", error);
+        });
         contextTimer = setInterval(() => {
           void publishRecordingContext().catch((error) => {
             console.warn("Unable to refresh recording context:", error);
           });
         }, 2_000);
 
-        await ensureRecordingStarted();
       } catch (error) {
         console.error("Unable to publish LiveKit camera feed:", error);
         onRoomConnectionChangeRef.current?.("disconnected");

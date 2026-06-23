@@ -3,6 +3,9 @@ import { prisma } from "@/app/lib/prisma";
 import { requireCandidateSession } from "@/app/lib/candidateSession";
 import { startRecording, stopRecording } from "@/app/lib/livekit/egress";
 
+export const runtime = "nodejs";
+export const maxDuration = 30;
+
 type StartRecordingBody = {
   attemptId?: string;
 };
@@ -47,9 +50,11 @@ async function ensureRecordingSchema() {
 }
 
 export async function POST(request: NextRequest) {
+  let attemptId: string | undefined;
+
   try {
     const body = (await request.json().catch(() => ({}))) as StartRecordingBody;
-    const attemptId = body.attemptId?.trim();
+    attemptId = body.attemptId?.trim();
 
     if (!attemptId || !uuidPattern.test(attemptId)) {
       return NextResponse.json(
@@ -136,9 +141,26 @@ export async function POST(request: NextRequest) {
       throw insertError;
     }
 
+    await prisma.$executeRaw`
+      update public.interview_attempts
+      set recording_status = 'PENDING'
+      where attempt_id = ${attemptId}::uuid
+    `;
+
     return NextResponse.json({ egressId, filePath, videoUrl });
   } catch (error) {
     console.error("Unable to start recording", error);
+
+    if (attemptId && uuidPattern.test(attemptId)) {
+      await prisma.$executeRaw`
+        update public.interview_attempts
+        set recording_status = 'FAILED'
+        where attempt_id = ${attemptId}::uuid
+      `.catch((updateError: unknown) => {
+        console.error("Unable to mark recording startup failed", updateError);
+      });
+    }
+
     return NextResponse.json(
       {
         error:

@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { EgressStatus } from "livekit-server-sdk";
 import { prisma } from "@/app/lib/prisma";
 import { requireCandidateSession } from "@/app/lib/candidateSession";
-import { stopRecording } from "@/app/lib/livekit/egress";
+import { finalizeRecordingByEgressId } from "@/app/lib/livekit/recordingLifecycle";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -10,15 +9,6 @@ export const maxDuration = 30;
 type StopRecordingBody = {
   egressId?: string;
 };
-
-function liveKitTimestampToDate(value: bigint) {
-  if (value <= BigInt(0)) {
-    return null;
-  }
-
-  const milliseconds = Number(value / BigInt(1_000_000));
-  return Number.isFinite(milliseconds) ? new Date(milliseconds) : null;
-}
 
 export async function POST(request: NextRequest) {
   const body = (await request.json().catch(() => ({}))) as StopRecordingBody;
@@ -50,58 +40,15 @@ export async function POST(request: NextRequest) {
       operation: "livekit.stop_recording",
     });
 
-    if (existingRecording?.status === "completed") {
-      return NextResponse.json({ success: true, status: "completed" });
-    }
-
-    if (existingRecording?.status === "failed") {
-      return NextResponse.json({ success: true, status: "failed" });
-    }
-
-    const egress = await stopRecording(egressId);
-    const completed = egress.status === EgressStatus.EGRESS_COMPLETE;
-    const failureReason = completed
-      ? null
-      : egress.error || `LiveKit egress ended with status ${egress.status}`;
-    const fileResult = egress.fileResults[0];
-    const mediaStartedAt =
-      liveKitTimestampToDate(fileResult?.startedAt ?? BigInt(0)) ??
-      liveKitTimestampToDate(egress.startedAt);
-    const mediaEndedAt =
-      liveKitTimestampToDate(fileResult?.endedAt ?? BigInt(0)) ??
-      liveKitTimestampToDate(egress.endedAt) ??
-      new Date();
-
-    await prisma.$executeRaw`
-      update public.interview_recordings
-      set status = ${completed ? "completed" : "failed"},
-          failure_reason = ${failureReason},
-          started_at = coalesce(${mediaStartedAt}, started_at),
-          ended_at = ${mediaEndedAt}
-      where egress_id = ${egressId}
-    `;
-
-    await prisma.$executeRaw`
-      update public.interview_attempts
-      set recording_status = ${completed ? "FINALIZED" : "FAILED"}
-      where attempt_id = ${existingRecording.attempt_id}::uuid
-    `;
-
-    if (!completed) {
-      console.error("LiveKit recording failed", {
-        egressId,
-        status: egress.status,
-        error: egress.error,
-      });
-    }
+    const result = await finalizeRecordingByEgressId(egressId);
 
     return NextResponse.json(
       {
-        success: completed,
-        status: completed ? "completed" : "failed",
-        error: failureReason,
+        success: result.completed,
+        status: result.status,
+        error: result.error,
       },
-      { status: completed ? 200 : 502 },
+      { status: result.completed || result.status === "failed" ? 200 : 502 },
     );
   } catch (error) {
     console.error("Unable to stop recording", error);

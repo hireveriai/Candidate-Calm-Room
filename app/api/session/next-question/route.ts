@@ -1,4 +1,5 @@
 import { finalizeInterviewAttempt } from "@/app/lib/interviewCompletion";
+import { finalizeActiveRecordings } from "@/app/lib/livekit/recordingLifecycle";
 import { canAskNextQuestion } from "@/app/lib/calmTiming";
 import { prisma } from "@/app/lib/prisma";
 import { requireCandidateSession } from "@/app/lib/candidateSession";
@@ -33,6 +34,7 @@ import { toFiniteNumber } from "@/app/lib/interviewScoring";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+export const maxDuration = 60;
 
 type RequestBody = {
   attemptId?: string;
@@ -143,6 +145,8 @@ async function completeInterviewWithoutStrandingCandidate(params: {
   message?: string;
 }) {
   try {
+    await finalizeActiveRecordings(params.attemptId);
+
     const completionResult = await finalizeInterviewAttempt({
       attemptId: params.attemptId,
       earlyExit: false,

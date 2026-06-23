@@ -1,9 +1,11 @@
 import { finalizeInterviewAttempt } from "@/app/lib/interviewCompletion";
 import { requireCandidateSession } from "@/app/lib/candidateSession";
 import { assertUuid, logInterviewEvent } from "@/app/lib/interviewReliability";
+import { finalizeActiveRecordings } from "@/app/lib/livekit/recordingLifecycle";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+export const maxDuration = 30;
 
 type RequestBody = {
   attemptId?: string;
@@ -24,6 +26,8 @@ export async function POST(request: Request) {
       attemptId,
       operation: "session.complete",
     });
+
+    await finalizeActiveRecordings(attemptId);
 
     const result = await finalizeInterviewAttempt({
       attemptId,
