@@ -45,6 +45,12 @@ type InviteAttemptRow = {
   candidate_name: string | null;
 };
 
+type RevivableAttemptRow = InviteAttemptRow & {
+  answer_count: number;
+  recording_count: number;
+  duration_minutes: number | null;
+};
+
 const looseUuidPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -220,6 +226,84 @@ async function recoverLatestAttemptFromToken(token: string) {
   } satisfies SessionStartRow;
 }
 
+async function reviveEmptyAttemptFromToken(token: string) {
+  return prisma.$transaction(async (tx: typeof prisma) => {
+    const rows = await tx.$queryRaw<RevivableAttemptRow[]>`
+      select
+        ia.attempt_id::text,
+        ia.interview_id::text,
+        ia.attempt_number,
+        ia.ends_at,
+        i.duration_minutes,
+        i.candidate_id::text,
+        c.full_name as candidate_name,
+        (
+          select count(*)::int
+          from public.interview_answers ans
+          where ans.attempt_id = ia.attempt_id
+        ) as answer_count,
+        (
+          select count(*)::int
+          from public.interview_recordings rec
+          where rec.attempt_id = ia.attempt_id
+        ) as recording_count
+      from public.interview_invites ii
+      join public.interviews i
+        on i.interview_id = ii.interview_id
+      join public.interview_attempts ia
+        on ia.interview_id = ii.interview_id
+      left join public.candidates c
+        on c.candidate_id = i.candidate_id
+      where ii.token = ${token}::text
+        and coalesce(ii.status, 'ACTIVE') = 'ACTIVE'
+        and (ii.expires_at is null or ii.expires_at > now())
+      order by ia.attempt_number desc, ia.started_at desc
+      limit 1
+      for update of ia
+    `;
+    const row = rows[0];
+
+    if (!row || row.answer_count > 0 || row.recording_count > 0) {
+      return undefined;
+    }
+
+    const endsAt = new Date(
+      Date.now() + Math.max(row.duration_minutes ?? 30, 1) * 60 * 1000
+    );
+
+    const updatedRows = await tx.$queryRaw<Array<{ ends_at: Date | null }>>`
+      update public.interview_attempts
+      set status = 'started',
+          ended_at = null,
+          ends_at = ${endsAt}::timestamptz,
+          recording_status = 'PENDING',
+          transcript_status = 'PENDING',
+          last_activity_at = timezone('utc', now()),
+          termination_type = null,
+          interruption_reason = null
+      where attempt_id = ${row.attempt_id}::uuid
+      returning ends_at
+    `;
+
+    logInterviewEvent("warn", "session.start_revived_empty_attempt", {
+      attemptId: row.attempt_id,
+      interviewId: row.interview_id,
+      candidateId: row.candidate_id,
+      attemptNumber: row.attempt_number,
+    });
+
+    return {
+      attempt_id: row.attempt_id,
+      interview_id: row.interview_id,
+      attempt_number: row.attempt_number,
+      reused: true,
+      candidate_name: row.candidate_name,
+      candidate_id: row.candidate_id,
+      ends_at: updatedRows[0]?.ends_at ?? endsAt,
+    } satisfies SessionStartRow;
+  });
+}
+
 export async function POST(request: Request) {
   try {
     const body = (await request.json()) as RequestBody;
@@ -265,7 +349,26 @@ export async function POST(request: Request) {
         !hasMissingFunctionError(error, "public.start_interview_session") &&
         !hasMissingDatabaseRoutineError(error)
       ) {
+        if (
+          error instanceof Error &&
+          error.message.toLowerCase().includes("maximum attempts reached")
+        ) {
+          attempt = normalizeSessionStartRow(
+            await reviveEmptyAttemptFromToken(token)
+          );
+
+          if (attempt) {
+            logInterviewEvent("warn", "session.start_recovered_consumed_empty_invite", {
+              attemptId: attempt.attempt_id,
+              interviewId: attempt.interview_id,
+              candidateId: attempt.candidate_id,
+            });
+          } else {
+            throw error;
+          }
+        } else {
         throw error;
+        }
       } else {
 
       const now = new Date();

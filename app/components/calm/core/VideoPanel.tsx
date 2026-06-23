@@ -58,6 +58,34 @@ async function fetchLiveKitPublisherToken(attemptId: string) {
   return payload.token;
 }
 
+async function fetchLiveKitBrowserUrl() {
+  const configured = process.env.NEXT_PUBLIC_LIVEKIT_URL;
+
+  if (configured) {
+    return configured;
+  }
+
+  const response = await fetch("/api/livekit/config", {
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as
+      | { error?: string }
+      | null;
+
+    throw new Error(payload?.error ?? "Failed to load LiveKit configuration");
+  }
+
+  const payload = (await response.json()) as { liveKitUrl?: string };
+
+  if (!payload.liveKitUrl) {
+    throw new Error("LiveKit URL is missing from configuration");
+  }
+
+  return payload.liveKitUrl;
+}
+
 async function startServerRecording(attemptId: string) {
   const response = await fetch("/api/livekit/start-recording", {
     method: "POST",
@@ -266,13 +294,6 @@ export default function VideoPanel({
       return;
     }
 
-    const liveKitUrl = process.env.NEXT_PUBLIC_LIVEKIT_URL;
-
-    if (!liveKitUrl) {
-      console.error("NEXT_PUBLIC_LIVEKIT_URL is not configured");
-      return;
-    }
-
     let cancelled = false;
     const room = new Room();
     roomRef.current = room;
@@ -354,8 +375,12 @@ export default function VideoPanel({
           return;
         }
 
-        const token = await fetchLiveKitPublisherToken(safeAttemptId);
-        await room.connect(liveKitUrl!, token);
+        const [liveKitUrl, token] = await Promise.all([
+          fetchLiveKitBrowserUrl(),
+          fetchLiveKitPublisherToken(safeAttemptId),
+        ]);
+
+        await room.connect(liveKitUrl, token);
         hasConnectedRoomRef.current = true;
         onRoomConnectionChangeRef.current?.("connected");
 
