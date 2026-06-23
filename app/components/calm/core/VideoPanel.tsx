@@ -4,6 +4,15 @@ import { useEffect, useRef } from "react";
 import { Room, Track } from "livekit-client";
 import type { RefObject } from "react";
 
+type RecordingSignal = {
+  id: string;
+  type: string;
+  label: string;
+  severity: "low" | "medium" | "high";
+  occurredAt: number;
+  recordingOffsetMs: number;
+};
+
 type Props = {
   attemptId?: string;
   timeLeft?: number;
@@ -12,7 +21,9 @@ type Props = {
   questionText?: string;
   transcript?: string;
   verisState?: "idle" | "listening" | "thinking" | "speaking";
+  recordingSignal?: RecordingSignal | null;
   onVideoReady?: (ref: RefObject<HTMLVideoElement | null>) => void;
+  onRecordingStarted?: (startedAt: number) => void;
   onCameraStatusChange?: (ready: boolean) => void;
   onRoomConnectionChange?: (
     state: "connected" | "reconnecting" | "disconnected"
@@ -99,12 +110,15 @@ export default function VideoPanel({
   questionText = "",
   transcript = "",
   verisState = "idle",
+  recordingSignal = null,
   onVideoReady,
+  onRecordingStarted,
   onCameraStatusChange,
   onRoomConnectionChange,
 }: Props) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const onVideoReadyRef = useRef(onVideoReady);
+  const onRecordingStartedRef = useRef(onRecordingStarted);
   const onCameraStatusChangeRef = useRef(onCameraStatusChange);
   const onRoomConnectionChangeRef = useRef(onRoomConnectionChange);
   const hasConnectedRoomRef = useRef(false);
@@ -118,6 +132,7 @@ export default function VideoPanel({
     questionText,
     transcript,
     verisState,
+    signal: recordingSignal,
   });
   const elapsedSeconds = timeLeft ?? 0;
   const minutes = Math.floor(elapsedSeconds / 60)
@@ -131,6 +146,7 @@ export default function VideoPanel({
       questionText,
       transcript,
       verisState,
+      signal: recordingSignal,
     };
 
     const room = roomRef.current;
@@ -154,11 +170,21 @@ export default function VideoPanel({
       .catch((error) => {
         console.warn("Unable to update recording context:", error);
       });
-  }, [questionText, sessionQuestionId, transcript, verisState]);
+  }, [
+    questionText,
+    recordingSignal,
+    sessionQuestionId,
+    transcript,
+    verisState,
+  ]);
 
   useEffect(() => {
     onVideoReadyRef.current = onVideoReady;
   }, [onVideoReady]);
+
+  useEffect(() => {
+    onRecordingStartedRef.current = onRecordingStarted;
+  }, [onRecordingStarted]);
 
   useEffect(() => {
     onCameraStatusChangeRef.current = onCameraStatusChange;
@@ -279,6 +305,9 @@ export default function VideoPanel({
 
       try {
         recordingEgressIdRef.current = await startServerRecording(safeAttemptId);
+        if (recordingEgressIdRef.current) {
+          onRecordingStartedRef.current?.(Date.now());
+        }
       } catch (error) {
         recordingStartedRef.current = false;
         console.error("Unable to start LiveKit recording:", error);
@@ -347,15 +376,15 @@ export default function VideoPanel({
         });
 
         const [audioTrack] = stream.getAudioTracks();
-        if (audioTrack) {
-          await room.localParticipant.publishTrack(audioTrack, {
-            source: Track.Source.Microphone,
-          });
-        } else {
-          console.warn(
-            "LiveKit recording started without a microphone track.",
+        if (!audioTrack) {
+          throw new Error(
+            "Microphone track is unavailable; recording was not started.",
           );
         }
+
+        await room.localParticipant.publishTrack(audioTrack, {
+          source: Track.Source.Microphone,
+        });
 
         await publishRecordingContext();
         contextTimer = setInterval(() => {

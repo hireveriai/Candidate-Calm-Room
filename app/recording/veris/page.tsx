@@ -5,12 +5,22 @@ import { RemoteTrack, Room, RoomEvent, Track } from "livekit-client";
 
 type VerisState = "idle" | "listening" | "thinking" | "speaking";
 
+type RecordingSignal = {
+  id: string;
+  type: string;
+  label: string;
+  severity: "low" | "medium" | "high";
+  occurredAt: number;
+  recordingOffsetMs: number;
+};
+
 type InterviewContext = {
   questionId: string;
   questionText: string;
   transcript: string;
   verisState: VerisState;
   publishedAt: number;
+  signal: RecordingSignal | null;
 };
 
 const EMPTY_CONTEXT: InterviewContext = {
@@ -19,6 +29,25 @@ const EMPTY_CONTEXT: InterviewContext = {
   transcript: "",
   verisState: "thinking",
   publishedAt: 0,
+  signal: null,
+};
+
+const PREVIEW_CONTEXT: InterviewContext = {
+  questionId: "preview-question",
+  questionText:
+    "What would you do if two senior engineers proposed conflicting database designs for a business-critical platform migration?",
+  transcript:
+    "I would first clarify the business constraints and the measurable trade-offs behind each proposal. Then I would ask both engineers to compare reliability, migration risk, operating cost, and rollback strategy using the same decision framework.",
+  verisState: "listening",
+  publishedAt: 0,
+  signal: {
+    id: "preview-signal",
+    type: "attention_loss",
+    label: "Attention shifted",
+    severity: "low",
+    occurredAt: 0,
+    recordingOffsetMs: 272_000,
+  },
 };
 
 function normalizeDisplayText(value: string) {
@@ -73,6 +102,8 @@ function isVerisState(value: unknown): value is VerisState {
 export default function VerisRecordingView() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const recordingStartedRef = useRef(false);
+  const recordingStartedAtRef = useRef(0);
+  const signalOffsetsRef = useRef(new Map<string, number>());
   const latestContextAtRef = useRef(0);
   const [context, setContext] = useState<InterviewContext>(EMPTY_CONTEXT);
   const stateContent = getStateContent(context.verisState);
@@ -110,16 +141,21 @@ export default function VerisRecordingView() {
         window.location.hostname === "127.0.0.1");
 
     if (localPreview) {
-      setContext({
-        questionId: "preview-question",
-        questionText:
-          "What would you do if two senior engineers proposed conflicting database designs for a business-critical platform migration?",
-        transcript:
-          "I would first clarify the business constraints and the measurable trade-offs behind each proposal. Then I would ask both engineers to compare reliability, migration risk, operating cost, and rollback strategy using the same decision framework.",
-        verisState: "listening",
-        publishedAt: Date.now(),
+      const frame = window.requestAnimationFrame(() => {
+        const now = Date.now();
+        setContext({
+          ...PREVIEW_CONTEXT,
+          publishedAt: now,
+          signal: PREVIEW_CONTEXT.signal
+            ? {
+                ...PREVIEW_CONTEXT.signal,
+                occurredAt: now,
+              }
+            : null,
+        });
       });
-      return;
+
+      return () => window.cancelAnimationFrame(frame);
     }
 
     if (!liveKitUrl || !token) {
@@ -138,6 +174,7 @@ export default function VerisRecordingView() {
       }
 
       recordingStartedRef.current = true;
+      recordingStartedAtRef.current = Date.now();
       console.log("START_RECORDING");
     };
 
@@ -210,6 +247,30 @@ export default function VerisRecordingView() {
                 ? normalizeDisplayText(message.transcript)
                 : "";
 
+            const incomingSignal =
+              message.signal &&
+              typeof message.signal === "object" &&
+              typeof message.signal.id === "string" &&
+              typeof message.signal.label === "string"
+                ? message.signal
+                : null;
+            let signal = incomingSignal;
+
+            if (incomingSignal && recordingStartedAtRef.current) {
+              const existingOffset = signalOffsetsRef.current.get(
+                incomingSignal.id,
+              );
+              const recordingOffsetMs =
+                existingOffset ??
+                Math.max(0, Date.now() - recordingStartedAtRef.current);
+
+              signalOffsetsRef.current.set(incomingSignal.id, recordingOffsetMs);
+              signal = {
+                ...incomingSignal,
+                recordingOffsetMs,
+              };
+            }
+
             return {
               questionId,
               questionText,
@@ -218,6 +279,7 @@ export default function VerisRecordingView() {
                 : transcript,
               verisState,
               publishedAt,
+              signal,
             };
           });
         } catch (error) {
@@ -275,6 +337,38 @@ export default function VerisRecordingView() {
             className="h-full w-full object-contain"
           />
           <div className="pointer-events-none absolute inset-0 ring-1 ring-inset ring-white/[0.06]" />
+          {context.signal ? (
+            <div className="absolute left-6 top-6 flex max-w-[310px] items-center gap-3 rounded-xl border border-amber-300/20 bg-[#111720]/95 px-4 py-3 shadow-[0_16px_45px_rgba(0,0,0,0.35)]">
+              <span
+                className={`h-2.5 w-2.5 shrink-0 rounded-full ${
+                  context.signal.severity === "high"
+                    ? "bg-red-400"
+                    : context.signal.severity === "medium"
+                      ? "bg-amber-300"
+                      : "bg-sky-300"
+                }`}
+              />
+              <div className="min-w-0">
+                <p className="text-[10px] font-medium uppercase tracking-[0.18em] text-slate-500">
+                  Timeline signal
+                </p>
+                <p className="mt-1 truncate text-sm font-medium text-slate-100">
+                  {context.signal.label}
+                </p>
+              </div>
+              <span className="ml-2 shrink-0 font-mono text-xs text-slate-400">
+                {Math.floor(context.signal.recordingOffsetMs / 60_000)
+                  .toString()
+                  .padStart(2, "0")}
+                :
+                {Math.floor(
+                  (context.signal.recordingOffsetMs % 60_000) / 1_000,
+                )
+                  .toString()
+                  .padStart(2, "0")}
+              </span>
+            </div>
+          ) : null}
           <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 via-black/35 to-transparent px-7 pb-6 pt-28">
             <div className="flex items-center gap-2">
               <span className="h-2 w-2 rounded-full bg-emerald-400" />

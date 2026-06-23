@@ -1,8 +1,44 @@
 const fs = require("fs");
 const path = require("path");
 const { spawn, spawnSync } = require("child_process");
+const { RoomServiceClient } = require("livekit-server-sdk");
 
 const repoRoot = path.resolve(__dirname, "..");
+
+function loadEnvFile(filePath) {
+  if (!fs.existsSync(filePath)) {
+    return;
+  }
+
+  for (const line of fs.readFileSync(filePath, "utf8").split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) {
+      continue;
+    }
+
+    const separatorIndex = trimmed.indexOf("=");
+    if (separatorIndex <= 0) {
+      continue;
+    }
+
+    const key = trimmed.slice(0, separatorIndex).trim();
+    let value = trimmed.slice(separatorIndex + 1).trim();
+    if (
+      (value.startsWith("\"") && value.endsWith("\"")) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+
+    if (!(key in process.env)) {
+      process.env[key] = value;
+    }
+  }
+}
+
+loadEnvFile(path.join(repoRoot, ".env"));
+loadEnvFile(path.join(repoRoot, ".env.local"));
+
 const reportPath = path.join(repoRoot, "production-validation-report.json");
 const defaultPort = Number(process.env.HIREVERI_VALIDATION_PORT || 3114);
 const baseUrl = process.env.HIREVERI_BASE_URL || `http://127.0.0.1:${defaultPort}`;
@@ -76,19 +112,55 @@ function startServer() {
     fs.unlinkSync(logPath);
   }
 
+  const output = fs.openSync(logPath, "a");
+  const command = process.execPath;
+  const args = [
+    path.join(repoRoot, "node_modules", "next", "dist", "bin", "next"),
+    "start",
+    "--port",
+    String(defaultPort),
+  ];
   const child = spawn(
-    "cmd.exe",
-    ["/c", `npm run start -- --port ${defaultPort} > "${logPath}" 2>&1`],
+    command,
+    args,
     {
       cwd: repoRoot,
       detached: true,
-      stdio: "ignore",
+      stdio: ["ignore", output, output],
       windowsHide: true,
     }
   );
 
   child.unref();
+  fs.closeSync(output);
   return child.pid;
+}
+
+async function validateLiveKitControlPlane() {
+  const url = process.env.LIVEKIT_URL;
+  const apiKey = process.env.LIVEKIT_API_KEY;
+  const apiSecret = process.env.LIVEKIT_API_SECRET;
+
+  if (!url || !apiKey || !apiSecret) {
+    return {
+      ok: false,
+      error: "LiveKit server credentials are incomplete",
+    };
+  }
+
+  try {
+    const client = new RoomServiceClient(url, apiKey, apiSecret);
+    const rooms = await client.listRooms();
+    return {
+      ok: true,
+      roomCount: rooms.length,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
 }
 
 async function main() {
@@ -133,9 +205,12 @@ async function main() {
   const liveKitTokenResponse = await fetchJson(
     `${baseUrl}/api/livekit/token?room=validation-room&userId=validation-user&role=publisher`
   );
+  const liveKitControlPlane = await validateLiveKitControlPlane();
   validation.websocket = {
-    ok: liveKitTokenResponse.ok && Boolean(liveKitTokenResponse.json?.token),
-    status: liveKitTokenResponse.status,
+    ok: liveKitControlPlane.ok && liveKitTokenResponse.status === 401,
+    controlPlane: liveKitControlPlane,
+    tokenRouteSecured: liveKitTokenResponse.status === 401,
+    unauthenticatedStatus: liveKitTokenResponse.status,
   };
 
   if (fs.existsSync(seedPath)) {

@@ -98,6 +98,24 @@ type BehaviorSignalPayload = {
   timestamp: number;
 };
 
+type RecordingSignal = {
+  id: string;
+  type: string;
+  label: string;
+  severity: "low" | "medium" | "high";
+  occurredAt: number;
+  recordingOffsetMs: number;
+};
+
+const RECORDING_SIGNAL_LABELS: Record<string, string> = {
+  attention_loss: "Attention shifted",
+  long_gaze_away: "Extended gaze away",
+  multi_face: "Multiple people detected",
+  no_face: "Candidate left frame",
+  tab_switch: "Tab switch detected",
+  unresponsive: "Extended response pause",
+};
+
 const CodeEditorModal = dynamic(
   () => import("@/app/components/calm/core/CodeEditorModal"),
   { ssr: false }
@@ -206,6 +224,8 @@ export default function Page() {
   const [sessionQuestionId, setSessionQuestionId] = useState("");
   const [questionId, setQuestionId] = useState("");
   const [transcript, setTranscript] = useState("");
+  const [recordingSignal, setRecordingSignal] =
+    useState<RecordingSignal | null>(null);
   const [timeLeft, setTimeLeft] = useState(0);
   const [isTransitioning, setIsTransitioning] = useState(false);
   const [attemptId, setAttemptId] = useState("");
@@ -226,6 +246,7 @@ export default function Page() {
   const inactivityTimeoutRef = useRef<any>(null);
   const disconnectTimeoutRef = useRef<any>(null);
   const interviewStartTimeRef = useRef<number | null>(null);
+  const recordingStartedAtRef = useRef<number | null>(null);
   const serverClockOffsetMsRef = useRef(0);
   const questionStartTimeRef = useRef<number | null>(null);
   const focusTimeMsRef = useRef(0);
@@ -242,6 +263,9 @@ export default function Page() {
   const completionInFlightRef = useRef(false);
   const lastSignalSentRef = useRef<Record<string, number>>({});
   const lastSignalPayloadRef = useRef<Record<string, string>>({});
+  const recordingSignalTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
   const lastWarRoomSyncAtRef = useRef<string | null>(null);
 
   const videoRef = useRef<any>(null);
@@ -289,6 +313,14 @@ export default function Page() {
       ? crypto.randomUUID()
       : `session-${Date.now()}`
   );
+
+  useEffect(() => {
+    return () => {
+      if (recordingSignalTimeoutRef.current) {
+        clearTimeout(recordingSignalTimeoutRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (typeof document === "undefined") {
@@ -685,12 +717,59 @@ export default function Page() {
 
     lastSignalSentRef.current[type] = now;
     lastSignalPayloadRef.current[type] = payload;
+    const recordingAnchor =
+      recordingStartedAtRef.current ?? interviewStartTimeRef.current;
+    const recordingOffsetMs = recordingAnchor
+      ? Math.max(0, now - recordingAnchor)
+      : 0;
+    const valueObject =
+      value && typeof value === "object" && !Array.isArray(value)
+        ? (value as Record<string, unknown>)
+        : { value };
+    const enrichedValue = {
+      ...valueObject,
+      sessionQuestionId,
+      recordingOffsetMs,
+    };
+    const recordingLabel = RECORDING_SIGNAL_LABELS[type];
+
+    if (recordingLabel) {
+      const severityValue = valueObject.severity;
+      const severity =
+        severityValue === "high" ||
+        severityValue === "medium" ||
+        severityValue === "low"
+          ? severityValue
+          : type === "tab_switch" || type === "multi_face"
+            ? "high"
+            : type === "no_face" || type === "long_gaze_away"
+              ? "medium"
+              : "low";
+
+      setRecordingSignal({
+        id: `${type}-${now}`,
+        type,
+        label: recordingLabel,
+        severity,
+        occurredAt: now,
+        recordingOffsetMs,
+      });
+
+      if (recordingSignalTimeoutRef.current) {
+        clearTimeout(recordingSignalTimeoutRef.current);
+      }
+
+      recordingSignalTimeoutRef.current = setTimeout(() => {
+        setRecordingSignal(null);
+        recordingSignalTimeoutRef.current = null;
+      }, 6_000);
+    }
 
     try {
       await postJson("/api/session/signal", {
           attemptId,
           type,
-          value,
+          value: enrichedValue,
       });
     } catch {
       lastSignalSentRef.current[type] = 0;
@@ -1435,6 +1514,7 @@ export default function Page() {
       setIsTransitioning(true);
       setInterviewFinished(false);
       interviewStartTimeRef.current = Date.now();
+      recordingStartedAtRef.current = null;
       setTimeLeft(0);
       startRecordingTimer();
 
@@ -2290,6 +2370,10 @@ export default function Page() {
               questionText={currentQuestion}
               transcript={transcript}
               verisState={verisState}
+              recordingSignal={recordingSignal}
+              onRecordingStarted={(startedAt) => {
+                recordingStartedAtRef.current = startedAt;
+              }}
               onVideoReady={(ref) => (videoRef.current = ref.current)}
               onCameraStatusChange={(ready) => {
                 setCameraReady(ready);
