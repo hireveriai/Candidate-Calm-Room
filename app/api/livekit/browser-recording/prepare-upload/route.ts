@@ -161,7 +161,7 @@ export async function POST(request: NextRequest) {
       values (
         ${attemptId}::uuid,
         ${attemptId},
-        'uploading',
+        'recording',
         ${videoUrl},
         ${videoUrl},
         ${filePath},
@@ -183,6 +183,7 @@ export async function POST(request: NextRequest) {
       contentType: mimeType,
     });
   } catch (error) {
+    console.error("Browser recording prepare-upload failed:", error);
     return NextResponse.json(
       {
         error:
