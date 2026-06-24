@@ -34,7 +34,7 @@ type Props = {
 const uuidPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-const BROWSER_RECORDING_SEGMENT_MS = 60_000;
+const BROWSER_RECORDING_SEGMENT_MS = 30_000;
 
 function isValidAttemptId(value: string | null | undefined): value is string {
   return Boolean(value && uuidPattern.test(value.trim()));
@@ -522,15 +522,6 @@ export default function VideoPanel({
           return;
         }
 
-        const [liveKitUrl, token] = await Promise.all([
-          fetchLiveKitBrowserUrl(),
-          fetchLiveKitPublisherToken(safeAttemptId),
-        ]);
-
-        await room.connect(liveKitUrl, token);
-        hasConnectedRoomRef.current = true;
-        onRoomConnectionChangeRef.current?.("connected");
-
         const stream =
           cameraStreamRef.current ??
           (await navigator.mediaDevices.getUserMedia({
@@ -546,6 +537,15 @@ export default function VideoPanel({
         cameraStreamRef.current = stream;
         ensureBrowserRecordingStarted(stream, safeAttemptId);
         startBrowserSegmentTimer(stream, safeAttemptId);
+
+        const [liveKitUrl, token] = await Promise.all([
+          fetchLiveKitBrowserUrl(),
+          fetchLiveKitPublisherToken(safeAttemptId),
+        ]);
+
+        await room.connect(liveKitUrl, token);
+        hasConnectedRoomRef.current = true;
+        onRoomConnectionChangeRef.current?.("connected");
 
         if (cancelled) {
           room.disconnect();
