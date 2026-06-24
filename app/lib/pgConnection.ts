@@ -36,6 +36,24 @@ export function buildPgConnectionConfig(
   }
 
   const url = new URL(raw);
+  const forceTransactionPooler = process.env.DB_POOL_MODE !== "session";
+
+  if (
+    forceTransactionPooler &&
+    url.hostname.endsWith(".pooler.supabase.com") &&
+    (!url.port || url.port === "5432")
+  ) {
+    url.port = "6543";
+  }
+
+  if (
+    forceTransactionPooler &&
+    url.hostname.endsWith(".pooler.supabase.com") &&
+    !url.searchParams.has("pgbouncer")
+  ) {
+    url.searchParams.set("pgbouncer", "true");
+  }
+
   const sslMode = url.searchParams.get("sslmode")?.toLowerCase() ?? "";
   const ca = readRootCertificate(raw);
   url.searchParams.delete("sslmode");

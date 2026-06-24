@@ -11,24 +11,40 @@ const globalForPrisma = globalThis as unknown as {
 
 function createPrismaClient(): PrismaClientLike {
   const { PrismaClient } = require("@prisma/client");
-  const maxConnections = Number(process.env.PG_POOL_MAX ?? 5);
-  const idleTimeoutMillis = Number(process.env.PG_IDLE_TIMEOUT_MS ?? 3000);
+  const requestedMaxConnections = Number(process.env.PG_POOL_MAX ?? 1);
+  const maxConnectionCap = Number(process.env.PG_POOL_MAX_CAP ?? 1);
+  const idleTimeoutMillis = Number(process.env.PG_IDLE_TIMEOUT_MS ?? 1000);
   const connectionTimeoutMillis = Number(
-    process.env.PG_CONNECTION_TIMEOUT_MS ?? 5000
+    process.env.PG_CONNECTION_TIMEOUT_MS ?? 8000
   );
+  const maxLifetimeSeconds = Number(
+    process.env.PG_MAX_LIFETIME_SECONDS ?? 30
+  );
+  const boundedMaxConnections =
+    Number.isFinite(requestedMaxConnections) && requestedMaxConnections > 0
+      ? requestedMaxConnections
+      : 1;
+  const boundedConnectionCap =
+    Number.isFinite(maxConnectionCap) && maxConnectionCap > 0
+      ? maxConnectionCap
+      : 1;
   const pool =
     globalForPrisma.prismaPool ||
     new Pool({
       ...buildPgConnectionConfig(process.env.DATABASE_URL),
-      max: Number.isFinite(maxConnections) && maxConnections > 0 ? maxConnections : 5,
+      max: Math.max(1, Math.min(boundedMaxConnections, boundedConnectionCap)),
       idleTimeoutMillis:
         Number.isFinite(idleTimeoutMillis) && idleTimeoutMillis > 0
           ? idleTimeoutMillis
-          : 3000,
+          : 1000,
       connectionTimeoutMillis:
         Number.isFinite(connectionTimeoutMillis) && connectionTimeoutMillis > 0
           ? connectionTimeoutMillis
-          : 5000,
+          : 8000,
+      maxLifetimeSeconds:
+        Number.isFinite(maxLifetimeSeconds) && maxLifetimeSeconds > 0
+          ? maxLifetimeSeconds
+          : 30,
       allowExitOnIdle: true,
     });
 
