@@ -247,6 +247,7 @@ export default function Page() {
   const disconnectTimeoutRef = useRef<any>(null);
   const interviewStartTimeRef = useRef<number | null>(null);
   const recordingStartedAtRef = useRef<number | null>(null);
+  const recordingFinalizerRef = useRef<(() => Promise<void>) | null>(null);
   const serverClockOffsetMsRef = useRef(0);
   const questionStartTimeRef = useRef<number | null>(null);
   const focusTimeMsRef = useRef(0);
@@ -1221,6 +1222,12 @@ export default function Page() {
   } = {}) => {
     exitIntentRef.current = true;
 
+    try {
+      await recordingFinalizerRef.current?.();
+    } catch (error) {
+      console.error("Unable to finalize recording before ending interview:", error);
+    }
+
     if (document.fullscreenElement) {
       await document.exitFullscreen();
     }
@@ -1254,6 +1261,7 @@ export default function Page() {
     clearReconnectSchedulers();
     reconnectInFlightRef.current = false;
     interviewStartTimeRef.current = null;
+    recordingFinalizerRef.current = null;
     questionStartTimeRef.current = null;
     setTimeLeft(0);
     setIsReconnecting(false);
@@ -2373,6 +2381,9 @@ export default function Page() {
               recordingSignal={recordingSignal}
               onRecordingStarted={(startedAt) => {
                 recordingStartedAtRef.current = startedAt;
+              }}
+              onRecordingFinalizerChange={(finalize) => {
+                recordingFinalizerRef.current = finalize;
               }}
               onVideoReady={(ref) => (videoRef.current = ref.current)}
               onCameraStatusChange={(ready) => {

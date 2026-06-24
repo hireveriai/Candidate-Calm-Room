@@ -24,6 +24,7 @@ type Props = {
   recordingSignal?: RecordingSignal | null;
   onVideoReady?: (ref: RefObject<HTMLVideoElement | null>) => void;
   onRecordingStarted?: (startedAt: number) => void;
+  onRecordingFinalizerChange?: (finalize: (() => Promise<void>) | null) => void;
   onCameraStatusChange?: (ready: boolean) => void;
   onRoomConnectionChange?: (
     state: "connected" | "reconnecting" | "disconnected"
@@ -231,12 +232,14 @@ export default function VideoPanel({
   recordingSignal = null,
   onVideoReady,
   onRecordingStarted,
+  onRecordingFinalizerChange,
   onCameraStatusChange,
   onRoomConnectionChange,
 }: Props) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const onVideoReadyRef = useRef(onVideoReady);
   const onRecordingStartedRef = useRef(onRecordingStarted);
+  const onRecordingFinalizerChangeRef = useRef(onRecordingFinalizerChange);
   const onCameraStatusChangeRef = useRef(onCameraStatusChange);
   const onRoomConnectionChangeRef = useRef(onRoomConnectionChange);
   const hasConnectedRoomRef = useRef(false);
@@ -308,6 +311,10 @@ export default function VideoPanel({
   useEffect(() => {
     onRecordingStartedRef.current = onRecordingStarted;
   }, [onRecordingStarted]);
+
+  useEffect(() => {
+    onRecordingFinalizerChangeRef.current = onRecordingFinalizerChange;
+  }, [onRecordingFinalizerChange]);
 
   useEffect(() => {
     onCameraStatusChangeRef.current = onCameraStatusChange;
@@ -575,6 +582,8 @@ export default function VideoPanel({
       }
     }
 
+    onRecordingFinalizerChangeRef.current?.(ensureRecordingStopped);
+
     async function publishCamera() {
       try {
         const safeAttemptId = attemptId?.trim();
@@ -673,6 +682,7 @@ export default function VideoPanel({
         clearInterval(contextTimer);
       }
       void ensureRecordingStopped();
+      onRecordingFinalizerChangeRef.current?.(null);
       room.disconnect();
       roomRef.current = null;
       hasConnectedRoomRef.current = false;
