@@ -43,6 +43,7 @@ export default function CodeEditorModal({
   const [language, setLanguage] = useState("javascript");
   const [editorReady, setEditorReady] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   const prevLength = useRef(0);
 
@@ -81,6 +82,7 @@ export default function CodeEditorModal({
     setCode("");
     setLanguage("javascript");
     setSubmitting(false);
+    setSubmitError(null);
     prevLength.current = 0;
   }, [open, question]);
 
@@ -132,12 +134,19 @@ export default function CodeEditorModal({
     if (!code.trim() || submitting) return;
 
     setSubmitting(true);
+    setSubmitError(null);
 
     try {
       await onSubmit({
         code: code.trim(),
         language,
       });
+    } catch (error) {
+      setSubmitError(
+        error instanceof Error
+          ? error.message
+          : "Unable to submit the coding answer."
+      );
     } finally {
       setSubmitting(false);
     }
@@ -200,7 +209,13 @@ export default function CodeEditorModal({
         </div>
 
         <div className="mt-3 flex items-center justify-between">
-          <div className="text-xs text-white/40">Behavioral monitoring active</div>
+          <div className="text-xs text-white/40">
+            {submitError ? (
+              <span className="text-red-300">{submitError}</span>
+            ) : (
+              "Behavioral monitoring active"
+            )}
+          </div>
 
           <div className="flex gap-2">
             <button

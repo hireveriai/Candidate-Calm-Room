@@ -239,7 +239,8 @@ export async function POST(request: Request) {
     if (
       !canSubmitAnswer(
         { ends_at: context.ends_at },
-        { asked_at: context.asked_at }
+        { asked_at: context.asked_at },
+        { allowFinalGrace: true }
       )
     ) {
       return Response.json(

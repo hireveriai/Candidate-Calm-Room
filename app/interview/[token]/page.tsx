@@ -1628,7 +1628,9 @@ export default function Page() {
   };
 
   const submitCodeAnswer = async (code: string, language: string) => {
-    if (!sessionQuestionId || !attemptId || !candidateId || !questionId) return;
+    if (!sessionQuestionId || !attemptId || !candidateId || !questionId) {
+      throw new Error("Coding session is not ready yet. Please wait a moment and try again.");
+    }
 
     const answerDuration = questionStartTimeRef.current
       ? Math.max(1, Math.round((Date.now() - questionStartTimeRef.current) / 1000))
@@ -1741,12 +1743,12 @@ export default function Page() {
       severity: "low",
     });
 
-    setShowCoding(false);
     setIsTransitioning(true);
     setVerisState("thinking");
 
     try {
       await submitCodeAnswer(payload.code, payload.language);
+      setShowCoding(false);
       if (sessionTimeEnded) {
         await completeAfterFinalAnswer();
       } else {
@@ -1764,6 +1766,7 @@ export default function Page() {
             : "Failed to submit the coding answer.",
         visible: true,
       });
+      throw error;
     }
   };
 
