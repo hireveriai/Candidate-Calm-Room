@@ -34,6 +34,8 @@ type Props = {
 const uuidPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+const BROWSER_RECORDING_SEGMENT_MS = 60_000;
+
 function isValidAttemptId(value: string | null | undefined): value is string {
   return Boolean(value && uuidPattern.test(value.trim()));
 }
@@ -85,54 +87,6 @@ async function fetchLiveKitBrowserUrl() {
   }
 
   return payload.liveKitUrl;
-}
-
-async function startServerRecording(attemptId: string) {
-  const response = await fetch("/api/livekit/start-recording", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ attemptId }),
-  });
-
-  if (!response.ok) {
-    const payload = (await response.json().catch(() => null)) as
-      | { error?: string }
-      | null;
-
-    throw new Error(payload?.error ?? "Failed to start recording");
-  }
-
-  const payload = (await response.json()) as {
-    egressId?: string;
-    skipped?: boolean;
-  };
-
-  if (payload.skipped) {
-    return null;
-  }
-
-  if (!payload.egressId) {
-    throw new Error("Recording API did not return an egress id");
-  }
-
-  return payload.egressId;
-}
-
-async function stopServerRecording(egressId: string) {
-  const response = await fetch("/api/livekit/stop-recording", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ egressId }),
-    keepalive: true,
-  });
-
-  return (await response.json().catch(() => null)) as
-    | { success?: boolean; status?: string; error?: string }
-    | null;
 }
 
 function getBrowserRecordingMimeType() {
@@ -245,14 +199,13 @@ export default function VideoPanel({
   const hasConnectedRoomRef = useRef(false);
   const roomRef = useRef<Room | null>(null);
   const cameraStreamRef = useRef<MediaStream | null>(null);
-  const recordingEgressIdRef = useRef<string | null>(null);
-  const recordingStartedRef = useRef(false);
   const stopRequestedRef = useRef(false);
   const browserRecorderRef = useRef<MediaRecorder | null>(null);
   const browserRecordingChunksRef = useRef<Blob[]>([]);
   const browserRecordingMimeTypeRef = useRef<string | null>(null);
   const browserRecordingUploadRef = useRef<Promise<void> | null>(null);
   const browserRecordingStartedRef = useRef(false);
+  const browserRecordingSegmentTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const recordingContextRef = useRef({
     questionId: sessionQuestionId,
     questionText,
@@ -400,6 +353,7 @@ export default function VideoPanel({
     const room = new Room();
     roomRef.current = room;
     let contextTimer: ReturnType<typeof setInterval> | null = null;
+    stopRequestedRef.current = false;
 
     function ensureBrowserRecordingStarted(stream: MediaStream, safeAttemptId: string) {
       if (
@@ -442,7 +396,30 @@ export default function VideoPanel({
       }
     }
 
-    async function stopBrowserRecordingAndUpload() {
+    function stopBrowserSegmentTimer() {
+      if (browserRecordingSegmentTimerRef.current) {
+        clearInterval(browserRecordingSegmentTimerRef.current);
+        browserRecordingSegmentTimerRef.current = null;
+      }
+    }
+
+    function startBrowserSegmentTimer(stream: MediaStream, safeAttemptId: string) {
+      if (browserRecordingSegmentTimerRef.current) {
+        return;
+      }
+
+      browserRecordingSegmentTimerRef.current = setInterval(() => {
+        void stopBrowserRecordingAndUpload({
+          restartStream: stream,
+          restartAttemptId: safeAttemptId,
+        });
+      }, BROWSER_RECORDING_SEGMENT_MS);
+    }
+
+    async function stopBrowserRecordingAndUpload(options: {
+      restartStream?: MediaStream;
+      restartAttemptId?: string;
+    } = {}) {
       const safeAttemptId = attemptId?.trim();
       if (!isValidAttemptId(safeAttemptId)) {
         return;
@@ -450,7 +427,6 @@ export default function VideoPanel({
 
       if (browserRecordingUploadRef.current) {
         await browserRecordingUploadRef.current;
-        return;
       }
 
       const recorder = browserRecorderRef.current;
@@ -478,6 +454,12 @@ export default function VideoPanel({
           } finally {
             browserRecordingChunksRef.current = [];
             browserRecordingMimeTypeRef.current = null;
+            if (options.restartStream && isValidAttemptId(options.restartAttemptId)) {
+              ensureBrowserRecordingStarted(
+                options.restartStream,
+                options.restartAttemptId,
+              );
+            }
             resolve();
           }
         };
@@ -520,66 +502,14 @@ export default function VideoPanel({
       });
     }
 
-    async function ensureRecordingStarted() {
-      const safeAttemptId = attemptId?.trim();
-
-      if (!isValidAttemptId(safeAttemptId) || recordingStartedRef.current) {
-        return;
-      }
-
-      stopRequestedRef.current = false;
-
-      for (let startAttempt = 1; startAttempt <= 3; startAttempt += 1) {
-        recordingStartedRef.current = true;
-
-        try {
-          recordingEgressIdRef.current = await startServerRecording(safeAttemptId);
-          if (recordingEgressIdRef.current) {
-            onRecordingStartedRef.current?.(Date.now());
-            return;
-          }
-        } catch (error) {
-          recordingStartedRef.current = false;
-          console.error(
-            `Unable to start LiveKit recording (attempt ${startAttempt}/3):`,
-            error,
-          );
-
-          if (startAttempt < 3) {
-            await new Promise((resolve) =>
-              setTimeout(resolve, startAttempt * 1_000),
-            );
-          }
-        }
-      }
-    }
-
     async function ensureRecordingStopped() {
-      const egressId = recordingEgressIdRef.current;
-
       if (stopRequestedRef.current) {
         return;
       }
 
       stopRequestedRef.current = true;
-      recordingEgressIdRef.current = null;
-      let liveKitCompleted = false;
-
-      if (egressId) {
-        try {
-          const result = await stopServerRecording(egressId);
-          liveKitCompleted =
-            Boolean(result?.success) && result?.status === "completed";
-        } catch (error) {
-          console.error("Unable to stop LiveKit recording:", error);
-        } finally {
-          recordingStartedRef.current = false;
-        }
-      }
-
-      if (!liveKitCompleted) {
-        await stopBrowserRecordingAndUpload();
-      }
+      stopBrowserSegmentTimer();
+      await stopBrowserRecordingAndUpload();
     }
 
     onRecordingFinalizerChangeRef.current?.(ensureRecordingStopped);
@@ -615,6 +545,7 @@ export default function VideoPanel({
 
         cameraStreamRef.current = stream;
         ensureBrowserRecordingStarted(stream, safeAttemptId);
+        startBrowserSegmentTimer(stream, safeAttemptId);
 
         if (cancelled) {
           room.disconnect();
@@ -641,8 +572,6 @@ export default function VideoPanel({
             "Microphone track is unavailable; continuing with video-only recording.",
           );
         }
-
-        await ensureRecordingStarted();
 
         await publishRecordingContext().catch((error) => {
           console.warn("Unable to publish initial recording context:", error);
@@ -681,6 +610,7 @@ export default function VideoPanel({
       if (contextTimer) {
         clearInterval(contextTimer);
       }
+      stopBrowserSegmentTimer();
       void ensureRecordingStopped();
       onRecordingFinalizerChangeRef.current?.(null);
       room.disconnect();
