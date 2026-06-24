@@ -407,15 +407,27 @@ export async function generateAnswer(
       llmResult?.text ?? input.candidate_answer ?? ""
     );
 
-    if (!answer || answer.length < 15) {
+    if (!answer) {
       throw new Error("Invalid or empty answer");
     }
 
-    if (
-      !input.skip_relevance_validation &&
-      !validateAnswer(answer, input.question_text)
-    ) {
-      throw new Error("Answer failed relevance validation");
+    const hasMinimumLength = answer.length >= 15;
+    const relevanceChecked = !input.skip_relevance_validation;
+    const relevancePassed = relevanceChecked
+      ? validateAnswer(answer, input.question_text)
+      : null;
+
+    if (!hasMinimumLength || relevancePassed === false) {
+      console.warn(
+        JSON.stringify({
+          event: "answer.validation_low_confidence",
+          at: new Date().toISOString(),
+          question_id: input.question_id,
+          session_question_id: input.session_question_id ?? null,
+          minimum_length_passed: hasMinimumLength,
+          relevance_passed: relevancePassed,
+        })
+      );
     }
 
     console.log({
@@ -433,7 +445,8 @@ export async function generateAnswer(
       raw_candidate_answer: input.candidate_answer ?? null,
       llm: llmResult?.payload ?? null,
       validation: {
-        relevant: input.skip_relevance_validation ? null : true,
+        relevant: relevancePassed,
+        minimum_length_passed: hasMinimumLength,
         checked_at: new Date().toISOString(),
       },
     });

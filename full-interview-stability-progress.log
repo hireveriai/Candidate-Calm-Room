@@ -1,12 +1,11 @@
-[2026-06-23T11:28:06.726Z] connecting database
-[2026-06-23T11:28:06.951Z] waiting for server health
-[2026-06-23T11:28:08.319Z] seeding recruiter/job/interview/invite
-[2026-06-23T11:28:08.349Z] seed: existing fixture is stale; creating a fresh fixture
-[2026-06-23T11:28:08.413Z] seed: begin transaction
-[2026-06-23T11:28:08.467Z] seed: organization
-[2026-06-23T11:28:08.495Z] seed: recruiter user
-[2026-06-23T11:28:08.527Z] seed: recruiter profile
-[2026-06-23T11:28:08.556Z] seed: job
-[2026-06-23T11:28:08.588Z] seed: candidate
-[2026-06-23T11:28:08.621Z] seed: interview
-[2026-06-23T11:28:08.621Z] seed: insert interview row
+[2026-06-24T08:34:56.217Z] connecting database
+[2026-06-24T08:34:56.482Z] waiting for server health
+[2026-06-24T08:34:57.915Z] seeding recruiter/job/interview/invite
+[2026-06-24T08:34:57.981Z] seed: begin transaction
+[2026-06-24T08:34:58.034Z] seed: organization
+[2026-06-24T08:34:58.070Z] seed: recruiter user
+[2026-06-24T08:34:58.104Z] seed: recruiter profile
+[2026-06-24T08:34:58.133Z] seed: job
+[2026-06-24T08:34:58.164Z] seed: candidate
+[2026-06-24T08:34:58.196Z] seed: interview
+[2026-06-24T08:34:58.197Z] seed: insert interview row
