@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { requireCandidateSession } from "@/app/lib/candidateSession";
+import { buildAttemptTranscript } from "@/app/lib/livekit/recordingLifecycle";
 import { prisma } from "@/app/lib/prisma";
 
 export const dynamic = "force-dynamic";
@@ -69,12 +70,14 @@ export async function POST(request: NextRequest) {
     }
 
     const storageSize = Number(objects[0].size ?? body.sizeBytes ?? 0);
+    const transcript = await buildAttemptTranscript(attemptId);
 
     await prisma.$transaction([
       prisma.$executeRaw`
         update public.interview_recordings
         set status = 'completed',
             failure_reason = null,
+            transcript = coalesce(${transcript}, transcript),
             ended_at = timezone('utc', now())
         where recording_id = ${recordingId}::uuid
           and attempt_id = ${attemptId}::uuid

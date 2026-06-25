@@ -46,7 +46,7 @@ async function ensureRecordingSchema() {
       add column if not exists ended_at timestamptz
   `;
 
-    await prisma.$executeRaw`
+  await prisma.$executeRaw`
     create unique index if not exists idx_interview_recordings_egress_id
       on public.interview_recordings (egress_id)
       where egress_id is not null

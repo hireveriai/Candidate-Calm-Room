@@ -31,6 +31,16 @@ type Props = {
   ) => void;
 };
 
+type StartRecordingResponse = {
+  egressId?: string;
+  filePath?: string | null;
+  videoUrl?: string | null;
+  status?: string | null;
+  skipped?: boolean;
+  reason?: string;
+  error?: string;
+};
+
 const uuidPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -203,6 +213,9 @@ export default function VideoPanel({
   const browserRecordingMimeTypeRef = useRef<string | null>(null);
   const browserRecordingUploadRef = useRef<Promise<void> | null>(null);
   const browserRecordingStartedRef = useRef(false);
+  const recordingStartedNotifiedRef = useRef(false);
+  const serverRecordingEgressIdRef = useRef<string | null>(null);
+  const serverRecordingStartedRef = useRef(false);
   const recordingContextRef = useRef({
     questionId: sessionQuestionId,
     questionText,
@@ -351,6 +364,18 @@ export default function VideoPanel({
     roomRef.current = room;
     let contextTimer: ReturnType<typeof setInterval> | null = null;
     stopRequestedRef.current = false;
+    recordingStartedNotifiedRef.current = false;
+    serverRecordingEgressIdRef.current = null;
+    serverRecordingStartedRef.current = false;
+
+    function notifyRecordingStarted() {
+      if (recordingStartedNotifiedRef.current) {
+        return;
+      }
+
+      recordingStartedNotifiedRef.current = true;
+      onRecordingStartedRef.current?.(Date.now());
+    }
 
     function ensureBrowserRecordingStarted(stream: MediaStream, safeAttemptId: string) {
       if (
@@ -385,7 +410,7 @@ export default function VideoPanel({
         };
 
         recorder.start(5_000);
-        onRecordingStartedRef.current?.(Date.now());
+        notifyRecordingStarted();
       } catch (error) {
         browserRecorderRef.current = null;
         browserRecordingStartedRef.current = false;
@@ -393,9 +418,15 @@ export default function VideoPanel({
       }
     }
 
+    function discardBrowserRecordingChunks() {
+      browserRecordingChunksRef.current = [];
+      browserRecordingMimeTypeRef.current = null;
+    }
+
     async function stopBrowserRecordingAndUpload(options: {
       restartStream?: MediaStream;
       restartAttemptId?: string;
+      upload?: boolean;
     } = {}) {
       const safeAttemptId = attemptId?.trim();
       if (!isValidAttemptId(safeAttemptId)) {
@@ -415,7 +446,13 @@ export default function VideoPanel({
           browserRecorderRef.current = null;
           browserRecordingStartedRef.current = false;
 
+          if (options.upload === false) {
+            resolve();
+            return;
+          }
+
           if (!chunks.length) {
+            discardBrowserRecordingChunks();
             resolve();
             return;
           }
@@ -429,8 +466,7 @@ export default function VideoPanel({
           } catch (error) {
             console.error("Unable to upload browser recording fallback:", error);
           } finally {
-            browserRecordingChunksRef.current = [];
-            browserRecordingMimeTypeRef.current = null;
+            discardBrowserRecordingChunks();
             if (options.restartStream && isValidAttemptId(options.restartAttemptId)) {
               ensureBrowserRecordingStarted(
                 options.restartStream,
@@ -479,13 +515,89 @@ export default function VideoPanel({
       });
     }
 
+    async function startServerRecording(safeAttemptId: string) {
+      if (
+        serverRecordingStartedRef.current ||
+        serverRecordingEgressIdRef.current ||
+        !isValidAttemptId(safeAttemptId)
+      ) {
+        return;
+      }
+
+      const response = await fetch("/api/livekit/start-recording", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ attemptId: safeAttemptId }),
+      });
+      const payload = (await response.json().catch(() => null)) as
+        | StartRecordingResponse
+        | null;
+
+      if (!response.ok) {
+        throw new Error(payload?.error ?? "Unable to start LiveKit recording");
+      }
+
+      if (!payload?.egressId) {
+        console.warn(
+          "LiveKit recording was not started:",
+          payload?.reason ?? "missing egress id",
+        );
+        return;
+      }
+
+      serverRecordingEgressIdRef.current = payload.egressId;
+      serverRecordingStartedRef.current = true;
+      notifyRecordingStarted();
+    }
+
+    async function stopServerRecording() {
+      const egressId = serverRecordingEgressIdRef.current;
+      if (!egressId) {
+        return;
+      }
+
+      serverRecordingEgressIdRef.current = null;
+      serverRecordingStartedRef.current = false;
+
+      const response = await fetch("/api/livekit/stop-recording", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ egressId }),
+      });
+
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as
+          | { error?: string }
+          | null;
+        throw new Error(payload?.error ?? "Unable to stop LiveKit recording");
+      }
+    }
+
     async function ensureRecordingStopped() {
       if (stopRequestedRef.current) {
         return;
       }
 
       stopRequestedRef.current = true;
-      await stopBrowserRecordingAndUpload();
+      const hadServerRecording = Boolean(serverRecordingEgressIdRef.current);
+      await stopBrowserRecordingAndUpload({ upload: false });
+
+      if (!hadServerRecording) {
+        await stopBrowserRecordingAndUpload();
+        return;
+      }
+
+      try {
+        await stopServerRecording();
+        discardBrowserRecordingChunks();
+      } catch (error) {
+        console.error("Unable to finalize LiveKit recording:", error);
+        await stopBrowserRecordingAndUpload();
+      }
     }
 
     onRecordingFinalizerChangeRef.current?.(ensureRecordingStopped);
@@ -551,6 +663,11 @@ export default function VideoPanel({
         await publishRecordingContext().catch((error) => {
           console.warn("Unable to publish initial recording context:", error);
         });
+
+        await startServerRecording(safeAttemptId).catch((error) => {
+          console.error("Unable to start LiveKit egress recording:", error);
+        });
+
         contextTimer = setInterval(() => {
           void publishRecordingContext().catch((error) => {
             console.warn("Unable to refresh recording context:", error);

@@ -18,7 +18,7 @@ function liveKitTimestampToDate(value: bigint) {
   return Number.isFinite(milliseconds) ? new Date(milliseconds) : null;
 }
 
-async function buildAttemptTranscript(attemptId: string) {
+export async function buildAttemptTranscript(attemptId: string) {
   const rows = await prisma.$queryRaw<
     AttemptTranscriptRow[]
   >`
