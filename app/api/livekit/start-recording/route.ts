@@ -46,10 +46,17 @@ async function ensureRecordingSchema() {
       add column if not exists ended_at timestamptz
   `;
 
-  await prisma.$executeRaw`
+    await prisma.$executeRaw`
     create unique index if not exists idx_interview_recordings_egress_id
       on public.interview_recordings (egress_id)
       where egress_id is not null
+  `;
+
+  await prisma.$executeRaw`
+    create index if not exists idx_interview_recordings_active_attempt
+      on public.interview_recordings (attempt_id)
+      where status = 'recording'
+        and attempt_id is not null
   `;
 }
 
@@ -77,14 +84,21 @@ export async function POST(request: NextRequest) {
     await ensureRecordingSchema();
 
     const activeRows = await prisma.$queryRaw<
-      Array<{ egress_id: string | null; video_url: string | null }>
+      Array<{
+        egress_id: string | null;
+        video_url: string | null;
+        file_path: string | null;
+        status: string | null;
+      }>
     >`
-      select egress_id, video_url
+      select egress_id, video_url, file_path, status
       from public.interview_recordings
       where attempt_id = ${attemptId}::uuid
-        and status = 'recording'
+        and coalesce(status, 'recording') in ('recording', 'completed')
         and egress_id is not null
-      order by coalesce(started_at, created_at) desc
+      order by
+        case when status = 'recording' then 0 else 1 end,
+        coalesce(started_at, created_at) asc
       limit 1
     `;
 
@@ -93,7 +107,9 @@ export async function POST(request: NextRequest) {
     if (activeRecording?.egress_id) {
       return NextResponse.json({
         egressId: activeRecording.egress_id,
+        filePath: activeRecording.file_path,
         videoUrl: activeRecording.video_url,
+        status: activeRecording.status,
       });
     }
 

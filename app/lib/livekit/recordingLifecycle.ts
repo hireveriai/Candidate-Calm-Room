@@ -3,6 +3,12 @@ import { EgressStatus } from "livekit-server-sdk";
 import { prisma } from "@/app/lib/prisma";
 import { stopRecording } from "@/app/lib/livekit/egress";
 
+type AttemptTranscriptRow = {
+  question_order: number | null;
+  question_text: string | null;
+  answer_text: string | null;
+};
+
 function liveKitTimestampToDate(value: bigint) {
   if (value <= BigInt(0)) {
     return null;
@@ -10,6 +16,35 @@ function liveKitTimestampToDate(value: bigint) {
 
   const milliseconds = Number(value / BigInt(1_000_000));
   return Number.isFinite(milliseconds) ? new Date(milliseconds) : null;
+}
+
+async function buildAttemptTranscript(attemptId: string) {
+  const rows = await prisma.$queryRaw<
+    AttemptTranscriptRow[]
+  >`
+    select
+      sq.question_order,
+      sq.content as question_text,
+      ia.answer_text
+    from public.session_questions sq
+    left join public.interview_answers ia
+      on ia.session_question_id = sq.session_question_id
+    where sq.attempt_id = ${attemptId}::uuid
+    order by sq.asked_at asc nulls last, sq.question_order asc nulls last
+  `;
+
+  const lines = (rows as AttemptTranscriptRow[]).flatMap((row: AttemptTranscriptRow, index: number) => {
+    const questionNumber = row.question_order ?? index + 1;
+    const question = row.question_text?.replace(/\s+/g, " ").trim();
+    const answer = row.answer_text?.replace(/\s+/g, " ").trim();
+
+    return [
+      question ? `VERIS Q${questionNumber}: ${question}` : null,
+      answer ? `Candidate A${questionNumber}: ${answer}` : null,
+    ].filter((value): value is string => Boolean(value));
+  });
+
+  return lines.join("\n\n") || null;
 }
 
 export async function finalizeRecordingByEgressId(egressId: string) {
@@ -50,12 +85,16 @@ export async function finalizeRecordingByEgressId(egressId: string) {
       liveKitTimestampToDate(fileResult?.endedAt ?? BigInt(0)) ??
       liveKitTimestampToDate(egress.endedAt) ??
       new Date();
+    const transcript = completed
+      ? await buildAttemptTranscript(recording.attempt_id)
+      : null;
 
     await prisma.$transaction([
       prisma.$executeRaw`
         update public.interview_recordings
         set status = ${completed ? "completed" : "failed"},
             failure_reason = ${failureReason},
+            transcript = coalesce(${transcript}, transcript),
             started_at = coalesce(${mediaStartedAt}, started_at),
             ended_at = ${mediaEndedAt}
         where egress_id = ${egressId}

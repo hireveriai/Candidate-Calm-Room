@@ -34,8 +34,6 @@ type Props = {
 const uuidPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-const BROWSER_RECORDING_SEGMENT_MS = 30_000;
-
 function isValidAttemptId(value: string | null | undefined): value is string {
   return Boolean(value && uuidPattern.test(value.trim()));
 }
@@ -205,7 +203,6 @@ export default function VideoPanel({
   const browserRecordingMimeTypeRef = useRef<string | null>(null);
   const browserRecordingUploadRef = useRef<Promise<void> | null>(null);
   const browserRecordingStartedRef = useRef(false);
-  const browserRecordingSegmentTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const recordingContextRef = useRef({
     questionId: sessionQuestionId,
     questionText,
@@ -396,26 +393,6 @@ export default function VideoPanel({
       }
     }
 
-    function stopBrowserSegmentTimer() {
-      if (browserRecordingSegmentTimerRef.current) {
-        clearInterval(browserRecordingSegmentTimerRef.current);
-        browserRecordingSegmentTimerRef.current = null;
-      }
-    }
-
-    function startBrowserSegmentTimer(stream: MediaStream, safeAttemptId: string) {
-      if (browserRecordingSegmentTimerRef.current) {
-        return;
-      }
-
-      browserRecordingSegmentTimerRef.current = setInterval(() => {
-        void stopBrowserRecordingAndUpload({
-          restartStream: stream,
-          restartAttemptId: safeAttemptId,
-        });
-      }, BROWSER_RECORDING_SEGMENT_MS);
-    }
-
     async function stopBrowserRecordingAndUpload(options: {
       restartStream?: MediaStream;
       restartAttemptId?: string;
@@ -508,7 +485,6 @@ export default function VideoPanel({
       }
 
       stopRequestedRef.current = true;
-      stopBrowserSegmentTimer();
       await stopBrowserRecordingAndUpload();
     }
 
@@ -536,7 +512,6 @@ export default function VideoPanel({
 
         cameraStreamRef.current = stream;
         ensureBrowserRecordingStarted(stream, safeAttemptId);
-        startBrowserSegmentTimer(stream, safeAttemptId);
 
         const [liveKitUrl, token] = await Promise.all([
           fetchLiveKitBrowserUrl(),
@@ -610,7 +585,6 @@ export default function VideoPanel({
       if (contextTimer) {
         clearInterval(contextTimer);
       }
-      stopBrowserSegmentTimer();
       void ensureRecordingStopped();
       onRecordingFinalizerChangeRef.current?.(null);
       room.disconnect();
