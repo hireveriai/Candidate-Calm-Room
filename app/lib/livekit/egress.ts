@@ -116,30 +116,6 @@ function getEgressClient() {
   );
 }
 
-function getRecordingCompositeBaseUrl() {
-  const configuredUrl = getOptionalEnv("RECORDING_COMPOSITE_BASE_URL");
-  if (configuredUrl) {
-    return configuredUrl;
-  }
-
-  const deploymentHost =
-    getOptionalEnv("VERCEL_PROJECT_PRODUCTION_URL") ??
-    getOptionalEnv("VERCEL_URL");
-  if (deploymentHost) {
-    return `${normalizeHttpUrl(deploymentHost)}/recording/veris`;
-  }
-
-  const appUrl = getOptionalAnyEnv([
-    "NEXT_PUBLIC_APP_URL",
-    "NEXT_PUBLIC_SITE_URL",
-  ]);
-  if (appUrl) {
-    return `${normalizeHttpUrl(appUrl)}/recording/veris`;
-  }
-
-  return null;
-}
-
 export function buildRecordingFilePath(roomName: string, at = new Date()) {
   const timestamp = at.toISOString().replace(/[.:]/g, "-");
   return `recordings/${roomName}-${timestamp}.mp4`;
@@ -321,20 +297,13 @@ export async function startRecording(
     },
   });
 
-  const customBaseUrl = getRecordingCompositeBaseUrl();
   const info = await client.startRoomCompositeEgress(
     roomName,
     output,
-    customBaseUrl
-      ? {
-          layout: "veris-enterprise",
-          customBaseUrl,
-          encodingOptions: buildRecordingEncodingOptions(durationMinutes),
-        }
-      : {
-          layout: "single-speaker",
-          encodingOptions: buildRecordingEncodingOptions(durationMinutes),
-        },
+    {
+      layout: "single-speaker",
+      encodingOptions: buildRecordingEncodingOptions(durationMinutes),
+    },
   );
 
   if (!info.egressId) {
