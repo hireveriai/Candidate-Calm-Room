@@ -9,6 +9,13 @@ type AttemptTranscriptRow = {
   answer_text: string | null;
 };
 
+type RecoverableRecordingRow = {
+  recording_id: string;
+  file_path: string | null;
+  video_url: string | null;
+  audio_url: string | null;
+};
+
 function liveKitTimestampToDate(value: bigint) {
   if (value <= BigInt(0)) {
     return null;
@@ -137,7 +144,80 @@ export async function finalizeRecordingByEgressId(egressId: string) {
   }
 }
 
+function getRecordingBucket() {
+  return (
+    process.env.RECORDING_S3_BUCKET?.trim() ||
+    process.env.SUPABASE_STORAGE_BUCKET?.trim() ||
+    "recordings"
+  );
+}
+
+function normalizeStoragePath(row: RecoverableRecordingRow) {
+  const raw = row.file_path || row.video_url || row.audio_url || "";
+  const match = raw.match(/\/object\/(?:public|sign)\/[^/]+\/(.+)$/);
+
+  return decodeURIComponent(match?.[1] ?? raw).replace(/^\/+/, "");
+}
+
+async function recoverCompletedStorageRecordings(attemptId: string) {
+  const rows = await prisma.$queryRaw<RecoverableRecordingRow[]>`
+    select
+      recording_id::text,
+      file_path,
+      video_url,
+      audio_url
+    from public.interview_recordings
+    where attempt_id = ${attemptId}::uuid
+      and coalesce(status, '') <> 'completed'
+      and coalesce(file_path, video_url, audio_url, '') <> ''
+  `;
+
+  const bucket = getRecordingBucket();
+  const transcript = rows.length > 0 ? await buildAttemptTranscript(attemptId) : null;
+  const recovered = [];
+
+  for (const row of rows) {
+    const filePath = normalizeStoragePath(row);
+    if (!filePath) {
+      continue;
+    }
+
+    const objects = await prisma.$queryRaw<Array<{ id: string }>>`
+      select id::text
+      from storage.objects
+      where bucket_id = ${bucket}
+        and name = ${filePath}
+      limit 1
+    `;
+
+    if (!objects[0]) {
+      continue;
+    }
+
+    await prisma.$transaction([
+      prisma.$executeRaw`
+        update public.interview_recordings
+        set status = 'completed',
+            failure_reason = null,
+            transcript = coalesce(${transcript}, transcript),
+            ended_at = coalesce(ended_at, timezone('utc', now()))
+        where recording_id = ${row.recording_id}::uuid
+      `,
+      prisma.$executeRaw`
+        update public.interview_attempts
+        set recording_status = 'FINALIZED'
+        where attempt_id = ${attemptId}::uuid
+      `,
+    ]);
+
+    recovered.push({ recordingId: row.recording_id, filePath });
+  }
+
+  return recovered;
+}
+
 export async function finalizeActiveRecordings(attemptId: string) {
+  const recoveredBeforeStop = await recoverCompletedStorageRecordings(attemptId);
   const rows = await prisma.$queryRaw<Array<{ egress_id: string }>>`
     select egress_id
     from public.interview_recordings
@@ -148,6 +228,15 @@ export async function finalizeActiveRecordings(attemptId: string) {
   `;
 
   const results = [];
+  results.push(...recoveredBeforeStop.map((row) => ({
+    found: true,
+    completed: true,
+    status: "completed",
+    error: null,
+    recoveredFromStorageObject: true,
+    ...row,
+  })));
+
   for (const row of rows) {
     try {
       results.push(await finalizeRecordingByEgressId(row.egress_id));
@@ -159,6 +248,16 @@ export async function finalizeActiveRecordings(attemptId: string) {
       });
     }
   }
+
+  const recoveredAfterStop = await recoverCompletedStorageRecordings(attemptId);
+  results.push(...recoveredAfterStop.map((row) => ({
+    found: true,
+    completed: true,
+    status: "completed",
+    error: null,
+    recoveredFromStorageObject: true,
+    ...row,
+  })));
 
   return results;
 }
