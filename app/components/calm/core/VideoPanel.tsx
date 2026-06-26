@@ -563,6 +563,7 @@ export default function VideoPanel({
 
       const response = await fetch("/api/livekit/stop-recording", {
         method: "POST",
+        keepalive: true,
         headers: {
           "Content-Type": "application/json",
         },
@@ -593,7 +594,7 @@ export default function VideoPanel({
 
       try {
         await stopServerRecording();
-        discardBrowserRecordingChunks();
+        await stopBrowserRecordingAndUpload();
       } catch (error) {
         console.error("Unable to finalize LiveKit recording:", error);
         await stopBrowserRecordingAndUpload();

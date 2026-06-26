@@ -1,5 +1,6 @@
 import { prisma } from "@/app/lib/prisma";
 import { assertUuid, logInterviewEvent } from "@/app/lib/interviewReliability";
+import { finalizeActiveRecordings } from "@/app/lib/livekit/recordingLifecycle";
 import {
   HEARTBEAT_INTERVAL_MS,
   RECONNECT_GRACE_WINDOW_SECONDS,
@@ -316,6 +317,14 @@ export async function runInterviewWatchdog() {
     });
 
     if (Number(updatedRows) > 0) {
+      await finalizeActiveRecordings(row.attempt_id).catch((error: unknown) => {
+        logInterviewEvent("error", "watchdog.recording_finalize_failed", {
+          attemptId: row.attempt_id,
+          interviewId: row.interview_id,
+          prismaFailure: error,
+        });
+      });
+
       abandoned += 1;
       attempts.push(row.attempt_id);
       logInterviewEvent("warn", "watchdog.abandoned_attempt", {
