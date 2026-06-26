@@ -118,6 +118,8 @@ export async function POST(request: Request) {
       duration: body.duration,
       answer_mode: "spoken",
       answer_payload: answerPayload,
+      skip_llm: true,
+      skip_relevance_validation: true,
     });
 
     console.log(

@@ -10,6 +10,7 @@
     "lint": "eslint",
     "validate:production": "node scripts/validate-production.js",
     "report:test-run": "node scripts/generate-test-run-report.js",
+    "repair:recording-transcripts": "node scripts/repair-recording-transcripts.js",
     "stability:full-interview": "node scripts/full-interview-stability-simulation.js"
   },
   "dependencies": {
