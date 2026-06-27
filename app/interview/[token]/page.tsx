@@ -1581,11 +1581,12 @@ export default function Page() {
 
   const submitAnswer = async () => {
     if (!sessionQuestionId || !attemptId || !candidateId || !questionId) return;
+    await new Promise((resolve) => setTimeout(resolve, 300));
     const rawTranscript = transcriptRef.current.trim() || transcript.trim();
     const cleanedTranscript = cleanTranscript(
       rawTranscript
     );
-    const safeTranscript = cleanedTranscript || "No response provided.";
+    const safeTranscript = cleanedTranscript;
     const answerDuration = questionStartTimeRef.current
       ? Math.max(1, Math.round((Date.now() - questionStartTimeRef.current) / 1000))
       : 0;
@@ -1606,14 +1607,17 @@ export default function Page() {
         duration: answerDuration,
       });
 
-    await postJson("/api/session/evaluate-answer", {
-      answerId: answer.answer_id,
-      sessionQuestionId,
-      transcript: answer.answer_text || safeTranscript,
-      rawTranscript: rawTranscript || safeTranscript,
-      focusMetrics,
-      behaviorSignals,
-    });
+    const answerText = cleanTranscript(answer.answer_text || safeTranscript);
+    if (answerText) {
+      await postJson("/api/session/evaluate-answer", {
+        answerId: answer.answer_id,
+        sessionQuestionId,
+        transcript: answerText,
+        rawTranscript: rawTranscript || answerText,
+        focusMetrics,
+        behaviorSignals,
+      });
+    }
 
     resetInactivityTimeout();
 

@@ -1,5 +1,6 @@
 import {
   assertAnswerContextMatches,
+  createPendingSpokenAnswer,
   generateAnswer,
   getLogicalQuestionId,
   getSessionQuestionContext,
@@ -26,6 +27,10 @@ type RequestBody = {
 
 function normalizeTranscript(text: string) {
   return text.replace(/\s+/g, " ").trim();
+}
+
+function isNoResponseSentinel(text: string) {
+  return /^no response provided\.?$/i.test(normalizeTranscript(text));
 }
 
 function validationStatus(error: Error) {
@@ -58,9 +63,9 @@ export async function POST(request: Request) {
     const transcript = normalizeTranscript(body.transcript ?? "");
     const rawTranscript = normalizeTranscript(body.rawTranscript ?? "");
 
-    if (!sessionQuestionId || !transcript) {
+    if (!sessionQuestionId) {
       return Response.json(
-        { error: "sessionQuestionId and transcript are required" },
+        { error: "sessionQuestionId is required" },
         { status: 400 }
       );
     }
@@ -107,6 +112,34 @@ export async function POST(request: Request) {
       original_transcript: rawTranscript || transcript,
       submitted_question_text: body.questionText?.trim() || null,
     } satisfies JsonValue;
+
+    if (!transcript || isNoResponseSentinel(transcript)) {
+      const pendingRecord = await createPendingSpokenAnswer({
+        question_id: logicalQuestionId,
+        question_text: context.question_text,
+        candidate_id: context.candidate_id,
+        attempt_id: context.attempt_id,
+        session_question_id: context.session_question_id,
+        candidate_answer: "",
+        duration: body.duration,
+        answer_mode: "spoken",
+        answer_payload: {
+          ...answerPayload,
+          original_transcript: rawTranscript || null,
+        },
+      });
+
+      logInterviewEvent("info", "answer.transcription_pending", {
+        attemptId: context.attempt_id,
+        candidateId: context.candidate_id,
+        questionSequence: null,
+        aiLatencyMs: Date.now() - startedAt,
+        state: "ANSWER_PROCESSING",
+        nextState: "FOLLOWUP_GENERATING",
+      });
+
+      return Response.json(pendingRecord satisfies AnswerRecord);
+    }
 
     const result = await generateAnswer({
       question_id: logicalQuestionId,

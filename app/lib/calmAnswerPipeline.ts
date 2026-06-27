@@ -255,14 +255,6 @@ function mergePayloads(...payloads: Array<JsonValue | undefined>): JsonValue {
   return merged;
 }
 
-function getPayloadObject(payload: JsonValue | null | undefined) {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    return {};
-  }
-
-  return payload as Record<string, JsonValue>;
-}
-
 async function setAnswerStatus(params: {
   answerId: string;
   status: AnswerStatus;
@@ -475,6 +467,32 @@ export async function generateAnswer(
 
     throw error;
   }
+}
+
+export async function createPendingSpokenAnswer(
+  input: GenerateAnswerInput
+): Promise<AnswerRecord> {
+  const initialAnswer = await ensureGeneratingAnswer(input);
+  const payload = mergePayloads(initialAnswer.record.answer_payload, input.answer_payload, {
+    answer_mode: input.answer_mode ?? "spoken",
+    candidate_id: input.candidate_id,
+    question_id: input.question_id,
+    session_question_id: input.session_question_id ?? null,
+    duration: typeof input.duration === "number" ? input.duration : null,
+    live_transcript_missing: true,
+    transcription_pending: true,
+    pending_reason: "browser_speech_recognition_empty",
+    pending_at: new Date().toISOString(),
+  });
+
+  const record = await setAnswerStatus({
+    answerId: initialAnswer.record.answer_id,
+    status: "generating",
+    answerText: null,
+    answerPayload: payload,
+  });
+
+  return record;
 }
 
 export async function getSessionQuestionContext(params: {

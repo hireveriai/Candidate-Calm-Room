@@ -1,5 +1,6 @@
 import { finalizeInterviewAttempt } from "@/app/lib/interviewCompletion";
 import { finalizeActiveRecordings } from "@/app/lib/livekit/recordingLifecycle";
+import { repairPendingAnswersFromRecording } from "@/app/lib/recordingTranscriptRepair";
 import { canAskNextQuestion } from "@/app/lib/calmTiming";
 import { prisma } from "@/app/lib/prisma";
 import { requireCandidateSession } from "@/app/lib/candidateSession";
@@ -146,6 +147,12 @@ async function completeInterviewWithoutStrandingCandidate(params: {
 }) {
   try {
     await finalizeActiveRecordings(params.attemptId);
+    await repairPendingAnswersFromRecording(params.attemptId).catch((repairError: unknown) => {
+      logInterviewEvent("error", "question.transcript_auto_repair_failed", {
+        attemptId: params.attemptId,
+        prismaFailure: repairError,
+      });
+    });
 
     const completionResult = await finalizeInterviewAttempt({
       attemptId: params.attemptId,
