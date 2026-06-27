@@ -218,6 +218,7 @@ export default function Page() {
     "Interview complete. Thank you for your time."
   );
   const [showExit, setShowExit] = useState(false);
+  const [exitEnding, setExitEnding] = useState(false);
 
   const [verisState, setVerisState] = useState<VerisState>("idle");
   const [currentQuestion, setCurrentQuestion] = useState("");
@@ -839,6 +840,7 @@ export default function Page() {
       }
 
       terminationInFlightRef.current = false;
+      setExitEnding(false);
     }
   };
 
@@ -1216,16 +1218,20 @@ export default function Page() {
   const endInterview = async ({
     completed = false,
     message,
+    finalizeRecording = true,
   }: {
     completed?: boolean;
     message?: string;
+    finalizeRecording?: boolean;
   } = {}) => {
     exitIntentRef.current = true;
 
-    try {
-      await recordingFinalizerRef.current?.();
-    } catch (error) {
-      console.error("Unable to finalize recording before ending interview:", error);
+    if (finalizeRecording) {
+      try {
+        await recordingFinalizerRef.current?.();
+      } catch (error) {
+        console.error("Unable to finalize recording before ending interview:", error);
+      }
     }
 
     if (document.fullscreenElement) {
@@ -1238,6 +1244,7 @@ export default function Page() {
     }
     setStarted(false);
     setShowExit(false);
+    setExitEnding(false);
     setIsTransitioning(false);
     setVerisState("idle");
     setCurrentQuestion("");
@@ -1281,8 +1288,28 @@ export default function Page() {
   };
 
   const handleExit = async () => {
+    if (exitEnding || terminationInFlightRef.current) {
+      return;
+    }
+
+    setExitEnding(true);
     setShowExit(false);
-    await terminateInterview("manual_exit", {
+
+    const exitMessage =
+      "Interview ended early. Your completed responses were saved and partial evaluation will continue securely.";
+
+    const finalizeRecording = recordingFinalizerRef.current;
+    void finalizeRecording?.().catch((error) => {
+      console.error("Unable to finalize recording after manual exit:", error);
+    });
+
+    await endInterview({
+      completed: true,
+      message: exitMessage,
+      finalizeRecording: false,
+    });
+
+    void terminateInterview("manual_exit", {
       message:
         "Interview ended early. Your completed responses were saved and scored as a partial interview.",
     });
@@ -2480,10 +2507,15 @@ export default function Page() {
         </main>
 
         <button
-          onClick={() => setShowExit(true)}
+          onClick={() => {
+            if (!exitEnding && !terminationInFlightRef.current) {
+              setShowExit(true);
+            }
+          }}
+          disabled={exitEnding || terminationInFlightRef.current}
           className="absolute right-4 top-[19px] z-20 rounded-md border border-white/10 px-3 py-2 text-[11px] font-medium text-slate-400 transition hover:border-red-300/20 hover:bg-red-300/[0.06] hover:text-red-200 sm:right-8"
         >
-          Exit
+          {exitEnding ? "Ending..." : "Exit"}
         </button>
       </CalmLayout>
 
@@ -2508,9 +2540,13 @@ export default function Page() {
         <ExitModal
           onConfirm={handleExit}
           onCancel={() => {
+            if (exitEnding) {
+              return;
+            }
             setShowExit(false);
             void document.documentElement.requestFullscreen();
           }}
+          busy={exitEnding}
         />
       )}
     </>

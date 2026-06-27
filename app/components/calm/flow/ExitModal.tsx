@@ -3,9 +3,11 @@
 export default function ExitModal({
   onConfirm,
   onCancel,
+  busy = false,
 }: {
   onConfirm: () => void;
   onCancel: () => void;
+  busy?: boolean;
 }) {
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
@@ -17,14 +19,19 @@ export default function ExitModal({
         </p>
 
         <div className="flex justify-end gap-3">
-          <button onClick={onCancel} className="text-gray-300">
+          <button
+            onClick={onCancel}
+            disabled={busy}
+            className="text-gray-300 disabled:cursor-not-allowed disabled:opacity-50"
+          >
             Cancel
           </button>
           <button
             onClick={onConfirm}
-            className="bg-red-500 px-4 py-2 rounded"
+            disabled={busy}
+            className="bg-red-500 px-4 py-2 rounded disabled:cursor-not-allowed disabled:opacity-60"
           >
-            Yes, Exit
+            {busy ? "Ending..." : "Yes, Exit"}
           </button>
         </div>
       </div>
