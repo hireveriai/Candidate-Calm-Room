@@ -7,6 +7,8 @@ type AttemptTranscriptRow = {
   question_order: number | null;
   question_text: string | null;
   answer_text: string | null;
+  code_text: string | null;
+  language: string | null;
 };
 
 type RecoverableRecordingRow = {
@@ -32,10 +34,14 @@ export async function buildAttemptTranscript(attemptId: string) {
     select
       sq.question_order,
       sq.content as question_text,
-      ia.answer_text
+      ia.answer_text,
+      cs.code_text,
+      cs.language
     from public.session_questions sq
     left join public.interview_answers ia
       on ia.session_question_id = sq.session_question_id
+    left join public.interview_code_submissions cs
+      on cs.answer_id = ia.answer_id
     where sq.attempt_id = ${attemptId}::uuid
     order by sq.asked_at asc nulls last, sq.question_order asc nulls last
   `;
@@ -43,7 +49,10 @@ export async function buildAttemptTranscript(attemptId: string) {
   const lines = (rows as AttemptTranscriptRow[]).flatMap((row: AttemptTranscriptRow, index: number) => {
     const questionNumber = row.question_order ?? index + 1;
     const question = row.question_text?.replace(/\s+/g, " ").trim();
-    const answer = row.answer_text?.replace(/\s+/g, " ").trim();
+    const code = row.code_text?.trim();
+    const answer = code
+      ? `[Coding submission in ${row.language || "code"}]\n${code}`
+      : row.answer_text?.replace(/\s+/g, " ").trim();
 
     return [
       question ? `VERIS Q${questionNumber}: ${question}` : null,

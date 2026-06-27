@@ -33,6 +33,17 @@ export function canSubmitAnswer(
   return askedAt <= endsAt && now.getTime() - askedAt.getTime() <= answerLimitMs;
 }
 
+export function canSubmitCodingAnswer(session: SessionTiming) {
+  if (!session.ends_at) {
+    return false;
+  }
+
+  const now = Date.now();
+  const endsAt = new Date(session.ends_at).getTime();
+
+  return now <= endsAt + FINAL_ANSWER_GRACE_MS;
+}
+
 export function getRemainingSessionMs(session: SessionTiming) {
   if (!session.ends_at) {
     return 0;

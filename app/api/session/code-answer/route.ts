@@ -1,11 +1,15 @@
 import {
+  after,
+} from "next/server";
+
+import {
   assertAnswerContextMatches,
   generateAnswer,
   getLogicalQuestionId,
   getSessionQuestionContext,
   type JsonValue,
 } from "@/app/lib/calmAnswerPipeline";
-import { canSubmitAnswer } from "@/app/lib/calmTiming";
+import { canSubmitCodingAnswer } from "@/app/lib/calmTiming";
 import { requireCandidateSession } from "@/app/lib/candidateSession";
 import { prisma } from "@/app/lib/prisma";
 
@@ -204,6 +208,48 @@ async function reviewCodeSubmission(input: {
   } satisfies CodeReviewResult;
 }
 
+async function reviewAndPersistCodeSubmission(params: {
+  answerId: string;
+  prompt: string;
+  language: string;
+  code: string;
+}) {
+  try {
+    const review = await reviewCodeSubmission({
+      prompt: params.prompt,
+      language: params.language,
+      code: params.code,
+    });
+
+    if (!review) {
+      return;
+    }
+
+    try {
+      await prisma.$queryRaw`
+        select public.record_coding_review(
+          ${params.answerId}::uuid,
+          ${review.code_quality_score}::numeric,
+          ${review.correctness_score}::numeric,
+          ${review.problem_solving_score}::numeric,
+          ${review.confidence_score}::numeric,
+          ${review.fraud_score}::numeric,
+          ${review.review_summary}::text,
+          ${JSON.stringify(review.review_json)}::jsonb
+        )
+      `;
+    } catch (error) {
+      if (!hasMissingCodingReviewFunction(error)) {
+        console.warn("Coding review function failed; using direct persistence fallback:", error);
+      }
+
+      await recordCodingReviewFallback(params.answerId, review);
+    }
+  } catch (error) {
+    console.error("Coding review error:", error);
+  }
+}
+
 export async function POST(request: Request) {
   try {
     const body = (await request.json()) as RequestBody;
@@ -237,11 +283,7 @@ export async function POST(request: Request) {
     });
 
     if (
-      !canSubmitAnswer(
-        { ends_at: context.ends_at },
-        { asked_at: context.asked_at },
-        { allowFinalGrace: true }
-      )
+      !canSubmitCodingAnswer({ ends_at: context.ends_at })
     ) {
       return Response.json(
         { error: "Answer window has expired" },
@@ -302,44 +344,19 @@ export async function POST(request: Request) {
           updated_at = now()
     `;
 
-    let review: CodeReviewResult | null = null;
-
-    try {
-      review = await reviewCodeSubmission({
+    after(async () => {
+      await reviewAndPersistCodeSubmission({
+        answerId: result.record.answer_id,
         prompt: body.prompt?.trim() || context.question_text || "Coding question",
         language,
         code,
       });
-
-      if (review) {
-        try {
-          await prisma.$queryRaw`
-            select public.record_coding_review(
-              ${result.record.answer_id}::uuid,
-              ${review.code_quality_score}::numeric,
-              ${review.correctness_score}::numeric,
-              ${review.problem_solving_score}::numeric,
-              ${review.confidence_score}::numeric,
-              ${review.fraud_score}::numeric,
-              ${review.review_summary}::text,
-              ${JSON.stringify(review.review_json)}::jsonb
-            )
-          `;
-        } catch (error) {
-          if (!hasMissingCodingReviewFunction(error)) {
-            console.warn("Coding review function failed; using direct persistence fallback:", error);
-          }
-
-          await recordCodingReviewFallback(result.record.answer_id, review);
-        }
-      }
-    } catch (error) {
-      console.error("Coding review error:", error);
-    }
+    });
 
     return Response.json({
       ...result.record,
-      review,
+      review: null,
+      reviewPending: true,
     });
   } catch (error) {
     const message =

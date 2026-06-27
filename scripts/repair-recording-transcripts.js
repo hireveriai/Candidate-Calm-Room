@@ -406,8 +406,11 @@ async function fetchQuestions(client, attemptId) {
     `
       select
         ans.answer_id::text,
+        ans.answer_text,
         ans.answer_payload,
         iae.evaluation_id::text,
+        cs.code_text,
+        cs.language,
         coalesce(sq.question_order, iq.question_order) as question_order,
         coalesce(sq.content, iq.question_text, q.question_text) as question
       from public.interview_answers ans
@@ -426,6 +429,7 @@ async function fetchQuestions(client, attemptId) {
       left join public.questions q
         on q.question_id = coalesce(ans.question_id, sq.question_id, iq.question_id)
       left join public.interview_answer_evaluations iae on iae.answer_id = ans.answer_id
+      left join public.interview_code_submissions cs on cs.answer_id = ans.answer_id
       where ans.attempt_id = $1::uuid
       order by coalesce(sq.question_order, iq.question_order) asc nulls last, ans.answered_at asc nulls last
     `,
@@ -442,7 +446,9 @@ async function fetchQuestions(client, attemptId) {
 function buildRecordingTranscript(questions, answersByOrder) {
   return questions
     .map((row) => {
-      const answer = answersByOrder.get(row.question_order) ?? "No response provided.";
+      const answer = row.code_text
+        ? `[Coding submission in ${row.language || "code"}]\n${row.code_text}`
+        : answersByOrder.get(row.question_order) ?? "No response provided.";
       return `VERIS Q${row.question_order}: ${row.question} Candidate A${row.question_order}: ${normalizeText(answer)}`;
     })
     .join(" ");
@@ -453,6 +459,14 @@ async function persistRepair(client, openai, target, transcription, alignedAnswe
   const answersByOrder = new Map();
 
   for (const question of questions) {
+    if (question.code_text) {
+      answersByOrder.set(
+        question.question_order,
+        `[Coding submission in ${question.language || "code"}]\n${question.code_text}`
+      );
+      continue;
+    }
+
     const aligned = alignedAnswers.find(
       (item) => Number(item.question_order) === question.question_order
     );

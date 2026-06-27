@@ -131,7 +131,11 @@ export default function CodeEditorModal({
   };
 
   const handleSubmit = async () => {
-    if (!code.trim() || submitting) return;
+    if (submitting) return;
+    if (!code.trim()) {
+      setSubmitError("Write or paste code before submitting.");
+      return;
+    }
 
     setSubmitting(true);
     setSubmitError(null);

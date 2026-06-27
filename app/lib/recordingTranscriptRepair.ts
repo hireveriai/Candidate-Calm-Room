@@ -8,6 +8,9 @@ type RepairQuestionRow = {
   answer_payload: unknown | null;
   question_order: number | null;
   question: string | null;
+  answer_text: string | null;
+  code_text: string | null;
+  language: string | null;
 };
 
 type RepairRecordingRow = {
@@ -79,6 +82,9 @@ async function fetchRepairQuestions(attemptId: string) {
     select
       ans.answer_id::text,
       ans.answer_payload,
+      ans.answer_text,
+      cs.code_text,
+      cs.language,
       coalesce(sq.question_order, iq.question_order) as question_order,
       coalesce(sq.content, iq.question_text, q.question_text) as question
     from public.interview_answers ans
@@ -96,6 +102,8 @@ async function fetchRepairQuestions(attemptId: string) {
       )
     left join public.questions q
       on q.question_id = coalesce(ans.question_id, sq.question_id, iq.question_id)
+    left join public.interview_code_submissions cs
+      on cs.answer_id = ans.answer_id
     where ans.attempt_id = ${attemptId}::uuid
     order by coalesce(sq.question_order, iq.question_order) asc nulls last, ans.answered_at asc nulls last
   `;
@@ -219,24 +227,33 @@ function skillWeightedScore(clarity: number, depth: number, confidence: number) 
 }
 
 export async function repairPendingAnswersFromRecording(attemptId: string) {
-  if (!process.env.OPENAI_API_KEY || !getSupabaseConfig()) {
-    return { repaired: 0, skipped: "missing_configuration" };
-  }
+  const codeRepair = await repairCodingAnswersFromSubmissions(attemptId);
 
   const pendingRows = await prisma.$queryRaw<Array<{ answer_id: string }>>`
-    select answer_id::text
-    from public.interview_answers
-    where attempt_id = ${attemptId}::uuid
+    select ans.answer_id::text
+    from public.interview_answers ans
+    left join public.interview_code_submissions cs
+      on cs.answer_id = ans.answer_id
+    where ans.attempt_id = ${attemptId}::uuid
+      and cs.answer_id is null
       and (
-        coalesce(status, '') in ('generating', 'failed')
-        or nullif(btrim(coalesce(answer_text, '')), '') is null
-        or lower(btrim(coalesce(answer_text, ''))) in ('no response provided', 'no response provided.')
+        coalesce(ans.status, '') in ('generating', 'failed')
+        or nullif(btrim(coalesce(ans.answer_text, '')), '') is null
+        or lower(btrim(coalesce(ans.answer_text, ''))) in ('no response provided', 'no response provided.')
       )
     limit 1
   `;
 
   if (pendingRows.length === 0) {
-    return { repaired: 0, skipped: "no_pending_answers" };
+    return codeRepair.repaired > 0
+      ? { repaired: codeRepair.repaired, skipped: "no_spoken_pending_answers" }
+      : { repaired: 0, skipped: "no_pending_answers" };
+  }
+
+  if (!process.env.OPENAI_API_KEY || !getSupabaseConfig()) {
+    return codeRepair.repaired > 0
+      ? { repaired: codeRepair.repaired, skipped: "missing_spoken_repair_configuration" }
+      : { repaired: 0, skipped: "missing_configuration" };
   }
 
   const recording = await fetchBestRecording(attemptId);
@@ -273,6 +290,10 @@ export async function repairPendingAnswersFromRecording(attemptId: string) {
   let repaired = 0;
   await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     for (const question of questions) {
+      if (question.code_text) {
+        continue;
+      }
+
       const answer = answersByOrder.get(Number(question.question_order));
       if (!answer || isNoResponse(answer)) {
         continue;
@@ -367,5 +388,51 @@ export async function repairPendingAnswersFromRecording(attemptId: string) {
     `;
   });
 
-  return { repaired, recordingId: recording.recording_id };
+  return { repaired: repaired + codeRepair.repaired, recordingId: recording.recording_id };
+}
+
+function formatCodingSubmission(language: string | null, code: string) {
+  return `[Coding submission in ${language || "code"}]\n${code.trim()}`;
+}
+
+async function repairCodingAnswersFromSubmissions(attemptId: string) {
+  const rows = await prisma.$queryRaw<Array<{
+    answer_id: string;
+    language: string | null;
+    code_text: string | null;
+  }>>`
+    select
+      ans.answer_id::text,
+      cs.language,
+      cs.code_text
+    from public.interview_answers ans
+    join public.interview_code_submissions cs
+      on cs.answer_id = ans.answer_id
+    where ans.attempt_id = ${attemptId}::uuid
+      and cs.code_text is not null
+      and nullif(btrim(cs.code_text), '') is not null
+      and (
+        nullif(btrim(coalesce(ans.answer_text, '')), '') is null
+        or lower(btrim(coalesce(ans.answer_text, ''))) in ('no response provided', 'no response provided.')
+      )
+  `;
+
+  let repaired = 0;
+  for (const row of rows) {
+    const answer = formatCodingSubmission(row.language, row.code_text || "");
+    await prisma.$executeRaw`
+      update public.interview_answers
+      set answer_text = ${answer},
+          answer_payload = coalesce(answer_payload, '{}'::jsonb) || ${JSON.stringify({
+            answer_mode: "coding",
+            coding_submission_repaired_from_code_table: true,
+            coding_submission_repaired_at: new Date().toISOString(),
+          })}::jsonb,
+          status = 'completed'
+      where answer_id = ${row.answer_id}::uuid
+    `;
+    repaired += 1;
+  }
+
+  return { repaired };
 }

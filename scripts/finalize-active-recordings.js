@@ -91,10 +91,17 @@ async function findStorageObject(client, filePath) {
 async function buildAttemptTranscript(client, attemptId) {
   const result = await client.query(
     `
-      select sq.question_order, sq.content as question_text, ia.answer_text
+      select
+        sq.question_order,
+        sq.content as question_text,
+        ia.answer_text,
+        cs.code_text,
+        cs.language
       from public.session_questions sq
       left join public.interview_answers ia
         on ia.session_question_id = sq.session_question_id
+      left join public.interview_code_submissions cs
+        on cs.answer_id = ia.answer_id
       where sq.attempt_id = $1::uuid
       order by sq.asked_at asc nulls last, sq.question_order asc nulls last
     `,
@@ -104,7 +111,9 @@ async function buildAttemptTranscript(client, attemptId) {
   const lines = result.rows.flatMap((row, index) => {
     const questionNumber = row.question_order ?? index + 1;
     const question = String(row.question_text ?? "").replace(/\s+/g, " ").trim();
-    const answer = String(row.answer_text ?? "").replace(/\s+/g, " ").trim();
+    const answer = row.code_text
+      ? `[Coding submission in ${row.language || "code"}]\n${String(row.code_text).trim()}`
+      : String(row.answer_text ?? "").replace(/\s+/g, " ").trim();
     return [
       question ? `VERIS Q${questionNumber}: ${question}` : null,
       answer ? `Candidate A${questionNumber}: ${answer}` : null,

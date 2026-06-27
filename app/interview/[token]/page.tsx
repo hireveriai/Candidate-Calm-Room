@@ -1756,29 +1756,19 @@ export default function Page() {
     language: string;
   }) => {
     if (isAdvancingRef.current) return;
-    if (answerWindowEnded && !sessionTimeEnded) {
-      setWarning({
-        type: "hard",
-        message: "Answer window has expired.",
-        visible: true,
-      });
-      return;
-    }
     isAdvancingRef.current = true;
-
-    stopAll();
-    stopAudioAnalysis();
-
-    addEvent({
-      type: "coding_end",
-      severity: "low",
-    });
 
     setIsTransitioning(true);
     setVerisState("thinking");
 
     try {
       await submitCodeAnswer(payload.code, payload.language);
+      stopAll();
+      stopAudioAnalysis();
+      addEvent({
+        type: "coding_end",
+        severity: "low",
+      });
       setShowCoding(false);
       if (sessionTimeEnded) {
         await completeAfterFinalAnswer();
@@ -1890,6 +1880,14 @@ export default function Page() {
 
   const handleAutoNext = async () => {
     if (isAdvancingRef.current) return;
+    if (showCoding) {
+      setWarning({
+        type: "soft",
+        message: "Please submit your coding answer to continue.",
+        visible: true,
+      });
+      return;
+    }
     if (answerWindowEnded && !sessionTimeEnded) {
       setWarning({
         type: "hard",
@@ -1902,13 +1900,6 @@ export default function Page() {
 
     stopAll();
     stopAudioAnalysis();
-
-    if (showCoding) {
-      addEvent({
-        type: "coding_end",
-        severity: "low",
-      });
-    }
 
     setVerisState("thinking");
     setShowCoding(false);
@@ -2200,6 +2191,7 @@ export default function Page() {
       interviewFinished ||
       interviewInterrupted ||
       isReconnecting ||
+      showCoding ||
       isAdvancingRef.current
     ) {
       return;
@@ -2214,6 +2206,7 @@ export default function Page() {
     interviewInterrupted,
     isReconnecting,
     sessionTimeEnded,
+    showCoding,
     started,
   ]);
 
@@ -2525,13 +2518,11 @@ export default function Page() {
           question={currentQuestion}
           onSubmit={handleCodingSubmit}
           onClose={() => {
-            addEvent({
-              type: "coding_end",
-              severity: "low",
+            setWarning({
+              type: "soft",
+              message: "Please submit your coding answer to continue.",
+              visible: true,
             });
-
-            setShowCoding(false);
-            void handleAutoNext();
           }}
         />
       ) : null}
