@@ -1,3 +1,5 @@
+import { after } from "next/server";
+
 import { finalizeInterviewAttempt } from "@/app/lib/interviewCompletion";
 import { finalizeActiveRecordings } from "@/app/lib/livekit/recordingLifecycle";
 import { repairPendingAnswersFromRecording } from "@/app/lib/recordingTranscriptRepair";
@@ -145,47 +147,37 @@ async function completeInterviewWithoutStrandingCandidate(params: {
   reason?: string;
   message?: string;
 }) {
-  try {
-    await finalizeActiveRecordings(params.attemptId);
-    await repairPendingAnswersFromRecording(params.attemptId).catch((repairError: unknown) => {
-      logInterviewEvent("error", "question.transcript_auto_repair_failed", {
-        attemptId: params.attemptId,
-        prismaFailure: repairError,
+  after(async () => {
+    try {
+      await finalizeActiveRecordings(params.attemptId);
+      await repairPendingAnswersFromRecording(params.attemptId).catch((repairError: unknown) => {
+        logInterviewEvent("error", "question.transcript_auto_repair_failed", {
+          attemptId: params.attemptId,
+          prismaFailure: repairError,
+        });
       });
-    });
 
-    const completionResult = await finalizeInterviewAttempt({
-      attemptId: params.attemptId,
-      earlyExit: false,
-      currentPhase: "closing",
-    });
+      await finalizeInterviewAttempt({
+        attemptId: params.attemptId,
+        earlyExit: false,
+        currentPhase: "closing",
+      });
+    } catch (error) {
+      logInterviewEvent("error", "question.completion_deferred", {
+        attemptId: params.attemptId,
+        state: "COMPLETING",
+        nextState: "FINALIZING",
+        prismaFailure: error,
+      });
+    }
+  });
 
-    return Response.json({
-      complete: true,
-      ...completionResult,
-      ...(params.reason ? { reason: params.reason } : {}),
-      ...(params.message ? { message: params.message } : {}),
-    });
-  } catch (error) {
-    logInterviewEvent("error", "question.completion_deferred", {
-      attemptId: params.attemptId,
-      state: "COMPLETING",
-      nextState: "FINALIZING",
-      prismaFailure: error,
-    });
-
-    return Response.json(
-      {
-        complete: true,
-        completionPending: true,
-        reason: params.reason ?? "completion_deferred",
-        message:
-          params.message ??
-          "Interview complete. Your responses were saved and final processing will continue securely.",
-      },
-      { status: 202 }
-    );
-  }
+  return Response.json({
+    complete: true,
+    completionPending: true,
+    ...(params.reason ? { reason: params.reason } : {}),
+    ...(params.message ? { message: params.message } : {}),
+  });
 }
 
 const SKILL_KEYWORDS = [

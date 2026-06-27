@@ -130,6 +130,10 @@ const INACTIVITY_TIMEOUT_MS = 5 * 60 * 1000;
 const DISCONNECT_GRACE_MS = 15 * 1000;
 const MAX_ANSWER_TIME_MS = 3 * 60 * 1000;
 const STRICT_TAB_TERMINATION = false;
+const FINAL_VERIS_CLOSING_LINE =
+  "Thank you for your time. Your interview is now complete.";
+const FINAL_COMPLETION_MESSAGE =
+  "Thank you for your time. Your responses have been recorded. You may now close this window.";
 const PENDING_TERMINATION_STORAGE_KEY = "hireveri.pendingTermination";
 const PENDING_COMPLETION_STORAGE_KEY = "hireveri.pendingCompletion";
 const PENDING_RECOVERY_EVENT_STORAGE_KEY = "hireveri.pendingRecoveryEvent";
@@ -845,7 +849,7 @@ export default function Page() {
   };
 
   const completeInterview = async (
-    message = "Finished. Interview completed."
+    message = FINAL_COMPLETION_MESSAGE
   ) => {
     if (completionInFlightRef.current) {
       return;
@@ -862,17 +866,25 @@ export default function Page() {
 
     try {
       if (payload) {
-        try {
-          await postCompletionPayload(payload);
-          clearPendingCompletion();
-        } catch {
-          persistPendingCompletion(payload);
-        }
+        void postCompletionPayload(payload)
+          .then(() => {
+            clearPendingCompletion();
+          })
+          .catch(() => {
+            persistPendingCompletion(payload);
+          });
       }
+
+      setVerisState("speaking");
+      await Promise.race([
+        speak(FINAL_VERIS_CLOSING_LINE),
+        new Promise((resolve) => setTimeout(resolve, 8000)),
+      ]);
 
       await endInterview({
         completed: true,
         message,
+        finalizeRecording: false,
       });
     } finally {
       completionInFlightRef.current = false;
@@ -1698,23 +1710,15 @@ export default function Page() {
     });
 
     if (data.complete || !data.question || !data.session_question_id) {
-      const completionPayload = {
-        attemptId,
-        currentPhase: getCurrentPhaseFromState(verisState, showCoding),
-      } satisfies CompletionPayload;
-
-      try {
-        await postJson("/api/session/complete", completionPayload);
-        clearPendingCompletion();
-      } catch {
-        persistPendingCompletion(completionPayload);
-      }
-
+      setVerisState("speaking");
+      await Promise.race([
+        speak(FINAL_VERIS_CLOSING_LINE),
+        new Promise((resolve) => setTimeout(resolve, 8000)),
+      ]);
       await endInterview({
         completed: true,
-        message:
-          data.message ??
-          "Interview complete. Your responses, including follow-up questions, have been recorded.",
+        message: FINAL_COMPLETION_MESSAGE,
+        finalizeRecording: false,
       });
       return;
     }
@@ -1737,17 +1741,23 @@ export default function Page() {
       currentPhase: "closing",
     } satisfies CompletionPayload;
 
-    try {
-      await postCompletionPayload(completionPayload);
-      clearPendingCompletion();
-    } catch {
-      persistPendingCompletion(completionPayload);
-    }
+    void postCompletionPayload(completionPayload)
+      .then(() => {
+        clearPendingCompletion();
+      })
+      .catch(() => {
+        persistPendingCompletion(completionPayload);
+      });
 
+    setVerisState("speaking");
+    await Promise.race([
+      speak(FINAL_VERIS_CLOSING_LINE),
+      new Promise((resolve) => setTimeout(resolve, 8000)),
+    ]);
     await endInterview({
       completed: true,
-      message:
-        "Interview time ended. Your final answer has been recorded and the session is complete.",
+      message: FINAL_COMPLETION_MESSAGE,
+      finalizeRecording: false,
     });
   };
 
