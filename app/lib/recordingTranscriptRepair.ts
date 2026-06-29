@@ -16,6 +16,7 @@ type RepairQuestionRow = {
 type RepairRecordingRow = {
   recording_id: string;
   file_path: string;
+  transcript: string | null;
   object_size: bigint | number | string | null;
 };
 
@@ -120,6 +121,7 @@ async function fetchBestRecording(attemptId: string) {
     select
       ir.recording_id::text,
       ir.file_path,
+      ir.transcript,
       coalesce((so.metadata->>'size')::bigint, 0) as object_size
     from public.interview_recordings ir
     left join storage.objects so
@@ -128,7 +130,10 @@ async function fetchBestRecording(attemptId: string) {
     where ir.attempt_id = ${attemptId}::uuid
       and ir.status = 'completed'
       and ir.file_path is not null
-      and coalesce((so.metadata->>'size')::bigint, 0) > 0
+      and (
+        coalesce((so.metadata->>'size')::bigint, 0) > 0
+        or nullif(btrim(coalesce(ir.transcript, '')), '') is not null
+      )
       and coalesce((so.metadata->>'size')::bigint, 0) <= ${MAX_REPAIR_OBJECT_BYTES}
     order by extract(epoch from (coalesce(ir.ended_at, ir.created_at, now()) - coalesce(ir.started_at, ir.created_at, now()))) desc nulls last,
              case when ir.file_path ilike '%.mp4%' then 0 else 1 end,
@@ -263,7 +268,10 @@ export async function repairPendingAnswersFromRecording(attemptId: string) {
 
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   const questions = await fetchRepairQuestions(attemptId);
-  const transcription = await transcribeRecording(openai, recording.file_path);
+  const existingRecordingTranscript = normalizeText(recording.transcript);
+  const transcription = existingRecordingTranscript
+    ? { text: existingRecordingTranscript, segments: [] }
+    : await transcribeRecording(openai, recording.file_path);
   const transcriptText = normalizeText(transcription.text);
 
   if (!transcriptText) {

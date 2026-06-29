@@ -21,6 +21,7 @@ import {
   speak,
   startRecognition,
   stopRecognition,
+  type VerisSpeechRecognition,
 } from "@/app/services/verisVoice";
 
 import useCognitiveSignals from "@/app/hooks/useCognitiveSignals";
@@ -244,7 +245,7 @@ export default function Page() {
 
   const [audioLevel, setAudioLevel] = useState(0);
 
-  const recognitionRef = useRef<any>(null);
+  const recognitionRef = useRef<VerisSpeechRecognition | null>(null);
   const silenceTimer = useRef<any>(null);
   const timerRef = useRef<any>(null);
   const questionTimeoutRef = useRef<any>(null);
@@ -1710,6 +1711,12 @@ export default function Page() {
     });
 
     if (data.complete || !data.question || !data.session_question_id) {
+      try {
+        await recordingFinalizerRef.current?.();
+      } catch (error) {
+        console.error("Unable to finalize recording before interview completion:", error);
+      }
+
       setVerisState("speaking");
       await Promise.race([
         speak(FINAL_VERIS_CLOSING_LINE),
@@ -1734,6 +1741,12 @@ export default function Page() {
   const completeAfterFinalAnswer = async () => {
     if (!attemptId) {
       return;
+    }
+
+    try {
+      await recordingFinalizerRef.current?.();
+    } catch (error) {
+      console.error("Unable to finalize recording before interview completion:", error);
     }
 
     const completionPayload = {
@@ -1806,6 +1819,16 @@ export default function Page() {
       (text) => {
         const nextTranscript = text.trim();
         if (!nextTranscript) return;
+
+        transcriptRef.current = nextTranscript;
+        setTranscript(nextTranscript);
+      },
+      undefined,
+      (text) => {
+        const nextTranscript = text.trim();
+        if (!nextTranscript || nextTranscript.length < transcriptRef.current.length) {
+          return;
+        }
 
         transcriptRef.current = nextTranscript;
         setTranscript(nextTranscript);

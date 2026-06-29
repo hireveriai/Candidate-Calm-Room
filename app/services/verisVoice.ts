@@ -1,8 +1,59 @@
-let recognition: any = null;
+export type VerisSpeechRecognition = {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  onresult: ((event: SpeechRecognitionEventLike) => void) | null;
+  onend: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+};
+
+type SpeechRecognitionConstructor = new () => VerisSpeechRecognition;
+
+type SpeechRecognitionAlternative = {
+  transcript?: string;
+};
+
+type SpeechRecognitionResultLike = {
+  isFinal: boolean;
+  0?: SpeechRecognitionAlternative;
+};
+
+type SpeechRecognitionResultListLike = {
+  length: number;
+  [index: number]: SpeechRecognitionResultLike;
+};
+
+type SpeechRecognitionEventLike = {
+  resultIndex: number;
+  results: SpeechRecognitionResultListLike;
+};
+
+type SpeechRecognitionWindow = Window &
+  typeof globalThis & {
+    webkitSpeechRecognition?: SpeechRecognitionConstructor;
+    SpeechRecognition?: SpeechRecognitionConstructor;
+  };
+
+let recognition: VerisSpeechRecognition | null = null;
 let stopRequested = false;
 
 function normalizeChunk(text: string) {
   return text.replace(/\s+/g, " ").trim();
+}
+
+function mergeTranscriptParts(parts: string[]) {
+  const merged: string[] = [];
+
+  for (const part of parts.map(normalizeChunk).filter(Boolean)) {
+    const last = merged[merged.length - 1];
+
+    if (!last || (last !== part && !last.endsWith(part))) {
+      merged.push(part);
+    }
+  }
+
+  return merged.join(" ").trim();
 }
 
 export function speak(text: string): Promise<void> {
@@ -32,8 +83,8 @@ export function startRecognition(
   onFinalResult?: (text: string) => void
 ) {
   const SpeechRecognition =
-    (window as any).webkitSpeechRecognition ||
-    (window as any).SpeechRecognition;
+    (window as SpeechRecognitionWindow).webkitSpeechRecognition ||
+    (window as SpeechRecognitionWindow).SpeechRecognition;
 
   if (!SpeechRecognition) {
     console.warn("STT not supported");
@@ -43,16 +94,17 @@ export function startRecognition(
   recognition = new SpeechRecognition();
   stopRequested = false;
   let finalizedChunks: string[] = [];
+  let bestTranscript = "";
 
   recognition.continuous = true;
   recognition.interimResults = true;
   recognition.lang = "en-US";
 
-  recognition.onresult = (event: any) => {
+  recognition.onresult = (event) => {
     let interimChunks: string[] = [];
 
     for (let i = event.resultIndex; i < event.results.length; i++) {
-      const chunk = normalizeChunk(event.results[i][0].transcript || "");
+      const chunk = normalizeChunk(event.results[i][0]?.transcript || "");
 
       if (!chunk) {
         continue;
@@ -69,12 +121,23 @@ export function startRecognition(
       }
     }
 
-    const finalizedText = finalizedChunks.join(" ").trim();
-    onResult([...finalizedChunks, ...interimChunks].join(" ").trim());
-    onFinalResult?.(finalizedText);
+    const finalizedText = mergeTranscriptParts(finalizedChunks);
+    const observedText = mergeTranscriptParts([...finalizedChunks, ...interimChunks]);
+
+    if (observedText.length >= bestTranscript.length) {
+      bestTranscript = observedText;
+    }
+
+    onResult(bestTranscript || observedText || finalizedText);
+    onFinalResult?.(finalizedText || bestTranscript);
   };
 
   recognition.onend = () => {
+    if (bestTranscript) {
+      onResult(bestTranscript);
+      onFinalResult?.(mergeTranscriptParts(finalizedChunks) || bestTranscript);
+    }
+
     if (!stopRequested && onEnd) onEnd();
   };
 
@@ -83,7 +146,7 @@ export function startRecognition(
   return recognition;
 }
 
-export function stopRecognition(instance: any) {
+export function stopRecognition(instance: VerisSpeechRecognition | null) {
   try {
     stopRequested = true;
     instance?.stop();

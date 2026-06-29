@@ -585,7 +585,6 @@ export default function VideoPanel({
 
       stopRequestedRef.current = true;
       const hadServerRecording = Boolean(serverRecordingEgressIdRef.current);
-      await stopBrowserRecordingAndUpload({ upload: false });
 
       if (!hadServerRecording) {
         await stopBrowserRecordingAndUpload();
@@ -594,7 +593,7 @@ export default function VideoPanel({
 
       try {
         await stopServerRecording();
-        await stopBrowserRecordingAndUpload();
+        await stopBrowserRecordingAndUpload({ upload: false });
       } catch (error) {
         console.error("Unable to finalize LiveKit recording:", error);
         await stopBrowserRecordingAndUpload();
