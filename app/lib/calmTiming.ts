@@ -1,5 +1,6 @@
 export const MAX_ANSWER_TIME = 3 * 60 * 1000;
 export const FINAL_ANSWER_GRACE_MS = 8 * 60 * 1000;
+export const MAX_CODING_ANSWER_TIME = 45 * 60 * 1000;
 
 type SessionTiming = {
   ends_at: Date | string | null;
@@ -33,13 +34,23 @@ export function canSubmitAnswer(
   return askedAt <= endsAt && now.getTime() - askedAt.getTime() <= answerLimitMs;
 }
 
-export function canSubmitCodingAnswer(session: SessionTiming) {
+export function canSubmitCodingAnswer(
+  session: SessionTiming,
+  sessionQuestion?: SessionQuestionTiming
+) {
   if (!session.ends_at) {
     return false;
   }
 
   const now = Date.now();
   const endsAt = new Date(session.ends_at).getTime();
+  const askedAt = sessionQuestion?.asked_at
+    ? new Date(sessionQuestion.asked_at).getTime()
+    : null;
+
+  if (askedAt !== null && Number.isFinite(askedAt)) {
+    return askedAt <= endsAt && now <= askedAt + MAX_CODING_ANSWER_TIME;
+  }
 
   return now <= endsAt + FINAL_ANSWER_GRACE_MS;
 }

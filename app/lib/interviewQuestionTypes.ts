@@ -116,6 +116,10 @@ export function classifyInterviewQuestion(
 
   const codingSignals = [
     /\b(write|implement|create|build)\s+(a|an|the)?\s*(function|method|class|api|component|program|script|query|stored procedure|table)\b/,
+    /\b(write|implement|create|build)\s+(a|an|the)?\s*(node\.?js|javascript|typescript|ts|js|python|java|go|rust|c\+\+|c#)?\s*(function|method|class|utility|validator|parser|handler)\b/,
+    /\bfunction\s+that\s+(validates?|returns?|parses?|checks?|handles?)\b/,
+    /\b(validates?|validate)\s+an?\s+api\s+payload\b/,
+    /\btyped\s+(success|error)\s+result\b/,
     /\bsolve (this|the)?\s*(algorithm|coding challenge|programming problem)\b/,
     /\bdebug (this|the)?\s*(code|function|program|query)\b/,
     /\bfix (this|the)?\s*(code|bug|query)\b/,

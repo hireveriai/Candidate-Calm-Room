@@ -283,7 +283,10 @@ export async function POST(request: Request) {
     });
 
     if (
-      !canSubmitCodingAnswer({ ends_at: context.ends_at })
+      !canSubmitCodingAnswer(
+        { ends_at: context.ends_at },
+        { asked_at: context.asked_at }
+      )
     ) {
       return Response.json(
         { error: "Answer window has expired" },
