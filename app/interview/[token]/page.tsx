@@ -867,13 +867,12 @@ export default function Page() {
 
     try {
       if (payload) {
-        void postCompletionPayload(payload)
-          .then(() => {
-            clearPendingCompletion();
-          })
-          .catch(() => {
-            persistPendingCompletion(payload);
-          });
+        try {
+          await postCompletionPayload(payload);
+          clearPendingCompletion();
+        } catch {
+          persistPendingCompletion(payload);
+        }
       }
 
       setVerisState("speaking");
@@ -1754,13 +1753,12 @@ export default function Page() {
       currentPhase: "closing",
     } satisfies CompletionPayload;
 
-    void postCompletionPayload(completionPayload)
-      .then(() => {
-        clearPendingCompletion();
-      })
-      .catch(() => {
-        persistPendingCompletion(completionPayload);
-      });
+    try {
+      await postCompletionPayload(completionPayload);
+      clearPendingCompletion();
+    } catch {
+      persistPendingCompletion(completionPayload);
+    }
 
     setVerisState("speaking");
     await Promise.race([
