@@ -265,6 +265,7 @@ export default function Page() {
   const maxLookAwayMsRef = useRef(0);
   const exitIntentRef = useRef(false);
   const transcriptRef = useRef("");
+  const listeningActiveRef = useRef(false);
   const isAdvancingRef = useRef(false);
   const terminationInFlightRef = useRef(false);
   const completionInFlightRef = useRef(false);
@@ -1813,6 +1814,7 @@ export default function Page() {
   };
 
   const startListening = () => {
+    listeningActiveRef.current = true;
     recognitionRef.current = startRecognition(
       (text) => {
         const nextTranscript = text.trim();
@@ -1821,7 +1823,20 @@ export default function Page() {
         transcriptRef.current = nextTranscript;
         setTranscript(nextTranscript);
       },
-      undefined,
+      () => {
+        recognitionRef.current = null;
+        setMicrophoneReady(false);
+
+        if (!listeningActiveRef.current || isAdvancingRef.current) {
+          return;
+        }
+
+        window.setTimeout(() => {
+          if (listeningActiveRef.current && !recognitionRef.current && !isAdvancingRef.current) {
+            startListening();
+          }
+        }, 250);
+      },
       (text) => {
         const nextTranscript = text.trim();
         if (!nextTranscript || nextTranscript.length < transcriptRef.current.length) {
@@ -1836,6 +1851,7 @@ export default function Page() {
   };
 
   const stopAll = () => {
+    listeningActiveRef.current = false;
     stopRecognition(recognitionRef.current);
     recognitionRef.current = null;
     setMicrophoneReady(false);

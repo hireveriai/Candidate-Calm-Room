@@ -90,6 +90,8 @@ type ResumeSignalRow = {
 
 type LatestAnswerRow = {
   answer_text: string | null;
+  status: string | null;
+  answer_payload: unknown | null;
 };
 
 type NextCoreQuestionRow = {
@@ -366,6 +368,37 @@ function summarizeAnswer(answer: string | null | undefined): AnswerSummary {
     keyPoints: extractKeyPoints(cleanedText),
     cleanedText,
   };
+}
+
+function readPayloadText(payload: unknown, keys: string[]) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return "";
+  }
+
+  for (const key of keys) {
+    const value = (payload as Record<string, unknown>)[key];
+    if (typeof value === "string" && normalizeText(value)) {
+      return normalizeText(value);
+    }
+  }
+
+  return "";
+}
+
+function hasPendingTranscription(row: LatestAnswerRow | null | undefined) {
+  if (!row) {
+    return false;
+  }
+
+  const payload = row.answer_payload;
+  const payloadPending =
+    payload &&
+    typeof payload === "object" &&
+    !Array.isArray(payload) &&
+    ((payload as Record<string, unknown>).transcription_pending === true ||
+      (payload as Record<string, unknown>).live_transcript_missing === true);
+
+  return row.status === "generating" || Boolean(payloadPending);
 }
 
 function isExperienceOverviewQuestion(question: string | null | undefined) {
@@ -1014,13 +1047,16 @@ export async function POST(request: Request) {
       const latestAnswerRecord = latestQuestion
         ? (
             await prisma.$queryRaw<LatestAnswerRow[]>`
-                select answer_text
+                select answer_text, status, answer_payload
                 from public.interview_answers
                 where session_question_id = ${latestQuestion.session_question_id}::uuid
-                  and status = 'completed'
-                  and answer_text is not null
-                  and nullif(trim(answer_text), '') is not null
-                order by answered_at desc nulls last
+                order by
+                  case
+                    when status = 'completed' and nullif(trim(coalesce(answer_text, '')), '') is not null then 0
+                    when status = 'generating' then 1
+                    else 2
+                  end,
+                  answered_at desc nulls last
                 limit 1
             `
           )[0]
@@ -1069,7 +1105,18 @@ export async function POST(request: Request) {
         }
       }
 
-      const effectiveLastAnswer = latestAnswerRecord?.answer_text || "";
+      const pendingTranscription = hasPendingTranscription(latestAnswerRecord);
+      const payloadTranscript = readPayloadText(latestAnswerRecord?.answer_payload, [
+        "original_transcript",
+        "raw_candidate_answer",
+        "transcript",
+      ]);
+      const effectiveLastAnswer =
+        latestAnswerRecord?.answer_text ||
+        payloadTranscript ||
+        (pendingTranscription
+          ? "Candidate response is being transcribed from the interview recording."
+          : "");
       const answerSummary = summarizeAnswer(effectiveLastAnswer);
       const wordCount = effectiveLastAnswer
         ? effectiveLastAnswer.trim().split(/\s+/).length
@@ -1120,6 +1167,7 @@ export async function POST(request: Request) {
         answerAlreadyCoversExperienceOverview(effectiveLastAnswer);
 
       const shouldAskFollowUp =
+        !pendingTranscription &&
         (latestQuestion?.question_kind === "core" ||
           latestQuestion?.question_kind === "follow_up") &&
         !shouldPreferNextCore &&
@@ -1324,7 +1372,7 @@ export async function POST(request: Request) {
         }
       }
 
-      if (!createdQuestion && remainingFollowUps > 0 && effectiveLastAnswer) {
+      if (!createdQuestion && remainingFollowUps > 0 && effectiveLastAnswer && !pendingTranscription) {
         if (!completion.allowFollowUp) {
           sessionQuestion = {
             session_question_id: null,
@@ -1386,6 +1434,45 @@ export async function POST(request: Request) {
         createdQuestion = createdQuestions[0] ?? null;
         createdQuestionType = "follow_up";
         }
+      }
+
+      if (
+        !createdQuestion &&
+        !sessionQuestion &&
+        pendingTranscription &&
+        askedTotal < maxQuestionInteractions &&
+        canAskNextQuestion({ ends_at: attempt.ends_at })
+      ) {
+        const continuationQuestion =
+          nextCore?.questionText ??
+          "Let's continue with the next area. Can you describe one recent project, your responsibilities, and the outcome?";
+        const createdQuestions = await prisma.$queryRaw<CreatedSessionQuestionRow[]>`
+            insert into public.session_questions (
+              attempt_id,
+              question_id,
+              content,
+              source,
+              question_kind,
+              question_order
+            )
+            values (
+              ${attemptId}::uuid,
+              ${nextCore?.questionId ?? null}::uuid,
+              ${continuationQuestion}::text,
+              ${nextCore?.questionText ? "system" : "ai"}::text,
+              ${nextCore?.questionText ? "core" : "follow_up"}::text,
+              ${askedTotal + 1}::integer
+            )
+            returning
+              session_question_id,
+              question_id,
+              content,
+              source,
+              asked_at,
+              question_kind
+          `;
+        createdQuestion = createdQuestions[0] ?? null;
+        createdQuestionType = nextCore?.questionType ?? "open_ended";
       }
 
       sessionQuestion = sessionQuestion ?? (createdQuestion
