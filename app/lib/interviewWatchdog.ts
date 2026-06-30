@@ -1,6 +1,8 @@
 import { prisma } from "@/app/lib/prisma";
+import { finalizeInterviewAttempt } from "@/app/lib/interviewCompletion";
 import { assertUuid, logInterviewEvent } from "@/app/lib/interviewReliability";
 import { finalizeActiveRecordings } from "@/app/lib/livekit/recordingLifecycle";
+import { repairPendingAnswersFromRecording } from "@/app/lib/recordingTranscriptRepair";
 import {
   HEARTBEAT_INTERVAL_MS,
   RECONNECT_GRACE_WINDOW_SECONDS,
@@ -23,6 +25,74 @@ type WatchdogResult = {
   skipped: number;
   attempts: string[];
 };
+
+type CompletionEvidenceRow = {
+  expected_questions: number | null;
+  session_questions: number;
+  answer_rows: number;
+  non_empty_answers: number;
+  recordings_with_transcript: number;
+};
+
+async function loadCompletionEvidence(attemptId: string) {
+  const rows = await prisma.$queryRaw<CompletionEvidenceRow[]>`
+    select
+      coalesce(
+        ia.expected_questions,
+        i.question_count,
+        (
+          select count(*)
+          from public.interview_questions iq
+          where iq.interview_id = ia.interview_id
+        )::int,
+        0
+      )::int as expected_questions,
+      (
+        select count(*)
+        from public.session_questions sq
+        where sq.attempt_id = ia.attempt_id
+      )::int as session_questions,
+      (
+        select count(*)
+        from public.interview_answers ans
+        where ans.attempt_id = ia.attempt_id
+      )::int as answer_rows,
+      (
+        select count(*)
+        from public.interview_answers ans
+        where ans.attempt_id = ia.attempt_id
+          and nullif(trim(coalesce(ans.answer_text, '')), '') is not null
+          and lower(trim(ans.answer_text)) <> 'no response provided.'
+      )::int as non_empty_answers,
+      (
+        select count(*)
+        from public.interview_recordings ir
+        where ir.attempt_id = ia.attempt_id
+          and nullif(trim(coalesce(ir.transcript, '')), '') is not null
+      )::int as recordings_with_transcript
+    from public.interview_attempts ia
+    join public.interviews i
+      on i.interview_id = ia.interview_id
+    where ia.attempt_id = ${attemptId}::uuid
+    limit 1
+  `;
+
+  return rows[0] ?? null;
+}
+
+function hasCompletionEvidence(evidence: CompletionEvidenceRow | null) {
+  if (!evidence) {
+    return false;
+  }
+
+  const expectedQuestions = Math.max(evidence.expected_questions ?? 0, 1);
+  const askedEnough = evidence.session_questions >= expectedQuestions;
+  const answeredEnough =
+    evidence.non_empty_answers >= Math.max(expectedQuestions - 1, 1) ||
+    evidence.answer_rows >= expectedQuestions;
+
+  return askedEnough && answeredEnough && evidence.recordings_with_transcript > 0;
+}
 
 export async function recordInterviewHeartbeat(input: HeartbeatInput) {
   const attemptId = assertUuid(input.attemptId, "attemptId");
@@ -266,6 +336,45 @@ export async function runInterviewWatchdog() {
     if (recentReconnect && (row.reconnect_count ?? 0) < 5) {
       skipped += 1;
       continue;
+    }
+
+    const completionEvidence = await loadCompletionEvidence(row.attempt_id);
+    if (hasCompletionEvidence(completionEvidence)) {
+      try {
+        await finalizeActiveRecordings(row.attempt_id);
+        await repairPendingAnswersFromRecording(row.attempt_id).catch((error: unknown) => {
+          logInterviewEvent("error", "watchdog.transcript_repair_failed", {
+            attemptId: row.attempt_id,
+            interviewId: row.interview_id,
+            prismaFailure: error,
+          });
+        });
+        await finalizeInterviewAttempt({
+          attemptId: row.attempt_id,
+          earlyExit: false,
+          terminationType: row.close_reason === "SESSION_TIME_EXPIRED" ? "timeout" : "completed",
+          currentPhase: "closing",
+        });
+
+        skipped += 1;
+        logInterviewEvent("info", "watchdog.finalized_evidence_complete_attempt", {
+          attemptId: row.attempt_id,
+          interviewId: row.interview_id,
+          state: row.status,
+          nextState: "COMPLETED",
+          completionEvidence,
+        });
+        continue;
+      } catch (error) {
+        logInterviewEvent("error", "watchdog.evidence_completion_failed", {
+          attemptId: row.attempt_id,
+          interviewId: row.interview_id,
+          state: row.status,
+          nextState: "ABANDONED",
+          completionEvidence,
+          prismaFailure: error,
+        });
+      }
     }
 
     const finalStatus =
