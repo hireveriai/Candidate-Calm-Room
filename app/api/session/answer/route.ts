@@ -10,6 +10,7 @@ import {
 import { canSubmitAnswer } from "@/app/lib/calmTiming";
 import { requireCandidateSession } from "@/app/lib/candidateSession";
 import { assertUuid, logInterviewEvent } from "@/app/lib/interviewReliability";
+import { repairSpokenTranscript } from "@/app/lib/spokenTranscriptRepair";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -108,8 +109,27 @@ export async function POST(request: Request) {
     }
 
     const logicalQuestionId = getLogicalQuestionId(context);
+    const repairResult = !transcript || isNoResponseSentinel(transcript)
+      ? null
+      : await repairSpokenTranscript({
+          transcript,
+          rawTranscript: rawTranscript || transcript,
+          questionText: context.question_text,
+        });
+    const finalTranscript = repairResult?.text ?? transcript;
     const answerPayload = {
       original_transcript: rawTranscript || transcript,
+      browser_transcript: transcript,
+      repaired_transcript: repairResult?.repaired ? finalTranscript : null,
+      transcript_repair: repairResult
+        ? {
+            repaired: repairResult.repaired,
+            reason: repairResult.reason,
+            changes: repairResult.changes,
+            provider: repairResult.provider ?? null,
+            model: repairResult.model ?? null,
+          }
+        : null,
       submitted_question_text: body.questionText?.trim() || null,
     } satisfies JsonValue;
 
@@ -147,7 +167,7 @@ export async function POST(request: Request) {
       candidate_id: context.candidate_id,
       attempt_id: context.attempt_id,
       session_question_id: context.session_question_id,
-      candidate_answer: transcript,
+      candidate_answer: finalTranscript,
       duration: body.duration,
       answer_mode: "spoken",
       answer_payload: answerPayload,

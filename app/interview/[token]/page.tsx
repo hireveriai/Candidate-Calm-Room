@@ -138,14 +138,17 @@ const FINAL_COMPLETION_MESSAGE =
 const PENDING_TERMINATION_STORAGE_KEY = "hireveri.pendingTermination";
 const PENDING_COMPLETION_STORAGE_KEY = "hireveri.pendingCompletion";
 const PENDING_RECOVERY_EVENT_STORAGE_KEY = "hireveri.pendingRecoveryEvent";
+const SPEECH_AUDIO_CONSTRAINTS: MediaTrackConstraints = {
+  echoCancellation: true,
+  noiseSuppression: true,
+  autoGainControl: true,
+  channelCount: 1,
+  sampleRate: 48000,
+  sampleSize: 16,
+};
 
 function cleanTranscript(text: string) {
-  const collapsed = text
-    .replace(/\s+/g, " ")
-    .replace(/\b(um|uh|erm|hmm)\b/gi, "")
-    .replace(/\s+,/g, ",")
-    .replace(/\s+\./g, ".")
-    .trim();
+  const collapsed = text.replace(/\s+/g, " ").trim();
 
   const repeatedSentence = /(.{15,}?[.!?])(?:\s+\1)+/gi;
   const withoutRepeatedSentences = collapsed.replace(repeatedSentence, "$1");
@@ -156,15 +159,7 @@ function cleanTranscript(text: string) {
     "$1"
   );
 
-  const sentenceCased =
-    withoutRepeatedPhrases.charAt(0).toUpperCase() +
-    withoutRepeatedPhrases.slice(1);
-
-  if (!sentenceCased) {
-    return "";
-  }
-
-  return /[.!?]$/.test(sentenceCased) ? sentenceCased : `${sentenceCased}.`;
+  return withoutRepeatedPhrases;
 }
 
 function roundMetric(value: number, digits = 2) {
@@ -1879,7 +1874,9 @@ export default function Page() {
   // 🎤 AUDIO ANALYSIS (FIXED CLEANUP)
   const startAudioAnalysis = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: SPEECH_AUDIO_CONSTRAINTS,
+      });
       audioStreamRef.current = stream;
       setMicrophoneReady(true);
 
