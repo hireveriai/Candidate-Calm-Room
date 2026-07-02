@@ -131,6 +131,7 @@ const VerisOrb = dynamic(
 const INACTIVITY_TIMEOUT_MS = 5 * 60 * 1000;
 const DISCONNECT_GRACE_MS = 15 * 1000;
 const MAX_ANSWER_TIME_MS = 3 * 60 * 1000;
+const RECORDING_STARTUP_WAIT_MS = 7000;
 const STRICT_TAB_TERMINATION = false;
 const FINAL_VERIS_CLOSING_LINE =
   "Thank you for your time. Your interview is now complete.";
@@ -260,8 +261,10 @@ export default function Page() {
   const lookAwayEventsRef = useRef(0);
   const maxLookAwayMsRef = useRef(0);
   const exitIntentRef = useRef(false);
+  const currentQuestionRef = useRef("");
   const transcriptRef = useRef("");
   const listeningActiveRef = useRef(false);
+  const acceptingTranscriptRef = useRef(false);
   const isAdvancingRef = useRef(false);
   const terminationInFlightRef = useRef(false);
   const completionInFlightRef = useRef(false);
@@ -431,6 +434,34 @@ export default function Page() {
     }
 
     throw new Error("Request failed");
+  };
+
+  const waitForRecordingStartup = async (
+    timeoutMs = RECORDING_STARTUP_WAIT_MS
+  ) => {
+    if (recordingStartedAtRef.current) {
+      return true;
+    }
+
+    const startedAt = Date.now();
+
+    return new Promise<boolean>((resolve) => {
+      const check = () => {
+        if (recordingStartedAtRef.current) {
+          resolve(true);
+          return;
+        }
+
+        if (Date.now() - startedAt >= timeoutMs) {
+          resolve(false);
+          return;
+        }
+
+        window.setTimeout(check, 100);
+      };
+
+      check();
+    });
   };
 
   const getTerminationPayload = (
@@ -1515,13 +1546,17 @@ export default function Page() {
       questionType,
       classifyInterviewQuestion(question).questionType
     );
+    const shouldCaptureSpokenAnswer =
+      resolvedQuestionType !== InterviewQuestionType.CODING;
 
     stopAll();
     stopAudioAnalysis();
+    acceptingTranscriptRef.current = false;
     isAdvancingRef.current = false;
 
     setTranscript("");
     transcriptRef.current = "";
+    currentQuestionRef.current = question;
     setSessionQuestionId(nextSessionQuestionId);
     setQuestionId(nextQuestionId || nextSessionQuestionId);
     setCurrentQuestion(question);
@@ -1530,15 +1565,25 @@ export default function Page() {
     setShowCoding(false);
     resetInactivityTimeout();
 
+    if (shouldCaptureSpokenAnswer) {
+      startListening();
+    }
+
     setVerisState("speaking");
     await speak(question);
+    if (shouldCaptureSpokenAnswer && !recognitionRef.current) {
+      startListening();
+    }
+    recognitionRef.current?.resetTranscript?.();
+    setTranscript("");
+    transcriptRef.current = "";
 
     questionStartTimeRef.current = Date.now();
     setAnswerWindowEnded(false);
     resetFocusMetrics();
     startQuestionTimer();
 
-    if (resolvedQuestionType === InterviewQuestionType.CODING) {
+    if (!shouldCaptureSpokenAnswer) {
       addEvent({
         type: "coding_start",
         severity: "low",
@@ -1548,8 +1593,8 @@ export default function Page() {
       return;
     }
 
+    acceptingTranscriptRef.current = true;
     setVerisState("listening");
-    startListening();
     startAudioAnalysis();
   };
 
@@ -1584,7 +1629,7 @@ export default function Page() {
       setCandidateId(session.candidateId?.trim() ?? "");
       setCandidateName(session.candidateName?.trim() ?? "");
 
-      const data = await postJson<{
+      const questionPromise = postJson<{
         content: string;
         question_id?: string | null;
         session_question_id: string;
@@ -1594,6 +1639,16 @@ export default function Page() {
         content: "Explain your experience",
         source: "system",
       });
+      const [data, recordingReady] = await Promise.all([
+        questionPromise,
+        waitForRecordingStartup(),
+      ]);
+
+      if (!recordingReady) {
+        console.warn(
+          "Recording did not confirm startup before the first VERIS question."
+        );
+      }
 
       setIsTransitioning(false);
       await askQuestion(
@@ -1820,8 +1875,18 @@ export default function Page() {
     listeningActiveRef.current = true;
     recognitionRef.current = startRecognition(
       (text) => {
+        if (!acceptingTranscriptRef.current) return;
+
         const nextTranscript = text.trim();
         if (!nextTranscript) return;
+        if (
+          isInvalidCandidateTranscript({
+            transcript: nextTranscript,
+            questionText: currentQuestionRef.current,
+          })
+        ) {
+          return;
+        }
 
         transcriptRef.current = nextTranscript;
         setTranscript(nextTranscript);
@@ -1841,8 +1906,18 @@ export default function Page() {
         }, 250);
       },
       (text) => {
+        if (!acceptingTranscriptRef.current) return;
+
         const nextTranscript = text.trim();
         if (!nextTranscript || nextTranscript.length < transcriptRef.current.length) {
+          return;
+        }
+        if (
+          isInvalidCandidateTranscript({
+            transcript: nextTranscript,
+            questionText: currentQuestionRef.current,
+          })
+        ) {
           return;
         }
 
@@ -1855,6 +1930,7 @@ export default function Page() {
 
   const stopAll = () => {
     listeningActiveRef.current = false;
+    acceptingTranscriptRef.current = false;
     stopRecognition(recognitionRef.current);
     recognitionRef.current = null;
     setMicrophoneReady(false);

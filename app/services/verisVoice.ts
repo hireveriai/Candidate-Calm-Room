@@ -6,6 +6,8 @@ export type VerisSpeechRecognition = {
   onend: (() => void) | null;
   start: () => void;
   stop: () => void;
+  resetTranscript?: () => void;
+  stopRequested?: boolean;
 };
 
 type SpeechRecognitionConstructor = new () => VerisSpeechRecognition;
@@ -92,15 +94,21 @@ export function startRecognition(
   }
 
   recognition = new SpeechRecognition();
+  const activeRecognition = recognition;
   stopRequested = false;
+  activeRecognition.stopRequested = false;
   let finalizedChunks: string[] = [];
   let bestTranscript = "";
 
-  recognition.continuous = true;
-  recognition.interimResults = true;
-  recognition.lang = "en-US";
+  activeRecognition.continuous = true;
+  activeRecognition.interimResults = true;
+  activeRecognition.lang = "en-US";
+  activeRecognition.resetTranscript = () => {
+    finalizedChunks = [];
+    bestTranscript = "";
+  };
 
-  recognition.onresult = (event) => {
+  activeRecognition.onresult = (event) => {
     let interimChunks: string[] = [];
 
     for (let i = event.resultIndex; i < event.results.length; i++) {
@@ -132,7 +140,11 @@ export function startRecognition(
     onFinalResult?.(finalizedText || bestTranscript);
   };
 
-  recognition.onend = () => {
+  activeRecognition.onend = () => {
+    if (activeRecognition.stopRequested) {
+      return;
+    }
+
     if (bestTranscript) {
       onResult(bestTranscript);
       onFinalResult?.(mergeTranscriptParts(finalizedChunks) || bestTranscript);
@@ -141,14 +153,17 @@ export function startRecognition(
     if (!stopRequested && onEnd) onEnd();
   };
 
-  recognition.start();
+  activeRecognition.start();
 
-  return recognition;
+  return activeRecognition;
 }
 
 export function stopRecognition(instance: VerisSpeechRecognition | null) {
   try {
     stopRequested = true;
+    if (instance) {
+      instance.stopRequested = true;
+    }
     instance?.stop();
   } catch (e) {
     console.warn("Error stopping recognition", e);
