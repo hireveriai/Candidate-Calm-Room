@@ -6,6 +6,7 @@ import {
   InterviewQuestionType,
   normalizeInterviewQuestionType,
 } from "@/app/lib/interviewQuestionTypes";
+import { isInvalidCandidateTranscript } from "@/app/lib/transcriptGuards";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -405,6 +406,18 @@ export async function POST(request: Request) {
     );
     const normalizedTranscript = normalizeText(transcript);
     const normalizedRawTranscript = normalizeText(rawTranscript);
+
+    if (
+      isInvalidCandidateTranscript({
+        transcript: normalizedTranscript,
+        questionText: context.question_text,
+      })
+    ) {
+      return Response.json(
+        { error: "Transcript contains interviewer prompt, not candidate answer" },
+        { status: 422 }
+      );
+    }
 
     let evaluation =
       (await evaluateWithAi({

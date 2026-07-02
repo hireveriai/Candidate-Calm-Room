@@ -2,7 +2,7 @@ import { prisma } from "@/app/lib/prisma";
 import { finalizeInterviewAttempt } from "@/app/lib/interviewCompletion";
 import { assertUuid, logInterviewEvent } from "@/app/lib/interviewReliability";
 import { finalizeActiveRecordings } from "@/app/lib/livekit/recordingLifecycle";
-import { repairPendingAnswersFromRecording } from "@/app/lib/recordingTranscriptRepair";
+import { validateAndRepairCompletionTranscripts } from "@/app/lib/recordingTranscriptRepair";
 import {
   HEARTBEAT_INTERVAL_MS,
   RECONNECT_GRACE_WINDOW_SECONDS,
@@ -342,7 +342,7 @@ export async function runInterviewWatchdog() {
     if (hasCompletionEvidence(completionEvidence)) {
       try {
         await finalizeActiveRecordings(row.attempt_id);
-        await repairPendingAnswersFromRecording(row.attempt_id).catch((error: unknown) => {
+        await validateAndRepairCompletionTranscripts(row.attempt_id).catch((error: unknown) => {
           logInterviewEvent("error", "watchdog.transcript_repair_failed", {
             attemptId: row.attempt_id,
             interviewId: row.interview_id,

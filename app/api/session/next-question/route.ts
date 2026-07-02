@@ -2,7 +2,7 @@ import { after } from "next/server";
 
 import { finalizeInterviewAttempt } from "@/app/lib/interviewCompletion";
 import { finalizeActiveRecordings } from "@/app/lib/livekit/recordingLifecycle";
-import { repairPendingAnswersFromRecording } from "@/app/lib/recordingTranscriptRepair";
+import { validateAndRepairCompletionTranscripts } from "@/app/lib/recordingTranscriptRepair";
 import { canAskNextQuestion } from "@/app/lib/calmTiming";
 import { prisma } from "@/app/lib/prisma";
 import { requireCandidateSession } from "@/app/lib/candidateSession";
@@ -34,6 +34,7 @@ import {
   normalizeInterviewQuestionType,
 } from "@/app/lib/interviewQuestionTypes";
 import { toFiniteNumber } from "@/app/lib/interviewScoring";
+import { isInvalidCandidateTranscript } from "@/app/lib/transcriptGuards";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -152,7 +153,7 @@ async function completeInterviewWithoutStrandingCandidate(params: {
   after(async () => {
     try {
       await finalizeActiveRecordings(params.attemptId);
-      await repairPendingAnswersFromRecording(params.attemptId).catch((repairError: unknown) => {
+      await validateAndRepairCompletionTranscripts(params.attemptId).catch((repairError: unknown) => {
         logInterviewEvent("error", "question.transcript_auto_repair_failed", {
           attemptId: params.attemptId,
           prismaFailure: repairError,
@@ -1111,12 +1112,19 @@ export async function POST(request: Request) {
         "raw_candidate_answer",
         "transcript",
       ]);
+      const validPayloadTranscript =
+        payloadTranscript &&
+        !isInvalidCandidateTranscript({
+          transcript: payloadTranscript,
+          questionText: latestQuestion.content,
+        })
+          ? payloadTranscript
+          : "";
       const effectiveLastAnswer =
         latestAnswerRecord?.answer_text ||
-        payloadTranscript ||
         (pendingTranscription
           ? "Candidate response is being transcribed from the interview recording."
-          : "");
+          : validPayloadTranscript);
       const answerSummary = summarizeAnswer(effectiveLastAnswer);
       const wordCount = effectiveLastAnswer
         ? effectiveLastAnswer.trim().split(/\s+/).length

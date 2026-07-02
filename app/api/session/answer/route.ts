@@ -11,6 +11,7 @@ import { canSubmitAnswer } from "@/app/lib/calmTiming";
 import { requireCandidateSession } from "@/app/lib/candidateSession";
 import { assertUuid, logInterviewEvent } from "@/app/lib/interviewReliability";
 import { repairSpokenTranscript } from "@/app/lib/spokenTranscriptRepair";
+import { isInvalidCandidateTranscript } from "@/app/lib/transcriptGuards";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -133,7 +134,12 @@ export async function POST(request: Request) {
       submitted_question_text: body.questionText?.trim() || null,
     } satisfies JsonValue;
 
-    if (!transcript || isNoResponseSentinel(transcript)) {
+    const invalidTranscript = isInvalidCandidateTranscript({
+      transcript: finalTranscript,
+      questionText: context.question_text,
+    });
+
+    if (!transcript || isNoResponseSentinel(transcript) || invalidTranscript) {
       const pendingRecord = await createPendingSpokenAnswer({
         question_id: logicalQuestionId,
         question_text: context.question_text,
@@ -146,6 +152,10 @@ export async function POST(request: Request) {
         answer_payload: {
           ...answerPayload,
           original_transcript: rawTranscript || null,
+          rejected_transcript: invalidTranscript ? finalTranscript : null,
+          transcript_rejected_reason: invalidTranscript
+            ? "interviewer_prompt_echo"
+            : null,
         },
       });
 
@@ -156,6 +166,9 @@ export async function POST(request: Request) {
         aiLatencyMs: Date.now() - startedAt,
         state: "ANSWER_PROCESSING",
         nextState: "FOLLOWUP_GENERATING",
+        reason: invalidTranscript
+          ? "interviewer_prompt_echo"
+          : "browser_speech_recognition_empty",
       });
 
       return Response.json(pendingRecord satisfies AnswerRecord);

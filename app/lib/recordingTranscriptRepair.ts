@@ -2,6 +2,7 @@ import OpenAI from "openai";
 import { Prisma } from "@prisma/client";
 
 import { prisma } from "@/app/lib/prisma";
+import { isInvalidCandidateTranscript } from "@/app/lib/transcriptGuards";
 
 type RepairQuestionRow = {
   answer_id: string;
@@ -25,6 +26,28 @@ type AlignedAnswer = {
   answer?: string;
   evidence?: string;
   confidence?: number;
+};
+
+type CompletionAuditRow = {
+  session_question_id: string;
+  question_id: string | null;
+  question_order: number | null;
+  question: string | null;
+  answer_id: string | null;
+  answer_text: string | null;
+  answer_payload: unknown | null;
+  status: string | null;
+  code_text: string | null;
+};
+
+export type CompletionTranscriptIntegrityResult = {
+  checkedAt: string;
+  createdPlaceholders: number;
+  rejectedQuestionEchoes: number;
+  repairedAnswers: number;
+  remainingIssues: number;
+  status: "clean" | "repaired" | "needs_review";
+  repairSkipped?: string;
 };
 
 const MAX_REPAIR_OBJECT_BYTES = 24_000_000;
@@ -203,6 +226,134 @@ function mergePayload(payload: unknown, repairFields: Record<string, unknown>) {
   });
 }
 
+async function loadCompletionAuditRows(attemptId: string): Promise<CompletionAuditRow[]> {
+  return prisma.$queryRaw<CompletionAuditRow[]>`
+    select
+      sq.session_question_id::text,
+      sq.question_id::text,
+      sq.question_order,
+      sq.content as question,
+      ans.answer_id::text,
+      ans.answer_text,
+      ans.answer_payload,
+      ans.status,
+      cs.code_text
+    from public.session_questions sq
+    left join public.interview_answers ans
+      on ans.session_question_id = sq.session_question_id
+    left join public.interview_code_submissions cs
+      on cs.answer_id = ans.answer_id
+    where sq.attempt_id = ${attemptId}::uuid
+    order by sq.question_order asc nulls last, sq.asked_at asc nulls last
+  `;
+}
+
+function hasAnswerIssue(row: CompletionAuditRow) {
+  if (row.code_text && normalizeText(row.code_text)) {
+    return false;
+  }
+
+  if (!row.answer_id) {
+    return true;
+  }
+
+  const answer = normalizeText(row.answer_text);
+  return (
+    !answer ||
+    isNoResponse(answer) ||
+    row.status === "generating" ||
+    row.status === "failed" ||
+    isInvalidCandidateTranscript({
+      transcript: answer,
+      questionText: row.question,
+    })
+  );
+}
+
+async function countRemainingCompletionIssues(attemptId: string) {
+  const rows = await loadCompletionAuditRows(attemptId);
+  return rows.filter(hasAnswerIssue).length;
+}
+
+async function createMissingAnswerPlaceholders(attemptId: string) {
+  const rows = await prisma.$queryRaw<Array<{ count: bigint | number | string }>>`
+    with inserted as (
+      insert into public.interview_answers (
+        attempt_id,
+        question_id,
+        session_question_id,
+        answer_text,
+        answer_payload,
+        status
+      )
+      select
+        sq.attempt_id,
+        null::uuid,
+        sq.session_question_id,
+        null::text,
+        jsonb_build_object(
+          'answer_mode', 'spoken',
+          'live_transcript_missing', true,
+          'transcription_pending', true,
+          'pending_reason', 'completion_integrity_missing_answer_row',
+          'pending_at', now()
+        ),
+        'generating'
+      from public.session_questions sq
+      left join public.interview_answers ans
+        on ans.session_question_id = sq.session_question_id
+      where sq.attempt_id = ${attemptId}::uuid
+        and ans.answer_id is null
+      on conflict (session_question_id) where session_question_id is not null
+      do nothing
+      returning 1
+    )
+    select count(*) as count from inserted
+  `;
+
+  return Number(rows[0]?.count ?? 0);
+}
+
+async function rejectQuestionEchoAnswers(attemptId: string) {
+  const rows = await loadCompletionAuditRows(attemptId);
+  const invalidRows = rows.filter(
+    (row: CompletionAuditRow) =>
+      row.answer_id &&
+      !row.code_text &&
+      normalizeText(row.answer_text) &&
+      isInvalidCandidateTranscript({
+        transcript: row.answer_text,
+        questionText: row.question,
+      })
+  );
+
+  for (const row of invalidRows) {
+    await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      await tx.$executeRaw`
+        update public.interview_answers
+        set answer_text = null,
+            status = 'generating',
+            answer_payload = coalesce(answer_payload, '{}'::jsonb) || ${JSON.stringify({
+              rejected_transcript: row.answer_text,
+              transcript_rejected_reason: "completion_integrity_question_echo",
+              completion_integrity_rejected_at: new Date().toISOString(),
+              transcription_pending: true,
+              live_transcript_missing: true,
+            })}::jsonb
+        where answer_id = ${row.answer_id}::uuid
+      `;
+
+      await tx.$executeRaw`
+        delete from public.interview_answer_evaluations
+        where answer_id = ${row.answer_id}::uuid
+          and evaluator_type = 'AI'
+      `;
+    });
+  }
+
+  return invalidRows.length;
+}
+
 function buildRecoveredEvaluation(answer: string) {
   const words = normalizeText(answer).split(/\s+/).filter(Boolean).length;
   const hasSpecificity = /\b\d+(\.\d+)?%?\b|team|customer|process|project|metric|budget|sla|crm|sap|report|compliance|risk/i.test(answer);
@@ -303,7 +454,14 @@ export async function repairPendingAnswersFromRecording(attemptId: string) {
       }
 
       const answer = answersByOrder.get(Number(question.question_order));
-      if (!answer || isNoResponse(answer)) {
+      if (
+        !answer ||
+        isNoResponse(answer) ||
+        isInvalidCandidateTranscript({
+          transcript: answer,
+          questionText: question.question,
+        })
+      ) {
         continue;
       }
 
@@ -397,6 +555,44 @@ export async function repairPendingAnswersFromRecording(attemptId: string) {
   });
 
   return { repaired: repaired + codeRepair.repaired, recordingId: recording.recording_id };
+}
+
+export async function validateAndRepairCompletionTranscripts(attemptId: string) {
+  const createdPlaceholders = await createMissingAnswerPlaceholders(attemptId);
+  const rejectedQuestionEchoes = await rejectQuestionEchoAnswers(attemptId);
+  const repairResult = await repairPendingAnswersFromRecording(attemptId);
+  const remainingIssues = await countRemainingCompletionIssues(attemptId);
+  const repairedAnswers = Number(repairResult.repaired ?? 0);
+  const status: CompletionTranscriptIntegrityResult["status"] =
+    remainingIssues > 0
+      ? "needs_review"
+      : createdPlaceholders > 0 || rejectedQuestionEchoes > 0 || repairedAnswers > 0
+        ? "repaired"
+        : "clean";
+  const result: CompletionTranscriptIntegrityResult = {
+    checkedAt: new Date().toISOString(),
+    createdPlaceholders,
+    rejectedQuestionEchoes,
+    repairedAnswers,
+    remainingIssues,
+    status,
+    ...(repairResult.skipped ? { repairSkipped: repairResult.skipped } : {}),
+  };
+
+  await prisma.$executeRaw`
+    update public.interview_attempts
+    set transcript_status = case
+          when ${remainingIssues} = 0 then 'COMPLETED'
+          when ${createdPlaceholders + rejectedQuestionEchoes + repairedAnswers} > 0 then 'PARTIAL'
+          else transcript_status
+        end,
+        termination_metadata = coalesce(termination_metadata, '{}'::jsonb) || ${JSON.stringify({
+          transcript_integrity: result,
+        })}::jsonb
+    where attempt_id = ${attemptId}::uuid
+  `;
+
+  return result;
 }
 
 function formatCodingSubmission(language: string | null, code: string) {

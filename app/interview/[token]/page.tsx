@@ -42,6 +42,7 @@ import {
   MAX_RECONNECT_ATTEMPTS,
   RECONNECT_BACKOFF_MS,
 } from "@/app/lib/interviewSessionReliability";
+import { isInvalidCandidateTranscript } from "@/app/lib/transcriptGuards";
 
 type VerisState = "idle" | "listening" | "thinking" | "speaking";
 type TerminationType =
@@ -1621,7 +1622,12 @@ export default function Page() {
     const cleanedTranscript = cleanTranscript(
       rawTranscript
     );
-    const safeTranscript = cleanedTranscript;
+    const safeTranscript = isInvalidCandidateTranscript({
+      transcript: cleanedTranscript,
+      questionText: currentQuestion,
+    })
+      ? ""
+      : cleanedTranscript;
     const answerDuration = questionStartTimeRef.current
       ? Math.max(1, Math.round((Date.now() - questionStartTimeRef.current) / 1000))
       : 0;
@@ -1630,7 +1636,7 @@ export default function Page() {
 
     const answer = await postJson<{
       answer_id: string;
-      answer_text: string;
+      answer_text: string | null;
     }>("/api/session/answer", {
         sessionQuestionId,
         questionId,
@@ -1642,7 +1648,9 @@ export default function Page() {
         duration: answerDuration,
       });
 
-    const answerText = cleanTranscript(answer.answer_text || safeTranscript);
+    const answerText = answer.answer_text
+      ? cleanTranscript(answer.answer_text)
+      : "";
     if (answerText) {
       await postJson("/api/session/evaluate-answer", {
         answerId: answer.answer_id,

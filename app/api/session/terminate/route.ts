@@ -2,7 +2,7 @@ import { finalizeInterviewAttempt } from "@/app/lib/interviewCompletion";
 import { requireCandidateSession } from "@/app/lib/candidateSession";
 import { assertUuid, logInterviewEvent } from "@/app/lib/interviewReliability";
 import { finalizeActiveRecordings } from "@/app/lib/livekit/recordingLifecycle";
-import { repairPendingAnswersFromRecording } from "@/app/lib/recordingTranscriptRepair";
+import { validateAndRepairCompletionTranscripts } from "@/app/lib/recordingTranscriptRepair";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -67,7 +67,7 @@ export async function POST(request: Request) {
     });
 
     await finalizeActiveRecordings(attemptId);
-    await repairPendingAnswersFromRecording(attemptId).catch((repairError: unknown) => {
+    await validateAndRepairCompletionTranscripts(attemptId).catch((repairError: unknown) => {
       logInterviewEvent("error", "interview.transcript_auto_repair_failed", {
         attemptId,
         prismaFailure: repairError,

@@ -965,6 +965,14 @@ export async function finalizeInterviewAttempt(params: {
       earlyExit: params.earlyExit,
       terminationType: params.terminationType,
     });
+    const transcriptIntegrity =
+      existingMetadata["transcript_integrity"] &&
+      typeof existingMetadata["transcript_integrity"] === "object" &&
+      !Array.isArray(existingMetadata["transcript_integrity"])
+        ? (existingMetadata["transcript_integrity"] as Record<string, unknown>)
+        : null;
+    const finalTranscriptStatus =
+      transcriptIntegrity?.["status"] === "needs_review" ? "PARTIAL" : "FINALIZED";
 
     const aggregateAudit = {
       asked_questions: askedQuestions,
@@ -985,6 +993,7 @@ export async function finalizeInterviewAttempt(params: {
       risk_score: riskScore,
       risk_level: riskLevel,
       behavioral_flags: behavioralFlags,
+      transcript_integrity: transcriptIntegrity,
       reason,
       source_of_truth: "persisted_answers_evaluations_transcripts_signals",
       scoring_version: "completion-weighted-v2",
@@ -1008,7 +1017,7 @@ export async function finalizeInterviewAttempt(params: {
           reliability_score = ${reliabilityScore},
           early_exit = ${params.earlyExit},
           last_activity_at = coalesce(last_activity_at, now()),
-          transcript_status = 'FINALIZED',
+          transcript_status = ${finalTranscriptStatus}::text,
           recording_status = case
             when exists (
               select 1
