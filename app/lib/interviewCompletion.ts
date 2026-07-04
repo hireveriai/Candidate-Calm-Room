@@ -71,6 +71,16 @@ type TranscriptAggregateRow = {
   transcript_events: number;
 };
 
+type SummaryAnswerEvidenceRow = {
+  question_order: number | null;
+  question: string | null;
+  answer: string | null;
+};
+
+type SummaryTranscriptRow = {
+  transcript: string | null;
+};
+
 type PersistedCompletionRow = {
   started_at: Date;
   ended_at: Date | null;
@@ -294,6 +304,124 @@ function generateReason(
   }
 
   return "Insufficient capability demonstrated despite stable behavior";
+}
+
+function normalizeSummaryText(value: unknown) {
+  return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
+function wordCount(value: string) {
+  return normalizeSummaryText(value).split(/\s+/).filter(Boolean).length;
+}
+
+function clipWords(value: string, maxWords: number) {
+  const words = normalizeSummaryText(value).split(/\s+/).filter(Boolean);
+  return words.length <= maxWords
+    ? words.join(" ")
+    : `${words.slice(0, maxWords).join(" ")}...`;
+}
+
+function isSubstantiveAnswer(value: string | null | undefined) {
+  const normalized = normalizeSummaryText(value).toLowerCase();
+  return normalized && normalized !== "no response provided.";
+}
+
+async function loadSummaryAnswerEvidence(db: PrismaExecutor, attemptId: string) {
+  const rows = await db.$queryRaw<SummaryAnswerEvidenceRow[]>`
+    select
+      sq.question_order,
+      sq.content as question,
+      coalesce(
+        nullif(btrim(ans.answer_text), ''),
+        nullif(btrim(cs.code_text), '')
+      ) as answer
+    from public.session_questions sq
+    left join public.interview_answers ans
+      on ans.session_question_id = sq.session_question_id
+    left join public.interview_code_submissions cs
+      on cs.answer_id = ans.answer_id
+    where sq.attempt_id = ${attemptId}::uuid
+    order by sq.question_order asc nulls last, sq.asked_at asc nulls last
+  `;
+
+  return rows
+    .map((row: SummaryAnswerEvidenceRow) => ({
+      questionOrder: row.question_order,
+      question: normalizeSummaryText(row.question),
+      answer: normalizeSummaryText(row.answer),
+    }))
+    .filter((row: { answer: string }) => isSubstantiveAnswer(row.answer));
+}
+
+async function loadRichestTranscript(db: PrismaExecutor, attemptId: string) {
+  const rows = await db.$queryRaw<SummaryTranscriptRow[]>`
+    select transcript
+    from (
+      select string_agg(ft.transcript, ' ' order by ft.segment_index asc) as transcript
+      from public.forensic_transcripts ft
+      where ft.attempt_id = ${attemptId}::uuid
+
+      union all
+
+      select ir.transcript
+      from public.interview_recordings ir
+      where ir.attempt_id = ${attemptId}::uuid
+        and ir.transcript is not null
+        and btrim(ir.transcript) <> ''
+    ) sources
+    where transcript is not null
+      and btrim(transcript) <> ''
+    order by char_length(transcript) desc
+    limit 1
+  `;
+
+  return normalizeSummaryText(rows[0]?.transcript);
+}
+
+function buildEvidenceBasedSummary(params: {
+  score: number;
+  riskLevel: "LOW" | "MEDIUM" | "HIGH";
+  recommendation: string;
+  reason: string;
+  strengths: string[];
+  weaknesses: string[];
+  behavioralFlags: string[];
+  questionsAnswered: number;
+  expectedQuestions: number;
+  transcript: string;
+  answers: Array<{ questionOrder: number | null; question: string; answer: string }>;
+}) {
+  const answerWords = params.answers.reduce((total, answer) => total + wordCount(answer.answer), 0);
+  const transcriptWords = wordCount(params.transcript);
+  const evidenceWordCount = Math.max(answerWords, transcriptWords);
+  const strongestAnswers = [...params.answers]
+    .sort((left, right) => wordCount(right.answer) - wordCount(left.answer))
+    .slice(0, 4);
+  const answerHighlights = strongestAnswers.map((item) => {
+    const prefix = item.questionOrder ? `Q${item.questionOrder}` : "Answer";
+    const question = item.question ? ` (${clipWords(item.question, 10)})` : "";
+    return `${prefix}${question}: ${clipWords(item.answer, 34)}`;
+  });
+  const transcriptHighlight =
+    params.transcript && transcriptWords > answerWords + 25
+      ? `Additional recording evidence: ${clipWords(params.transcript, 60)}`
+      : null;
+  const coverage = `${params.questionsAnswered}/${Math.max(params.expectedQuestions, params.questionsAnswered, 1)} questions`;
+
+  return [
+    `VERIS evaluated ${coverage} with about ${evidenceWordCount} words of candidate evidence. Final score: ${params.score}/100. Recommendation: ${params.recommendation}. Risk level: ${params.riskLevel}.`,
+    `Overall assessment: ${params.reason}. Strengths observed: ${params.strengths.join(", ")}.`,
+    params.weaknesses.length
+      ? `Development areas or review points: ${params.weaknesses.join(", ")}.`
+      : "No major capability gaps were isolated from the captured answer evidence.",
+    params.behavioralFlags.length
+      ? `Behavioral/integrity signals to review: ${params.behavioralFlags.join(", ")}.`
+      : "No major behavioral integrity flags were detected in the finalized evidence.",
+    answerHighlights.length
+      ? `Candidate evidence highlights: ${answerHighlights.join(" | ")}.`
+      : null,
+    transcriptHighlight,
+  ].filter(Boolean).join("\n\n");
 }
 
 function validateEvaluation(result: {
@@ -699,8 +827,8 @@ async function loadPersistedCompletionResult(
       (row.hire_recommendation as InterviewCompletionResult["recommendation"]) ??
       "REVIEW_REQUIRED",
     reason:
-      (typeof metadata["reason"] === "string" && metadata["reason"]) ||
       row.ai_summary ||
+      (typeof metadata["reason"] === "string" && metadata["reason"]) ||
       "Persisted completion result",
     completed: true as const,
     early_exit: Boolean(row.early_exit),
@@ -953,12 +1081,29 @@ export async function finalizeInterviewAttempt(params: {
       weaknesses,
       behavioralFlags
     );
+    const [summaryAnswers, richestTranscript] = await Promise.all([
+      loadSummaryAnswerEvidence(tx, attemptId),
+      loadRichestTranscript(tx, attemptId),
+    ]);
+    const aiSummary = buildEvidenceBasedSummary({
+      score: finalScore,
+      riskLevel,
+      recommendation,
+      reason,
+      strengths,
+      weaknesses,
+      behavioralFlags,
+      questionsAnswered,
+      expectedQuestions,
+      transcript: richestTranscript,
+      answers: summaryAnswers,
+    });
 
     validateEvaluation({
       score: finalScore,
       strengths,
       recommendation,
-      reason,
+      reason: aiSummary,
     });
 
     const completionStatus = mapCompletionStatus({
@@ -995,6 +1140,7 @@ export async function finalizeInterviewAttempt(params: {
       behavioral_flags: behavioralFlags,
       transcript_integrity: transcriptIntegrity,
       reason,
+      ai_summary: aiSummary,
       source_of_truth: "persisted_answers_evaluations_transcripts_signals",
       scoring_version: "completion-weighted-v2",
       finalized_at: new Date().toISOString(),
@@ -1136,7 +1282,7 @@ export async function finalizeInterviewAttempt(params: {
       ${attemptId}::uuid,
       ${finalScore},
       ${evaluationDecision}::text,
-      ${reason}::text,
+      ${aiSummary}::text,
       now(),
       true
     )

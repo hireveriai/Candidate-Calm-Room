@@ -454,6 +454,68 @@ function buildRecordingTranscript(questions, answersByOrder) {
     .join(" ");
 }
 
+function wordCount(value) {
+  return normalizeText(value).split(/\s+/).filter(Boolean).length;
+}
+
+function clipWords(value, maxWords) {
+  const words = normalizeText(value).split(/\s+/).filter(Boolean);
+  return words.length <= maxWords
+    ? words.join(" ")
+    : `${words.slice(0, maxWords).join(" ")}...`;
+}
+
+function buildEvidenceSummary({
+  questions,
+  answersByOrder,
+  transcriptionText,
+  overallScore,
+  riskLevel,
+  recommendation,
+  substantiveAnswers,
+  maxFraud,
+}) {
+  const answerRows = questions
+    .map((question) => ({
+      order: question.question_order,
+      question: normalizeText(question.question),
+      answer: normalizeText(
+        question.code_text
+          ? `[Coding submission in ${question.language || "code"}]\n${question.code_text}`
+          : answersByOrder.get(question.question_order)
+      ),
+    }))
+    .filter((row) => row.answer && !isNoResponse(row.answer));
+  const answerWords = answerRows.reduce((total, row) => total + wordCount(row.answer), 0);
+  const transcriptWords = wordCount(transcriptionText);
+  const evidenceWordCount = Math.max(answerWords, transcriptWords);
+  const highlights = [...answerRows]
+    .sort((left, right) => wordCount(right.answer) - wordCount(left.answer))
+    .slice(0, 5)
+    .map((row) => {
+      const question = row.question ? ` (${clipWords(row.question, 10)})` : "";
+      return `Q${row.order}${question}: ${clipWords(row.answer, 36)}`;
+    });
+  const scoreLabel = overallScore === null ? "not scored" : `${overallScore}/100`;
+  const riskNote =
+    riskLevel === "HIGH"
+      ? "High authenticity or behavior risk signals require recruiter review."
+      : riskLevel === "MEDIUM"
+        ? "Some risk signals are present and should be reviewed with the answer evidence."
+        : "No major authenticity risk was isolated from the repaired recording evidence.";
+
+  return [
+    `VERIS summary was regenerated from the actual interview recording. It reviewed ${substantiveAnswers}/${questions.length} substantive answer(s) and about ${evidenceWordCount} words of candidate evidence. Final score: ${scoreLabel}. Recommendation: ${recommendation}. Risk level: ${riskLevel}.`,
+    `Overall assessment: ${riskNote} Maximum observed fraud/authenticity score was ${Math.round(maxFraud * 100)}%.`,
+    highlights.length
+      ? `Candidate evidence highlights: ${highlights.join(" | ")}.`
+      : "The recording did not provide enough substantive candidate evidence to build detailed answer highlights.",
+    transcriptWords > answerWords + 25
+      ? `Additional recording context: ${clipWords(transcriptionText, 70)}`
+      : null,
+  ].filter(Boolean).join("\n\n");
+}
+
 async function persistRepair(client, openai, target, transcription, alignedAnswers, dryRun) {
   const questions = await fetchQuestions(client, target.attempt_id);
   const answersByOrder = new Map();
@@ -518,6 +580,16 @@ async function persistRepair(client, openai, target, transcription, alignedAnswe
   const recommendation =
     overallScore === null ? "REJECT" : overallScore >= 75 ? "HIRE" : overallScore >= 60 ? "REVIEW" : "REJECT";
   const recordingTranscript = buildRecordingTranscript(questions, answersByOrder);
+  const aiSummary = buildEvidenceSummary({
+    questions,
+    answersByOrder,
+    transcriptionText: transcription.text ?? recordingTranscript,
+    overallScore,
+    riskLevel,
+    recommendation,
+    substantiveAnswers: substantive.length,
+    maxFraud,
+  });
   const segments = (transcription.segments ?? []).map((segment, index) => ({
     index: index + 1,
     startMs: Math.round(Number(segment.start ?? 0) * 1000),
@@ -536,6 +608,7 @@ async function persistRepair(client, openai, target, transcription, alignedAnswe
       overallScore,
       riskLevel,
       recommendation,
+      aiSummary,
       evidenceTooThin,
       answerPreviews: questions.map((question) => ({
         order: question.question_order,
@@ -697,6 +770,22 @@ async function persistRepair(client, openai, target, transcription, alignedAnswe
           "Review answer-level evidence for no-response or low-specificity questions.",
           recommendation,
         ]
+      );
+
+      await client.query(
+        `
+          insert into public.interview_evaluations (
+            attempt_id, final_score, decision, ai_summary, created_at, is_locked
+          )
+          values ($1::uuid, $2::numeric, $3::text, $4::text, now(), true)
+          on conflict (attempt_id) do update
+          set final_score = excluded.final_score,
+              decision = excluded.decision,
+              ai_summary = excluded.ai_summary,
+              created_at = excluded.created_at,
+              is_locked = excluded.is_locked
+        `,
+        [target.attempt_id, overallScore, recommendation, aiSummary]
       );
     }
 
