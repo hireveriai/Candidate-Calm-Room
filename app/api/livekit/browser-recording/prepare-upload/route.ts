@@ -9,6 +9,7 @@ export const runtime = "nodejs";
 type PrepareUploadBody = {
   attemptId?: string;
   mimeType?: string;
+  startedAt?: string | null;
 };
 
 const allowedMimeTypes = new Map([
@@ -39,6 +40,15 @@ function encodeStoragePath(path: string) {
 
 function normalizeHttpUrl(value: string) {
   return value.replace(/\/+$/, "");
+}
+
+function parseIsoDate(value: string | null | undefined) {
+  if (!value) {
+    return null;
+  }
+
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date : null;
 }
 
 function getPublicRecordingUrl(params: {
@@ -93,6 +103,7 @@ export async function POST(request: NextRequest) {
     const attemptId = body.attemptId?.trim();
     const mimeType = body.mimeType?.split(";")[0]?.trim().toLowerCase() || "video/webm";
     const extension = allowedMimeTypes.get(mimeType);
+    const startedAt = parseIsoDate(body.startedAt) ?? new Date();
 
     if (!attemptId || !uuidPattern.test(attemptId)) {
       return NextResponse.json({ error: "Valid attemptId is required" }, { status: 400 });
@@ -165,7 +176,7 @@ export async function POST(request: NextRequest) {
         ${videoUrl},
         ${videoUrl},
         ${filePath},
-        timezone('utc', now())
+        ${startedAt}
       )
       returning recording_id::text
     `;

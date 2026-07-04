@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { requireCandidateSession } from "@/app/lib/candidateSession";
-import { buildAttemptTranscript } from "@/app/lib/livekit/recordingLifecycle";
 import { prisma } from "@/app/lib/prisma";
 
 export const dynamic = "force-dynamic";
@@ -12,10 +11,20 @@ type CompleteUploadBody = {
   recordingId?: string;
   filePath?: string;
   sizeBytes?: number;
+  endedAt?: string | null;
 };
 
 const uuidPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function parseIsoDate(value: string | null | undefined) {
+  if (!value) {
+    return null;
+  }
+
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date : null;
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -23,6 +32,7 @@ export async function POST(request: NextRequest) {
     const attemptId = body.attemptId?.trim();
     const recordingId = body.recordingId?.trim();
     const filePath = body.filePath?.trim();
+    const endedAt = parseIsoDate(body.endedAt) ?? new Date();
 
     if (!attemptId || !uuidPattern.test(attemptId)) {
       return NextResponse.json({ error: "Valid attemptId is required" }, { status: 400 });
@@ -70,21 +80,30 @@ export async function POST(request: NextRequest) {
     }
 
     const storageSize = Number(objects[0].size ?? body.sizeBytes ?? 0);
-    const transcript = await buildAttemptTranscript(attemptId);
 
     await prisma.$transaction([
       prisma.$executeRaw`
         update public.interview_recordings
         set status = 'completed',
             failure_reason = null,
-            transcript = coalesce(${transcript}, transcript),
-            ended_at = timezone('utc', now())
+            ended_at = ${endedAt}
         where recording_id = ${recordingId}::uuid
           and attempt_id = ${attemptId}::uuid
       `,
       prisma.$executeRaw`
         update public.interview_attempts
-        set recording_status = 'FINALIZED'
+        set recording_status = case
+          when ended_at is not null
+            or upper(coalesce(status, '')) in (
+              'COMPLETED',
+              'SUBMITTED',
+              'EVALUATED',
+              'TIME_EXPIRED',
+              'ABANDONED'
+            )
+            then 'FINALIZED'
+          else 'PENDING'
+        end
         where attempt_id = ${attemptId}::uuid
       `,
     ]);

@@ -119,6 +119,8 @@ async function uploadBrowserRecording(params: {
   attemptId: string;
   blob: Blob;
   mimeType: string;
+  startedAt: string | null;
+  endedAt: string;
 }) {
   const prepareResponse = await fetch(
     "/api/livekit/browser-recording/prepare-upload",
@@ -130,6 +132,7 @@ async function uploadBrowserRecording(params: {
       body: JSON.stringify({
         attemptId: params.attemptId,
         mimeType: params.mimeType,
+        startedAt: params.startedAt,
       }),
     },
   );
@@ -171,6 +174,7 @@ async function uploadBrowserRecording(params: {
         recordingId: prepared.recordingId,
         filePath: prepared.filePath,
         sizeBytes: params.blob.size,
+        endedAt: params.endedAt,
       }),
     },
   );
@@ -211,6 +215,7 @@ export default function VideoPanel({
   const browserRecorderRef = useRef<MediaRecorder | null>(null);
   const browserRecordingChunksRef = useRef<Blob[]>([]);
   const browserRecordingMimeTypeRef = useRef<string | null>(null);
+  const browserRecordingStartedAtRef = useRef<string | null>(null);
   const browserRecordingUploadRef = useRef<Promise<void> | null>(null);
   const browserRecordingStartedRef = useRef(false);
   const recordingStartedNotifiedRef = useRef(false);
@@ -396,6 +401,7 @@ export default function VideoPanel({
         const recorder = new MediaRecorder(stream, { mimeType });
         browserRecordingChunksRef.current = [];
         browserRecordingMimeTypeRef.current = mimeType.split(";")[0] ?? "video/webm";
+        browserRecordingStartedAtRef.current = new Date().toISOString();
         browserRecorderRef.current = recorder;
         browserRecordingStartedRef.current = true;
 
@@ -421,6 +427,7 @@ export default function VideoPanel({
     function discardBrowserRecordingChunks() {
       browserRecordingChunksRef.current = [];
       browserRecordingMimeTypeRef.current = null;
+      browserRecordingStartedAtRef.current = null;
     }
 
     async function stopBrowserRecordingAndUpload(options: {
@@ -439,6 +446,7 @@ export default function VideoPanel({
 
       const recorder = browserRecorderRef.current;
       const mimeType = browserRecordingMimeTypeRef.current ?? "video/webm";
+      const startedAt = browserRecordingStartedAtRef.current;
 
       const upload = new Promise<void>((resolve) => {
         const uploadChunks = async () => {
@@ -462,6 +470,8 @@ export default function VideoPanel({
               attemptId: safeAttemptId,
               blob: new Blob(chunks, { type: mimeType }),
               mimeType,
+              startedAt,
+              endedAt: new Date().toISOString(),
             });
           } catch (error) {
             console.error("Unable to upload browser recording fallback:", error);
