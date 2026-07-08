@@ -2527,6 +2527,7 @@ export default function Page() {
           <div className="flex min-w-0 flex-col justify-center">
             <VideoPanel
               attemptId={attemptId}
+              candidateName={candidateName}
               timeLeft={timeLeft}
               reconnectKey={videoReconnectKey}
               sessionQuestionId={sessionQuestionId}

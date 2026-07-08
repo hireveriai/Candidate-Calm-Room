@@ -15,6 +15,7 @@ type RecordingSignal = {
 
 type Props = {
   attemptId?: string;
+  candidateName?: string;
   timeLeft?: number;
   reconnectKey?: number;
   sessionQuestionId?: string;
@@ -189,6 +190,7 @@ async function uploadBrowserRecording(params: {
 
 export default function VideoPanel({
   attemptId,
+  candidateName = "",
   timeLeft,
   reconnectKey = 0,
   sessionQuestionId = "",
@@ -233,6 +235,7 @@ export default function VideoPanel({
     .toString()
     .padStart(2, "0");
   const seconds = (elapsedSeconds % 60).toString().padStart(2, "0");
+  const candidateLabel = candidateName.trim() || "Candidate";
 
   useEffect(() => {
     recordingContextRef.current = {
@@ -739,6 +742,7 @@ export default function VideoPanel({
           playsInline
           muted
           className="h-full w-full object-cover"
+          style={{ transform: "scaleX(-1)" }}
         />
 
         <div className="pointer-events-none absolute inset-0 ring-1 ring-inset ring-white/[0.06]" />
@@ -760,7 +764,7 @@ export default function VideoPanel({
             Keep your face centered and well lit
           </span>
           <span className="rounded bg-black/35 px-2 py-1 text-[10px] text-white/55 backdrop-blur-sm">
-            You
+            {candidateLabel}
           </span>
         </div>
       </div>
