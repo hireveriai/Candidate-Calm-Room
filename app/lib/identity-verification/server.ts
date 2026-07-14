@@ -13,6 +13,7 @@ type ContextRow = {
   candidate_name: string;
   candidate_country: string | null;
   job_country: string | null;
+  device_requirement: "DESKTOP_ONLY" | "MOBILE_ONLY" | "ANY_DEVICE" | null;
   profile_dob: Date | string | null;
 };
 
@@ -56,6 +57,7 @@ export async function resolveInviteContext(token: string) {
       c.full_name as candidate_name,
       c.country as candidate_country,
       jp.location_country as job_country,
+      coalesce(jp.device_requirement, 'ANY_DEVICE') as device_requirement,
       c.date_of_birth as profile_dob
     from public.interview_invites ii
     join public.interviews i on i.interview_id = ii.interview_id
@@ -206,4 +208,3 @@ export function documentTypeFromValue(value: string): VerificationDocumentType |
     ? (normalized as VerificationDocumentType)
     : null;
 }
-

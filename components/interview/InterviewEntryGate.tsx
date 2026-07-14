@@ -13,6 +13,7 @@ type Props = {
 type ContextPayload = {
   candidateCountry: string | null;
   jobCountry: string | null;
+  deviceRequirement: "DESKTOP_ONLY" | "MOBILE_ONLY" | "ANY_DEVICE";
   verification: IdentityVerificationSummary | null;
 };
 
@@ -20,6 +21,10 @@ function browserCountry() {
   const locale = navigator.languages?.[0] || navigator.language || "";
   const region = locale.split("-")[1]?.toUpperCase();
   return region === "IN" ? "India" : region || null;
+}
+
+function isMobileDevice() {
+  return /android|iphone|ipad|ipod|mobile/i.test(navigator.userAgent);
 }
 
 export default function InterviewEntryGate({ token, onReadyForPrecheck }: Props) {
@@ -40,6 +45,14 @@ export default function InterviewEntryGate({ token, onReadyForPrecheck }: Props)
       );
       const payload = (await response.json()) as ContextPayload & { error?: string };
       if (!response.ok) throw new Error(payload.error || "Unable to load interview");
+
+      const mobile = isMobileDevice();
+      if (payload.deviceRequirement === "DESKTOP_ONLY" && mobile) {
+        throw new Error("This interview must be completed on a laptop or desktop. Please open this link on a computer to continue.");
+      }
+      if (payload.deviceRequirement === "MOBILE_ONLY" && !mobile) {
+        throw new Error("This interview must be completed on a mobile device. Please open this link on your phone to continue.");
+      }
 
       const detectedCountry =
         payload.candidateCountry || payload.jobCountry || browserCountry();
@@ -108,4 +121,3 @@ export default function InterviewEntryGate({ token, onReadyForPrecheck }: Props)
     </>
   );
 }
-

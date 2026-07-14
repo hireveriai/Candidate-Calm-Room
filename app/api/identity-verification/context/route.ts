@@ -21,9 +21,9 @@ export async function GET(request: Request) {
       candidateName: context.candidate_name,
       candidateCountry: normalizeCountry(context.candidate_country),
       jobCountry: normalizeCountry(context.job_country),
+      deviceRequirement: context.device_requirement ?? "ANY_DEVICE",
       verification: await getLatestVerification(context.interview_id),
     },
     { headers: { "Cache-Control": "no-store" } }
   );
 }
-
