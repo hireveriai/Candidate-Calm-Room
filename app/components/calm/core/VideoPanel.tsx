@@ -45,6 +45,13 @@ type StartRecordingResponse = {
 const uuidPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+// Keep the browser safety recording below the 25 MB speech-to-text upload
+// limit for a full 60-minute interview. LiveKit remains the high-quality
+// review recording; this copy exists so an empty browser speech transcript can
+// always be recovered from the candidate microphone.
+const BROWSER_FALLBACK_VIDEO_BITS_PER_SECOND = 32_000;
+const BROWSER_FALLBACK_AUDIO_BITS_PER_SECOND = 16_000;
+
 function isValidAttemptId(value: string | null | undefined): value is string {
   return Boolean(value && uuidPattern.test(value.trim()));
 }
@@ -401,7 +408,11 @@ export default function VideoPanel({
       }
 
       try {
-        const recorder = new MediaRecorder(stream, { mimeType });
+        const recorder = new MediaRecorder(stream, {
+          mimeType,
+          videoBitsPerSecond: BROWSER_FALLBACK_VIDEO_BITS_PER_SECOND,
+          audioBitsPerSecond: BROWSER_FALLBACK_AUDIO_BITS_PER_SECOND,
+        });
         browserRecordingChunksRef.current = [];
         browserRecordingMimeTypeRef.current = mimeType.split(";")[0] ?? "video/webm";
         browserRecordingStartedAtRef.current = new Date().toISOString();
@@ -597,20 +608,17 @@ export default function VideoPanel({
       }
 
       stopRequestedRef.current = true;
-      const hadServerRecording = Boolean(serverRecordingEgressIdRef.current);
-
-      if (!hadServerRecording) {
-        await stopBrowserRecordingAndUpload();
-        return;
-      }
-
       try {
-        await stopServerRecording();
-        await stopBrowserRecordingAndUpload({ upload: false });
+        if (serverRecordingEgressIdRef.current) {
+          await stopServerRecording();
+        }
       } catch (error) {
         console.error("Unable to finalize LiveKit recording:", error);
-        await stopBrowserRecordingAndUpload();
       }
+
+      // Always retain the bounded browser recording. It is the recovery source
+      // when Web Speech returns an empty transcript or LiveKit egress ends early.
+      await stopBrowserRecordingAndUpload();
     }
 
     onRecordingFinalizerChangeRef.current?.(ensureRecordingStopped);
