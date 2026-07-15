@@ -24,7 +24,7 @@ export default function PrecheckScreen({ onStart }: { onStart: () => void }) {
           V E R I S
         </div>
         <div className="text-xs text-white/40">
-          Cognitive Interview Guide
+          Structured Interview Guide
         </div>
       </div>
 

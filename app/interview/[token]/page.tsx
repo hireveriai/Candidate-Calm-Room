@@ -15,6 +15,7 @@ import ExitModal from "@/app/components/calm/flow/ExitModal";
 import InterviewEntryGate from "@/components/interview/InterviewEntryGate";
 
 import WarningOverlay from "@/app/components/calm/system/WarningOverlay";
+import AmbientMic from "@/app/components/calm/system/AmbientMic";
 import ReconnectOverlay from "./ReconnectOverlay";
 
 import {
@@ -2566,6 +2567,12 @@ export default function Page() {
                   );
                 }
               }}
+            />
+            <AmbientMic
+              active={started && microphoneReady && !interviewFinished && !interviewInterrupted}
+              attemptId={attemptId}
+              videoRef={videoRef}
+              resetKey={videoReconnectKey}
             />
 
             <SystemIndicators
