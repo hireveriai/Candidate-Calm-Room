@@ -203,6 +203,22 @@ export async function recordInterviewInterruption(input: RecoveryEventInput) {
           recovery_allowed = coalesce(recovery_allowed, true)
       where interview_id = ${attempt.interview_id}::uuid
         and coalesce(recovery_used, false) = false
+        and exists (
+          select 1
+          from public.interview_attempts target
+          where target.attempt_id = ${attemptId}::uuid
+            and upper(coalesce(target.status, '')) not in (
+              'COMPLETING', 'FINALIZING', 'COMPLETED', 'FINALIZED'
+            )
+        )
+        and not exists (
+          select 1
+          from public.interview_attempts completed_attempt
+          where completed_attempt.interview_id = ${attempt.interview_id}::uuid
+            and upper(coalesce(completed_attempt.status, '')) in (
+              'COMPLETING', 'FINALIZING', 'COMPLETED', 'FINALIZED'
+            )
+        )
     `;
 
     await tx.$executeRaw`

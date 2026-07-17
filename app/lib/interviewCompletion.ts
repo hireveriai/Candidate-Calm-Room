@@ -911,8 +911,27 @@ export async function finalizeInterviewAttempt(params: {
     }
 
     const normalizedCurrentState = normalizeInterviewState(lockedAttempt.status);
+    const completionAlreadyCommitted =
+      normalizedCurrentState === "COMPLETING" ||
+      normalizedCurrentState === "FINALIZING";
+    const effectiveEarlyExit = completionAlreadyCommitted ? false : params.earlyExit;
+    const effectiveTerminationType = completionAlreadyCommitted
+      ? "completed"
+      : params.terminationType ?? null;
+
+    if (completionAlreadyCommitted && params.earlyExit) {
+      logInterviewEvent("warn", "interview.late_termination_ignored", {
+        attemptId,
+        interviewId: lockedAttempt.interview_id,
+        state: lockedAttempt.status,
+        nextState: "FINALIZING",
+        terminationType: params.terminationType ?? null,
+      });
+    }
+
     if (
       !repairingLegacyFinalization &&
+      normalizedCurrentState !== "COMPLETING" &&
       !canTransitionInterviewState(normalizedCurrentState, "COMPLETING")
     ) {
       logInterviewEvent("warn", "interview.completion_invalid_transition", {
@@ -932,7 +951,7 @@ export async function finalizeInterviewAttempt(params: {
       update public.interview_attempts
       set status = 'COMPLETING',
           current_phase = coalesce(${params.currentPhase ?? null}::text, current_phase),
-          termination_type = coalesce(${params.terminationType ?? null}::text, termination_type)
+          termination_type = coalesce(${effectiveTerminationType}::text, termination_type)
       where attempt_id = ${attemptId}::uuid
     `;
 
@@ -1024,16 +1043,16 @@ export async function finalizeInterviewAttempt(params: {
       currentPhase: params.currentPhase,
       latestQuestionKind: latestQuestion?.question_kind,
       completionPercentage,
-      earlyExit: params.earlyExit,
+      earlyExit: effectiveEarlyExit,
     });
     const riskFlags = getRiskFlags({
-      terminationType: params.terminationType ?? null,
+      terminationType: effectiveTerminationType,
       currentPhase,
       avgFraudScore,
-      earlyExit: params.earlyExit,
+      earlyExit: effectiveEarlyExit,
     });
     const rawEvents = [
-      ...(params.terminationType === "manual_exit" ? ["manual_exit"] : []),
+      ...(effectiveTerminationType === "manual_exit" ? ["manual_exit"] : []),
       ...signalTypes,
     ];
     const behavioralFlags = mapEvents(rawEvents);
@@ -1068,7 +1087,7 @@ export async function finalizeInterviewAttempt(params: {
       behavioralFlags
     );
 
-    const recommendation = params.earlyExit
+    const recommendation = effectiveEarlyExit
       ? finalScore >= 40
         ? "REVIEW_REQUIRED"
         : "NO_HIRE"
@@ -1107,8 +1126,8 @@ export async function finalizeInterviewAttempt(params: {
     });
 
     const completionStatus = mapCompletionStatus({
-      earlyExit: params.earlyExit,
-      terminationType: params.terminationType,
+      earlyExit: effectiveEarlyExit,
+      terminationType: effectiveTerminationType,
     });
     const transcriptIntegrity =
       existingMetadata["transcript_integrity"] &&
@@ -1152,7 +1171,7 @@ export async function finalizeInterviewAttempt(params: {
           ended_at = coalesce(ended_at, now()),
           termination_type = ${completionStatus.terminationType}::text,
           termination_detected_at = case
-            when ${params.earlyExit} then now()
+            when ${effectiveEarlyExit} then now()
             else termination_detected_at
           end,
           termination_phase = ${currentPhase}::text,
@@ -1161,7 +1180,7 @@ export async function finalizeInterviewAttempt(params: {
           expected_questions = ${expectedQuestions}::integer,
           completion_percentage = ${round(completionPercentage, 4)},
           reliability_score = ${reliabilityScore},
-          early_exit = ${params.earlyExit},
+          early_exit = ${effectiveEarlyExit},
           last_activity_at = coalesce(last_activity_at, now()),
           transcript_status = ${finalTranscriptStatus}::text,
           recording_status = case
@@ -1366,7 +1385,7 @@ export async function finalizeInterviewAttempt(params: {
       recommendation,
       reason,
       completed: true,
-      early_exit: params.earlyExit,
+      early_exit: effectiveEarlyExit,
       termination_type: completionStatus.terminationType,
       time_elapsed: elapsedSeconds,
       questions_answered: questionsAnswered,

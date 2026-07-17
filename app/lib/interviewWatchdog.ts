@@ -91,7 +91,10 @@ function hasCompletionEvidence(evidence: CompletionEvidenceRow | null) {
     evidence.non_empty_answers >= Math.max(expectedQuestions - 1, 1) ||
     evidence.answer_rows >= expectedQuestions;
 
-  return askedEnough && answeredEnough && evidence.recordings_with_transcript > 0;
+  // A missing live transcript is recoverable from the finalized recording.
+  // Requiring a transcript here caused fully answered attempts to be marked
+  // abandoned before the recording transcript repair could run.
+  return askedEnough && answeredEnough;
 }
 
 export async function recordInterviewHeartbeat(input: HeartbeatInput) {
@@ -308,7 +311,23 @@ export async function runInterviewWatchdog() {
         'READY',
         'CREATED',
         'RECOVERY_USED',
-        'INTERRUPTED'
+        'INTERRUPTED',
+        'COMPLETING',
+        'FINALIZING',
+        'ABANDONED',
+        'TIME_EXPIRED'
+      )
+      and (
+        upper(coalesce(status, '')) not in ('ABANDONED', 'TIME_EXPIRED')
+        or exists (
+          select 1
+          from public.interviews interrupted_interview
+          where interrupted_interview.interview_id = interview_attempts.interview_id
+            and (
+              upper(coalesce(interrupted_interview.status, '')) = 'INTERRUPTED'
+              or upper(coalesce(interrupted_interview.final_status, '')) = 'INTERRUPTED'
+            )
+        )
       )
       and (
         (
@@ -339,8 +358,34 @@ export async function runInterviewWatchdog() {
     }
 
     const completionEvidence = await loadCompletionEvidence(row.attempt_id);
-    if (hasCompletionEvidence(completionEvidence)) {
+    const completionWasCommitted = ["COMPLETING", "FINALIZING"].includes(
+      (row.status ?? "").trim().toUpperCase()
+    );
+    if (completionWasCommitted || hasCompletionEvidence(completionEvidence)) {
       try {
+        if (
+          hasCompletionEvidence(completionEvidence) &&
+          ["ABANDONED", "TIME_EXPIRED", "INTERRUPTED"].includes(
+            (row.status ?? "").trim().toUpperCase()
+          )
+        ) {
+          await prisma.$executeRaw`
+            update public.interview_attempts
+            set status = 'COMPLETING',
+                termination_type = 'completed',
+                early_exit = false,
+                last_activity_at = now()
+            where attempt_id = ${row.attempt_id}::uuid
+          `;
+          logInterviewEvent("info", "watchdog.historical_completion_reopened", {
+            attemptId: row.attempt_id,
+            interviewId: row.interview_id,
+            state: row.status,
+            nextState: "COMPLETING",
+            completionEvidence,
+          });
+        }
+
         await finalizeActiveRecordings(row.attempt_id);
         await validateAndRepairCompletionTranscripts(row.attempt_id).catch((error: unknown) => {
           logInterviewEvent("error", "watchdog.transcript_repair_failed", {

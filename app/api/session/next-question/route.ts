@@ -150,9 +150,37 @@ async function completeInterviewWithoutStrandingCandidate(params: {
   reason?: string;
   message?: string;
 }) {
+  // Persist the completion boundary before responding. This keeps late
+  // heartbeat/disconnect watchdogs from classifying a fully answered attempt
+  // as abandoned while recording transcription and scoring finish.
+  await prisma.$executeRaw`
+    update public.interview_attempts
+    set status = 'COMPLETING',
+        current_phase = 'closing',
+        termination_type = 'completed',
+        last_activity_at = now()
+    where attempt_id = ${params.attemptId}::uuid
+      and upper(coalesce(status, '')) not in (
+        'COMPLETED', 'TERMINATED', 'ABANDONED', 'EXPIRED',
+        'FINALIZED', 'FAILED', 'TIME_EXPIRED', 'COMPLETING', 'FINALIZING'
+      )
+  `;
+
+  logInterviewEvent("info", "question.completion_accepted", {
+    attemptId: params.attemptId,
+    state: "ANSWER_PROCESSING",
+    nextState: "COMPLETING",
+    reason: params.reason ?? null,
+  });
+
   after(async () => {
     try {
-      await finalizeActiveRecordings(params.attemptId);
+      await finalizeActiveRecordings(params.attemptId).catch((recordingError: unknown) => {
+        logInterviewEvent("error", "question.recording_finalize_failed", {
+          attemptId: params.attemptId,
+          prismaFailure: recordingError,
+        });
+      });
       await validateAndRepairCompletionTranscripts(params.attemptId).catch((repairError: unknown) => {
         logInterviewEvent("error", "question.transcript_auto_repair_failed", {
           attemptId: params.attemptId,
