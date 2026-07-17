@@ -205,6 +205,34 @@ export async function recordInterviewHeartbeat(input: HeartbeatInput) {
     where attempt_id = ${attemptId}::uuid
   `;
 
+  if (!input.reconnecting) {
+    const restoredInterviews = await prisma.$executeRaw`
+      update public.interviews parent
+      set status = 'IN_PROGRESS',
+          final_status = null
+      where parent.interview_id = ${attempt.interview_id}::uuid
+        and upper(coalesce(parent.status, '')) = 'INTERRUPTED'
+        and exists (
+          select 1
+          from public.interview_attempts active_attempt
+          where active_attempt.attempt_id = ${attemptId}::uuid
+            and upper(coalesce(active_attempt.status, '')) not in (
+              'COMPLETED', 'TERMINATED', 'ABANDONED', 'EXPIRED',
+              'FINALIZED', 'FAILED', 'TIME_EXPIRED'
+            )
+        )
+    `;
+
+    if (Number(restoredInterviews) > 0) {
+      logInterviewEvent("info", "interview.heartbeat_recovered", {
+        attemptId,
+        interviewId: attempt.interview_id,
+        state: "INTERRUPTED",
+        nextState: "IN_PROGRESS",
+      });
+    }
+  }
+
   return {
     ok: true,
     finalized: false,

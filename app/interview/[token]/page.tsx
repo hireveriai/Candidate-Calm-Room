@@ -308,6 +308,7 @@ export default function Page() {
 
   const heartbeatIntervalRef = useRef<number | null>(null);
   const heartbeatTimeoutRef = useRef<number | null>(null);
+  const consecutiveHeartbeatFailuresRef = useRef(0);
   const reconnectTimeoutHandleRef = useRef<number | null>(null);
   const reconnectCountdownIntervalRef = useRef<number | null>(null);
   const reconnectInFlightRef = useRef(false);
@@ -2359,13 +2360,22 @@ export default function Page() {
       // failures that do not always surface through browser events.
       try {
         await sendHeartbeat();
+        consecutiveHeartbeatFailuresRef.current = 0;
       } catch (error) {
         if (isDatabaseCapacityError(error)) {
+          consecutiveHeartbeatFailuresRef.current = 0;
           console.warn("Heartbeat skipped because the database pool is saturated.", error);
           return;
         }
 
-        if (!cancelled) {
+        consecutiveHeartbeatFailuresRef.current += 1;
+        console.warn("Interview heartbeat failed", {
+          consecutiveFailures: consecutiveHeartbeatFailuresRef.current,
+          error,
+        });
+
+        if (!cancelled && consecutiveHeartbeatFailuresRef.current >= 3) {
+          consecutiveHeartbeatFailuresRef.current = 0;
           await enterReconnectMode(
             error instanceof Error
               ? error.message
