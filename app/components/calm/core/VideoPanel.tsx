@@ -673,13 +673,13 @@ export default function VideoPanel({
         ]);
 
         await room.connect(liveKitUrl, token);
-        hasConnectedRoomRef.current = true;
-        onRoomConnectionChangeRef.current?.("connected");
-
         if (cancelled) {
           room.disconnect();
           return;
         }
+
+        hasConnectedRoomRef.current = true;
+        onRoomConnectionChangeRef.current?.("connected");
 
         const [videoTrack] = stream.getVideoTracks();
 
@@ -717,22 +717,29 @@ export default function VideoPanel({
         }, 2_000);
 
       } catch (error) {
+        if (cancelled) {
+          return;
+        }
         console.error("Unable to publish LiveKit camera feed:", error);
         onRoomConnectionChangeRef.current?.("disconnected");
       }
     }
 
     room.on("reconnecting", () => {
-      if (hasConnectedRoomRef.current) {
+      if (!cancelled && hasConnectedRoomRef.current) {
         onRoomConnectionChangeRef.current?.("reconnecting");
       }
     });
     room.on("reconnected", () => {
+      if (cancelled) {
+        return;
+      }
       hasConnectedRoomRef.current = true;
       onRoomConnectionChangeRef.current?.("connected");
     });
     room.on("disconnected", () => {
-      if (hasConnectedRoomRef.current) {
+      if (!cancelled && hasConnectedRoomRef.current) {
+        hasConnectedRoomRef.current = false;
         onRoomConnectionChangeRef.current?.("disconnected");
       }
     });
@@ -746,9 +753,9 @@ export default function VideoPanel({
       }
       void ensureRecordingStopped();
       onRecordingFinalizerChangeRef.current?.(null);
+      hasConnectedRoomRef.current = false;
       room.disconnect();
       roomRef.current = null;
-      hasConnectedRoomRef.current = false;
     };
   }, [attemptId, reconnectKey]);
 

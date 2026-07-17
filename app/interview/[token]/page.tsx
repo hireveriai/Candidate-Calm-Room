@@ -2561,12 +2561,17 @@ export default function Page() {
                   return;
                 }
 
+                // LiveKit performs its own transient reconnection. Restarting
+                // the component here tears down that recovery and used to
+                // create a false "realtime interview interrupted" record.
+                if (state === "reconnecting") {
+                  return;
+                }
+
                 if (started && !interviewFinished && !interviewInterrupted) {
                   void enterReconnectMode(
-                    state === "reconnecting"
-                      ? "Realtime interview link is reconnecting."
-                      : "Realtime interview link was interrupted.",
-                    "livekit_room",
+                    "Realtime interview connection ended unexpectedly.",
+                    "livekit_disconnected",
                     {
                       roomState: state,
                     }
