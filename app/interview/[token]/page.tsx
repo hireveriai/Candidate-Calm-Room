@@ -2543,10 +2543,16 @@ export default function Page() {
                 recordingFinalizerRef.current = finalize;
               }}
               onVideoReady={(ref) => (videoRef.current = ref.current)}
-              onCameraStatusChange={(ready) => {
+              onCameraStatusChange={(ready, reason) => {
                 setCameraReady(ready);
-                if (!ready && started && !interviewFinished && !interviewInterrupted) {
-                  void enterReconnectMode("Camera stream interrupted.", "camera_stream");
+                if (!ready && reason && started && !interviewFinished && !interviewInterrupted) {
+                  void enterReconnectMode(
+                    reason === "track_ended"
+                      ? "Camera track ended unexpectedly."
+                      : "Camera could not be accessed.",
+                    reason === "track_ended" ? "camera_track_ended" : "camera_acquisition_failed",
+                    { cameraFailureReason: reason }
+                  );
                 }
               }}
               onRoomConnectionChange={(state) => {

@@ -26,7 +26,10 @@ type Props = {
   onVideoReady?: (ref: RefObject<HTMLVideoElement | null>) => void;
   onRecordingStarted?: (startedAt: number) => void;
   onRecordingFinalizerChange?: (finalize: (() => Promise<void>) | null) => void;
-  onCameraStatusChange?: (ready: boolean) => void;
+  onCameraStatusChange?: (
+    ready: boolean,
+    reason?: "acquisition_failed" | "track_ended"
+  ) => void;
   onRoomConnectionChange?: (
     state: "connected" | "reconnecting" | "disconnected"
   ) => void;
@@ -304,6 +307,13 @@ export default function VideoPanel({
 
   useEffect(() => {
     const videoElement = videoRef.current;
+    let cancelled = false;
+    let videoTrack: MediaStreamTrack | null = null;
+    const handleVideoTrackEnded = () => {
+      if (!cancelled) {
+        onCameraStatusChangeRef.current?.(false, "track_ended");
+      }
+    };
 
     async function startCamera() {
       try {
@@ -334,7 +344,14 @@ export default function VideoPanel({
           });
         }
 
+        if (cancelled) {
+          stream.getTracks().forEach((track) => track.stop());
+          return;
+        }
+
         cameraStreamRef.current = stream;
+        videoTrack = stream.getVideoTracks()[0] ?? null;
+        videoTrack?.addEventListener("ended", handleVideoTrackEnded);
 
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
@@ -351,21 +368,25 @@ export default function VideoPanel({
 
         onCameraStatusChangeRef.current?.(true);
       } catch (err) {
+        if (cancelled) {
+          return;
+        }
         console.error("Camera error:", err);
-        onCameraStatusChangeRef.current?.(false);
+        onCameraStatusChangeRef.current?.(false, "acquisition_failed");
       }
     }
 
     startCamera();
 
     return () => {
+      cancelled = true;
+      videoTrack?.removeEventListener("ended", handleVideoTrackEnded);
       if (videoElement) {
         videoElement.srcObject = null;
       }
 
       cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
       cameraStreamRef.current = null;
-      onCameraStatusChangeRef.current?.(false);
     };
   }, [reconnectKey]);
 
