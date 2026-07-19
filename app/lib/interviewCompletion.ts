@@ -614,8 +614,8 @@ async function sleep(ms: number) {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function loadScoreAggregatesWithRetry(attemptId: string) {
-  let aggregateRows = await loadScoreAggregates(prisma, attemptId);
+async function loadScoreAggregatesWithRetry(db: PrismaExecutor, attemptId: string) {
+  let aggregateRows = await loadScoreAggregates(db, attemptId);
 
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const aggregate = aggregateRows[0];
@@ -630,7 +630,7 @@ async function loadScoreAggregatesWithRetry(attemptId: string) {
     }
 
     await sleep(200 * (attempt + 1));
-    aggregateRows = await loadScoreAggregates(prisma, attemptId);
+    aggregateRows = await loadScoreAggregates(db, attemptId);
   }
 
   return aggregateRows;
@@ -955,7 +955,7 @@ export async function finalizeInterviewAttempt(params: {
       where attempt_id = ${attemptId}::uuid
     `;
 
-    const aggregates = await loadScoreAggregatesWithRetry(attemptId);
+    const aggregates = await loadScoreAggregatesWithRetry(tx, attemptId);
     const firstAggregate = aggregates[0];
     const waitingForScores =
       (firstAggregate?.questions_answered ?? 0) > 0 &&
@@ -1393,5 +1393,8 @@ export async function finalizeInterviewAttempt(params: {
       completion_percentage: round(completionPercentage * 100),
       reliability_score: reliabilityScore,
     } satisfies InterviewCompletionResult;
+  }, {
+    maxWait: 10_000,
+    timeout: 30_000,
   });
 }

@@ -31,6 +31,7 @@ type CompletionEvidenceRow = {
   session_questions: number;
   answer_rows: number;
   non_empty_answers: number;
+  completed_recordings: number;
   recordings_with_transcript: number;
 };
 
@@ -47,6 +48,13 @@ async function loadCompletionEvidence(attemptId: string) {
         )::int,
         0
       )::int as expected_questions,
+      (
+        select count(*)
+        from public.interview_recordings ir
+        where ir.attempt_id = ia.attempt_id
+          and lower(coalesce(ir.status, '')) = 'completed'
+          and nullif(trim(coalesce(ir.file_path, ir.audio_url, ir.video_url, '')), '') is not null
+      )::int as completed_recordings,
       (
         select count(*)
         from public.session_questions sq
@@ -89,7 +97,7 @@ function hasCompletionEvidence(evidence: CompletionEvidenceRow | null) {
   const askedEnough = evidence.session_questions >= expectedQuestions;
   const answeredEnough =
     evidence.non_empty_answers >= Math.max(expectedQuestions - 1, 1) ||
-    evidence.answer_rows >= expectedQuestions;
+    (evidence.answer_rows >= expectedQuestions && evidence.completed_recordings > 0);
 
   // A missing live transcript is recoverable from the finalized recording.
   // Requiring a transcript here caused fully answered attempts to be marked
@@ -342,8 +350,19 @@ export async function runInterviewWatchdog() {
         'INTERRUPTED',
         'COMPLETING',
         'FINALIZING',
+        'COMPLETED',
         'ABANDONED',
         'TIME_EXPIRED'
+      )
+      and (
+        upper(coalesce(status, '')) <> 'COMPLETED'
+        or (
+          upper(coalesce(transcript_status, 'PENDING')) in ('PENDING', 'PARTIAL', 'FAILED')
+          and coalesce(
+            nullif(termination_metadata #>> '{transcript_integrity,checkedAt}', '')::timestamptz,
+            'epoch'::timestamptz
+          ) < now() - interval '1 hour'
+        )
       )
       and (
         upper(coalesce(status, '')) not in ('ABANDONED', 'TIME_EXPIRED')
@@ -354,6 +373,10 @@ export async function runInterviewWatchdog() {
             and (
               upper(coalesce(interrupted_interview.status, '')) = 'INTERRUPTED'
               or upper(coalesce(interrupted_interview.final_status, '')) = 'INTERRUPTED'
+              or (
+                upper(coalesce(interrupted_interview.status, '')) = 'COMPLETED'
+                and upper(coalesce(interrupted_interview.final_status, '')) in ('ABANDONED', 'TIME_EXPIRED')
+              )
             )
         )
       )
@@ -482,8 +505,15 @@ export async function runInterviewWatchdog() {
       if (Number(result) > 0) {
         await tx.$executeRaw`
           update public.interviews i
-          set status = 'COMPLETED',
-              final_status = coalesce(final_status, ${finalStatus}::text)
+          set status = 'INTERRUPTED',
+              final_status = 'INTERRUPTED',
+              failure_reason = coalesce(
+                failure_reason,
+                case
+                  when ${row.close_reason}::text = 'SESSION_TIME_EXPIRED' then 'SESSION_TIME_EXPIRED'
+                  else 'HEARTBEAT_TIMEOUT'
+                end
+              )
           where i.interview_id = ${row.interview_id}::uuid
             and not exists (
               select 1

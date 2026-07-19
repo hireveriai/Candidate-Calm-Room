@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import { Prisma } from "@prisma/client";
+import { randomUUID } from "node:crypto";
 
 import { prisma } from "@/app/lib/prisma";
 import { isInvalidCandidateTranscript } from "@/app/lib/transcriptGuards";
@@ -19,6 +20,7 @@ type RepairRecordingRow = {
   file_path: string;
   transcript: string | null;
   object_size: bigint | number | string | null;
+  duration_seconds: number | string | null;
 };
 
 type AlignedAnswer = {
@@ -51,6 +53,11 @@ export type CompletionTranscriptIntegrityResult = {
 };
 
 const MAX_REPAIR_OBJECT_BYTES = 24_000_000;
+const MAX_REPAIR_AUDIO_SECONDS = 75 * 60;
+const MAX_REPAIR_FAILURES = 5;
+const TRANSCRIPTION_LEASE_MINUTES = 10;
+
+type RepairLeaseOutcome = "completed" | "failed" | "partial";
 
 function normalizeText(value: unknown) {
   return String(value ?? "").replace(/\s+/g, " ").trim();
@@ -145,6 +152,10 @@ async function fetchBestRecording(attemptId: string) {
       ir.recording_id::text,
       ir.file_path,
       ir.transcript,
+      greatest(
+        extract(epoch from (coalesce(ir.ended_at, ir.created_at) - coalesce(ir.started_at, ir.created_at))),
+        0
+      ) as duration_seconds,
       coalesce((so.metadata->>'size')::bigint, 0) as object_size
     from public.interview_recordings ir
     left join storage.objects so
@@ -158,13 +169,122 @@ async function fetchBestRecording(attemptId: string) {
         or nullif(btrim(coalesce(ir.transcript, '')), '') is not null
       )
       and coalesce((so.metadata->>'size')::bigint, 0) <= ${MAX_REPAIR_OBJECT_BYTES}
-    order by extract(epoch from (coalesce(ir.ended_at, ir.created_at, now()) - coalesce(ir.started_at, ir.created_at, now()))) desc nulls last,
+    order by case when nullif(btrim(coalesce(ir.transcript, '')), '') is not null then 0 else 1 end,
+             char_length(coalesce(ir.transcript, '')) desc,
+             extract(epoch from (coalesce(ir.ended_at, ir.created_at, now()) - coalesce(ir.started_at, ir.created_at, now()))) desc nulls last,
              case when ir.file_path ilike '%.mp4%' then 0 else 1 end,
              coalesce(ir.started_at, ir.created_at) asc
     limit 1
   `;
 
   return rows[0] ?? null;
+}
+
+async function claimRepairLease(attemptId: string, recordingId: string) {
+  const token = randomUUID();
+  const rows = await prisma.$queryRaw<Array<{ attempt_id: string }>>`
+    update public.interview_attempts
+    set termination_metadata = jsonb_set(
+      coalesce(termination_metadata, '{}'::jsonb),
+      '{transcription_repair}',
+      coalesce(termination_metadata->'transcription_repair', '{}'::jsonb) || jsonb_build_object(
+        'lease_token', ${token}::text,
+        'recording_id', ${recordingId}::text,
+        'status', 'processing',
+        'started_at', now(),
+        'locked_until', now() + (${TRANSCRIPTION_LEASE_MINUTES} * interval '1 minute')
+      ),
+      true
+    )
+    where attempt_id = ${attemptId}::uuid
+      and coalesce(
+        nullif(termination_metadata #>> '{transcription_repair,locked_until}', '')::timestamptz,
+        'epoch'::timestamptz
+      ) <= now()
+      and coalesce(
+        nullif(termination_metadata #>> '{transcription_repair,next_retry_at}', '')::timestamptz,
+        'epoch'::timestamptz
+      ) <= now()
+      and coalesce(
+        case
+          when coalesce(termination_metadata #>> '{transcription_repair,failure_count}', '') ~ '^[0-9]+$'
+            then (termination_metadata #>> '{transcription_repair,failure_count}')::int
+          else 0
+        end,
+        0
+      ) < ${MAX_REPAIR_FAILURES}
+    returning attempt_id::text
+  `;
+
+  return rows.length > 0 ? token : null;
+}
+
+async function releaseRepairLease(params: {
+  attemptId: string;
+  token: string;
+  recordingId: string;
+  outcome: RepairLeaseOutcome;
+  rawTranscriptPersisted: boolean;
+  billedAudioSeconds?: number | null;
+  error?: unknown;
+}) {
+  const failed = params.outcome !== "completed";
+  const errorMessage = params.error instanceof Error
+    ? params.error.message.slice(0, 500)
+    : params.error
+      ? String(params.error).slice(0, 500)
+      : null;
+
+  await prisma.$executeRaw`
+    update public.interview_attempts
+    set termination_metadata = jsonb_set(
+      coalesce(termination_metadata, '{}'::jsonb),
+      '{transcription_repair}',
+      coalesce(termination_metadata->'transcription_repair', '{}'::jsonb) || jsonb_build_object(
+        'lease_token', null,
+        'recording_id', ${params.recordingId}::text,
+        'status', ${params.outcome}::text,
+        'finished_at', now(),
+        'locked_until', now(),
+        'raw_transcript_persisted', ${params.rawTranscriptPersisted}::boolean,
+        'billed_audio_seconds', ${params.billedAudioSeconds ?? null}::numeric,
+        'last_error', ${errorMessage}::text,
+        'failure_count', case
+          when ${failed}::boolean then coalesce(
+            case
+              when coalesce(termination_metadata #>> '{transcription_repair,failure_count}', '') ~ '^[0-9]+$'
+                then (termination_metadata #>> '{transcription_repair,failure_count}')::int
+              else 0
+            end,
+            0
+          ) + 1
+          else 0
+        end,
+        'next_retry_at', case
+          when ${failed}::boolean then now() + (
+            least(
+              360,
+              15 * power(
+                2,
+                least(
+                  case
+                    when coalesce(termination_metadata #>> '{transcription_repair,failure_count}', '') ~ '^[0-9]+$'
+                      then (termination_metadata #>> '{transcription_repair,failure_count}')::int
+                    else 0
+                  end,
+                  4
+                )
+              )
+            )::text || ' minutes'
+          )::interval
+          else null
+        end
+      ),
+      true
+    )
+    where attempt_id = ${params.attemptId}::uuid
+      and termination_metadata #>> '{transcription_repair,lease_token}' = ${params.token}
+  `;
 }
 
 async function transcribeRecording(openai: OpenAI, filePath: string) {
@@ -417,19 +537,89 @@ export async function repairPendingAnswersFromRecording(attemptId: string) {
     return { repaired: 0, skipped: "no_usable_recording" };
   }
 
+  if (
+    !normalizeText(recording.transcript) &&
+    Number(recording.duration_seconds ?? 0) > MAX_REPAIR_AUDIO_SECONDS
+  ) {
+    return { repaired: codeRepair.repaired, skipped: "recording_exceeds_transcription_cost_limit" };
+  }
+
+  const leaseToken = await claimRepairLease(attemptId, recording.recording_id);
+  if (!leaseToken) {
+    return { repaired: codeRepair.repaired, skipped: "repair_already_running_or_backing_off" };
+  }
+
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   const questions = await fetchRepairQuestions(attemptId);
   const existingRecordingTranscript = normalizeText(recording.transcript);
-  const transcription = existingRecordingTranscript
-    ? { text: existingRecordingTranscript, segments: [] }
-    : await transcribeRecording(openai, recording.file_path);
+  let transcription;
+  try {
+    transcription = existingRecordingTranscript
+      ? { text: existingRecordingTranscript, segments: [] }
+      : await transcribeRecording(openai, recording.file_path);
+  } catch (error) {
+    console.error("Recording transcription recovery is temporarily unavailable", {
+      attemptId,
+      recordingId: recording.recording_id,
+      error,
+    });
+    await releaseRepairLease({
+      attemptId,
+      token: leaseToken,
+      recordingId: recording.recording_id,
+      outcome: "failed",
+      rawTranscriptPersisted: false,
+      error,
+    });
+    return {
+      repaired: codeRepair.repaired,
+      skipped: "recording_transcription_unavailable",
+    };
+  }
   const transcriptText = normalizeText(transcription.text);
 
   if (!transcriptText) {
+    await releaseRepairLease({
+      attemptId,
+      token: leaseToken,
+      recordingId: recording.recording_id,
+      outcome: "failed",
+      rawTranscriptPersisted: false,
+      error: "Empty transcription",
+    });
     return { repaired: 0, skipped: "empty_transcription" };
   }
 
-  const alignedAnswers = await alignAnswers(openai, questions, transcriptText);
+  // Persist the costly Whisper result before optional answer alignment. If a
+  // later step fails, every retry reuses this transcript instead of uploading
+  // and billing the full recording again.
+  await prisma.$executeRaw`
+    update public.interview_recordings
+    set transcript = coalesce(nullif(btrim(transcript), ''), ${transcriptText})
+    where recording_id = ${recording.recording_id}::uuid
+  `;
+
+  const billedAudioSeconds = existingRecordingTranscript
+    ? 0
+    : Number((transcription as { duration?: number; usage?: { seconds?: number } }).usage?.seconds
+      ?? (transcription as { duration?: number }).duration
+      ?? 0);
+
+  let alignmentUnavailable = false;
+  let alignedAnswers: AlignedAnswer[] = [];
+  try {
+    alignedAnswers = await alignAnswers(openai, questions, transcriptText);
+  } catch (error) {
+    // The recording transcript is still durable evidence even when the optional
+    // AI alignment service is out of quota or temporarily unavailable. Keep the
+    // transcript, finish the lifecycle, and leave missing answers for review.
+    alignmentUnavailable = true;
+    console.error("Recording answer alignment is temporarily unavailable", {
+      attemptId,
+      recordingId: recording.recording_id,
+      error,
+    });
+  }
   const answersByOrder = new Map<number, string>();
 
   for (const aligned of alignedAnswers) {
@@ -554,7 +744,21 @@ export async function repairPendingAnswersFromRecording(attemptId: string) {
     `;
   });
 
-  return { repaired: repaired + codeRepair.repaired, recordingId: recording.recording_id };
+  await releaseRepairLease({
+    attemptId,
+    token: leaseToken,
+    recordingId: recording.recording_id,
+    outcome: alignmentUnavailable ? "partial" : "completed",
+    rawTranscriptPersisted: true,
+    billedAudioSeconds,
+    error: alignmentUnavailable ? "Answer alignment unavailable" : null,
+  });
+
+  return {
+    repaired: repaired + codeRepair.repaired,
+    recordingId: recording.recording_id,
+    ...(alignmentUnavailable ? { skipped: "recording_alignment_unavailable" } : {}),
+  };
 }
 
 export async function validateAndRepairCompletionTranscripts(attemptId: string) {
