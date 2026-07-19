@@ -407,9 +407,13 @@ export default function Page() {
         : new URL(path, window.location.origin).toString();
 
     for (let attempt = 0; attempt < 2; attempt += 1) {
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 20_000);
+
       try {
         const response = await fetch(url, {
           method: "POST",
+          signal: controller.signal,
           headers: {
             "Content-Type": "application/json",
           },
@@ -428,10 +432,18 @@ export default function Page() {
         return payload as T;
       } catch (error) {
         if (attempt === 1) {
+          if (error instanceof DOMException && error.name === "AbortError") {
+            throw new Error(
+              "VERIS took too long to prepare the next step. Please try again. Your recorded response is safe."
+            );
+          }
+
           throw error;
         }
 
         await new Promise((resolve) => setTimeout(resolve, 750));
+      } finally {
+        window.clearTimeout(timeout);
       }
     }
 

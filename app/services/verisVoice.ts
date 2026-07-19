@@ -72,7 +72,22 @@ export function speak(text: string): Promise<void> {
     utterance.pitch = 1;
     utterance.volume = 1;
 
-    utterance.onend = () => resolve();
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(watchdog);
+      resolve();
+    };
+    const estimatedSpeechMs = Math.max(8_000, text.trim().split(/\s+/).length * 650);
+    const watchdog = window.setTimeout(() => {
+      console.warn("Speech synthesis stalled; continuing the interview.");
+      window.speechSynthesis.cancel();
+      finish();
+    }, Math.min(30_000, estimatedSpeechMs));
+
+    utterance.onend = finish;
+    utterance.onerror = finish;
 
     window.speechSynthesis.cancel(); // prevent overlap
     window.speechSynthesis.speak(utterance);
