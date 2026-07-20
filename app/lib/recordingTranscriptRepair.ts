@@ -76,9 +76,44 @@ function isNoResponse(value: unknown) {
   return /^no response provided\.?$/i.test(normalizeText(value));
 }
 
+function isDegenerateTranscript(value: unknown) {
+  const words = normalizeText(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9' ]/g, " ")
+    .split(/\s+/)
+    .filter(Boolean);
+  if (words.length < 8) {
+    return words.length > 0 && new Set(words).size <= 2;
+  }
+
+  const wordCounts = new Map<string, number>();
+  for (const word of words) {
+    wordCounts.set(word, (wordCounts.get(word) ?? 0) + 1);
+  }
+  const mostFrequentWord = Math.max(...wordCounts.values());
+  if (mostFrequentWord / words.length >= 0.32) {
+    return true;
+  }
+
+  if (words.length >= 36) {
+    const shingles = new Set<string>();
+    for (let index = 0; index <= words.length - 6; index += 1) {
+      shingles.add(words.slice(index, index + 6).join(" "));
+    }
+    if (shingles.size / (words.length - 5) < 0.3) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 function isReusableRecordingTranscript(value: unknown) {
   const transcript = normalizeText(value);
   if (transcript.length < 1_000) {
+    return false;
+  }
+  if (isDegenerateTranscript(transcript)) {
     return false;
   }
 
@@ -372,6 +407,8 @@ async function transcribeRecording(openai: OpenAI, filePath: string) {
   return openai.audio.transcriptions.create({
     file,
     model: "whisper-1",
+    language: "en",
+    prompt: "English technical job interview. Transcribe only clearly audible speech. Do not repeat phrases to fill silence.",
     response_format: "verbose_json",
     timestamp_granularities: ["segment"],
     temperature: 0,
@@ -657,16 +694,16 @@ export async function repairPendingAnswersFromRecording(attemptId: string) {
   }
   const transcriptText = normalizeText(transcription.text);
 
-  if (!transcriptText) {
+  if (!transcriptText || isDegenerateTranscript(transcriptText)) {
     await releaseRepairLease({
       attemptId,
       token: leaseToken,
       recordingId: recording.recording_id,
       outcome: "failed",
       rawTranscriptPersisted: false,
-      error: "Empty transcription",
+      error: transcriptText ? "Degenerate repetitive transcription" : "Empty transcription",
     });
-    return { repaired: 0, skipped: "empty_transcription" };
+    return { repaired: 0, skipped: transcriptText ? "degenerate_transcription" : "empty_transcription" };
   }
 
   // Persist the costly Whisper result before optional answer alignment. If a
