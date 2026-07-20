@@ -267,6 +267,7 @@ export default function Page() {
   const listeningActiveRef = useRef(false);
   const acceptingTranscriptRef = useRef(false);
   const isAdvancingRef = useRef(false);
+  const handleAutoNextRef = useRef<(() => Promise<void>) | null>(null);
   const terminationInFlightRef = useRef(false);
   const completionInFlightRef = useRef(false);
   const lastSignalSentRef = useRef<Record<string, number>>({});
@@ -2030,14 +2031,6 @@ export default function Page() {
       });
       return;
     }
-    if (answerWindowEnded && !sessionTimeEnded) {
-      setWarning({
-        type: "hard",
-        message: "Answer window has expired.",
-        visible: true,
-      });
-      return;
-    }
     isAdvancingRef.current = true;
 
     stopAll();
@@ -2068,6 +2061,8 @@ export default function Page() {
       });
     }
   };
+
+  handleAutoNextRef.current = handleAutoNext;
 
   // 🚨 TAB DETECTION
   useEffect(() => {
@@ -2327,6 +2322,36 @@ export default function Page() {
 
   useEffect(() => {
     if (
+      !answerWindowEnded ||
+      sessionTimeEnded ||
+      !started ||
+      !sessionQuestionId ||
+      interviewFinished ||
+      interviewInterrupted ||
+      isReconnecting ||
+      showCoding ||
+      isAdvancingRef.current
+    ) {
+      return;
+    }
+
+    // A timed-out spoken answer must advance instead of trapping the candidate
+    // behind disabled controls. submitAnswer persists any transcript captured so
+    // far (or a recoverable recording-backed placeholder) before moving on.
+    void handleAutoNextRef.current?.();
+  }, [
+    answerWindowEnded,
+    interviewFinished,
+    interviewInterrupted,
+    isReconnecting,
+    sessionQuestionId,
+    sessionTimeEnded,
+    showCoding,
+    started,
+  ]);
+
+  useEffect(() => {
+    if (
       !sessionTimeEnded ||
       !started ||
       !attemptId ||
@@ -2339,9 +2364,10 @@ export default function Page() {
       return;
     }
 
-    void completeInterview(
-      "Interview time ended. Finished. Interview completed."
-    );
+    // Preserve the active response before finalizing at the overall time limit.
+    // handleAutoNext submits the buffered transcript and then follows the
+    // completeAfterFinalAnswer path because sessionTimeEnded is true.
+    void handleAutoNextRef.current?.();
   }, [
     attemptId,
     interviewFinished,
@@ -2651,12 +2677,11 @@ export default function Page() {
 
               <InterviewControls
                 disabled={isTransitioning || isReconnecting}
-                nextDisabled={answerWindowEnded && !sessionTimeEnded}
                 skipDisabled={sessionTimeEnded}
                 primaryLabel={sessionTimeEnded ? "Finish Answer" : "Next Question"}
                 message={
                   answerWindowEnded
-                    ? "Answer window expired"
+                    ? "Time limit reached. Saving your response and continuing..."
                     : sessionTimeEnded
                       ? "Finish your current answer"
                       : undefined
