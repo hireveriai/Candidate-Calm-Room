@@ -6,7 +6,7 @@ import { validateAndRepairCompletionTranscripts } from "@/app/lib/recordingTrans
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-export const maxDuration = 30;
+export const maxDuration = 300;
 
 type TerminationType =
   | "manual_exit"

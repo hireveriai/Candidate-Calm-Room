@@ -267,7 +267,7 @@ export default function Page() {
   const listeningActiveRef = useRef(false);
   const acceptingTranscriptRef = useRef(false);
   const isAdvancingRef = useRef(false);
-  const handleAutoNextRef = useRef<(() => Promise<void>) | null>(null);
+  const handleAutoNextRef = useRef<((options?: { allowPendingTranscription?: boolean }) => Promise<void>) | null>(null);
   const terminationInFlightRef = useRef(false);
   const completionInFlightRef = useRef(false);
   const lastSignalSentRef = useRef<Record<string, number>>({});
@@ -1685,7 +1685,7 @@ export default function Page() {
     }
   };
 
-  const submitAnswer = async () => {
+  const submitAnswer = async (options: { allowPendingTranscription?: boolean } = {}) => {
     if (!sessionQuestionId || !attemptId || !candidateId || !questionId) return;
     await new Promise((resolve) => setTimeout(resolve, 300));
     const rawTranscript = transcriptRef.current.trim() || transcript.trim();
@@ -1716,6 +1716,7 @@ export default function Page() {
         transcript: safeTranscript,
         rawTranscript: rawTranscript || safeTranscript,
         duration: answerDuration,
+        allowPendingTranscription: options.allowPendingTranscription === true,
       });
 
     const answerText = answer.answer_text
@@ -2021,7 +2022,7 @@ export default function Page() {
     }
   };
 
-  const handleAutoNext = async () => {
+  const handleAutoNext = async (options: { allowPendingTranscription?: boolean } = {}) => {
     if (isAdvancingRef.current) return;
     if (showCoding) {
       setWarning({
@@ -2029,6 +2030,25 @@ export default function Page() {
         message: "Please submit your coding answer to continue.",
         visible: true,
       });
+      return;
+    }
+
+    const capturedTranscript = cleanTranscript(
+      transcriptRef.current.trim() || transcript.trim()
+    );
+    const hasValidTranscript = Boolean(capturedTranscript) && !isInvalidCandidateTranscript({
+      transcript: capturedTranscript,
+      questionText: currentQuestion,
+    });
+    if (!options.allowPendingTranscription && !hasValidTranscript) {
+      setWarning({
+        type: "hard",
+        message: "We heard activity but could not capture your words. Please check that the browser microphone is enabled, repeat your answer, and then select Next Question. Your interview has not advanced.",
+        visible: true,
+      });
+      if (!recognitionRef.current) {
+        startListening();
+      }
       return;
     }
     isAdvancingRef.current = true;
@@ -2041,7 +2061,7 @@ export default function Page() {
     setIsTransitioning(true);
 
     try {
-      await submitAnswer();
+      await submitAnswer(options);
       if (sessionTimeEnded) {
         await completeAfterFinalAnswer();
       } else {
@@ -2338,7 +2358,7 @@ export default function Page() {
     // A timed-out spoken answer must advance instead of trapping the candidate
     // behind disabled controls. submitAnswer persists any transcript captured so
     // far (or a recoverable recording-backed placeholder) before moving on.
-    void handleAutoNextRef.current?.();
+    void handleAutoNextRef.current?.({ allowPendingTranscription: true });
   }, [
     answerWindowEnded,
     interviewFinished,
@@ -2367,7 +2387,7 @@ export default function Page() {
     // Preserve the active response before finalizing at the overall time limit.
     // handleAutoNext submits the buffered transcript and then follows the
     // completeAfterFinalAnswer path because sessionTimeEnded is true.
-    void handleAutoNextRef.current?.();
+    void handleAutoNextRef.current?.({ allowPendingTranscription: true });
   }, [
     attemptId,
     interviewFinished,
@@ -2687,7 +2707,7 @@ export default function Page() {
                       : undefined
                 }
                 onNext={() => void handleAutoNext()}
-                onSkip={() => void handleAutoNext()}
+                onSkip={() => void handleAutoNext({ allowPendingTranscription: true })}
               />
             </div>
           </aside>

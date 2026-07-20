@@ -25,6 +25,7 @@ type RequestBody = {
   transcript?: string;
   rawTranscript?: string;
   duration?: number;
+  allowPendingTranscription?: boolean;
 };
 
 function normalizeTranscript(text: string) {
@@ -140,6 +141,27 @@ export async function POST(request: Request) {
     });
 
     if (!transcript || isNoResponseSentinel(transcript) || invalidTranscript) {
+      if (body.allowPendingTranscription !== true) {
+        logInterviewEvent("warn", "answer.transcript_capture_required", {
+          attemptId: context.attempt_id,
+          candidateId: context.candidate_id,
+          questionSequence: null,
+          aiLatencyMs: Date.now() - startedAt,
+          state: "ANSWER_PROCESSING",
+          nextState: "LISTENING",
+          reason: invalidTranscript
+            ? "interviewer_prompt_echo"
+            : "browser_speech_recognition_empty",
+        });
+        return Response.json(
+          {
+            error: "Your spoken answer was not captured. Please confirm microphone access and repeat the answer before continuing.",
+            code: "TRANSCRIPT_CAPTURE_REQUIRED",
+          },
+          { status: 422 }
+        );
+      }
+
       const pendingRecord = await createPendingSpokenAnswer({
         question_id: logicalQuestionId,
         question_text: context.question_text,

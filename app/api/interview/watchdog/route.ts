@@ -2,6 +2,7 @@ import { runInterviewWatchdog } from "@/app/lib/interviewWatchdog";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+export const maxDuration = 300;
 
 function isAuthorizedCronRequest(request: Request) {
   const cronSecret = process.env.CRON_SECRET;

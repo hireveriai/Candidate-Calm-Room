@@ -1,6 +1,11 @@
 import OpenAI from "openai";
 import { Prisma } from "@prisma/client";
 import { randomUUID } from "node:crypto";
+import { promises as fs } from "node:fs";
+import { tmpdir } from "node:os";
+import { extname, join } from "node:path";
+import { spawn } from "node:child_process";
+import ffmpegPath from "ffmpeg-static";
 
 import { prisma } from "@/app/lib/prisma";
 import { isInvalidCandidateTranscript } from "@/app/lib/transcriptGuards";
@@ -52,7 +57,11 @@ export type CompletionTranscriptIntegrityResult = {
   repairSkipped?: string;
 };
 
-const MAX_REPAIR_OBJECT_BYTES = 24_000_000;
+// OpenAI transcription uploads must remain below 25 MB, but the original
+// interview video can be much larger. Large videos are converted to a small,
+// mono speech-only MP3 before upload instead of being silently excluded.
+const MAX_TRANSCRIPTION_UPLOAD_BYTES = 24_000_000;
+const MAX_REPAIR_OBJECT_BYTES = 150_000_000;
 const MAX_REPAIR_AUDIO_SECONDS = 75 * 60;
 const MAX_REPAIR_FAILURES = 5;
 const TRANSCRIPTION_LEASE_MINUTES = 10;
@@ -65,6 +74,20 @@ function normalizeText(value: unknown) {
 
 function isNoResponse(value: unknown) {
   return /^no response provided\.?$/i.test(normalizeText(value));
+}
+
+function isReusableRecordingTranscript(value: unknown) {
+  const transcript = normalizeText(value);
+  if (transcript.length < 1_000) {
+    return false;
+  }
+
+  // Completion summaries from older deployments were sometimes written into
+  // the recording transcript field. They contain question labels or mostly
+  // source code, and must never be mistaken for a raw microphone transcript.
+  const labeledQuestionCount = (transcript.match(/\bVERIS Q\d+:/gi) ?? []).length;
+  const codePunctuationCount = (transcript.match(/[{};]|=>/g) ?? []).length;
+  return labeledQuestionCount < 2 && codePunctuationCount < Math.max(12, transcript.length * 0.02);
 }
 
 function getRecordingBucket() {
@@ -169,7 +192,8 @@ async function fetchBestRecording(attemptId: string) {
         or nullif(btrim(coalesce(ir.transcript, '')), '') is not null
       )
       and coalesce((so.metadata->>'size')::bigint, 0) <= ${MAX_REPAIR_OBJECT_BYTES}
-    order by case when nullif(btrim(coalesce(ir.transcript, '')), '') is not null then 0 else 1 end,
+    order by case when ir.file_path ilike '%-browser-%' then 0 else 1 end,
+             case when nullif(btrim(coalesce(ir.transcript, '')), '') is not null then 0 else 1 end,
              char_length(coalesce(ir.transcript, '')) desc,
              extract(epoch from (coalesce(ir.ended_at, ir.created_at, now()) - coalesce(ir.started_at, ir.created_at, now()))) desc nulls last,
              case when ir.file_path ilike '%.mp4%' then 0 else 1 end,
@@ -287,9 +311,63 @@ async function releaseRepairLease(params: {
   `;
 }
 
+async function runFfmpeg(args: string[]) {
+  if (!ffmpegPath) {
+    throw new Error("FFmpeg is unavailable for large recording transcription");
+  }
+  const executable = ffmpegPath;
+
+  await new Promise<void>((resolve, reject) => {
+    const process = spawn(executable, args, { windowsHide: true });
+    let stderr = "";
+    process.stdout.resume();
+    process.stderr.on("data", (chunk) => {
+      stderr = `${stderr}${String(chunk)}`.slice(-2_000);
+    });
+    process.once("error", reject);
+    process.once("close", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`FFmpeg audio extraction failed (${code}): ${stderr}`));
+    });
+  });
+}
+
 async function transcribeRecording(openai: OpenAI, filePath: string) {
   const buffer = await fetchObjectBuffer(filePath);
-  const file = new File([buffer], "recording.mp4", { type: "video/mp4" });
+  let uploadBuffer = buffer;
+  let uploadName = `recording${extname(filePath).split("?")[0] || ".webm"}`;
+  let uploadType = filePath.toLowerCase().includes(".mp4") ? "video/mp4" : "video/webm";
+
+  if (buffer.byteLength > MAX_TRANSCRIPTION_UPLOAD_BYTES) {
+    const token = randomUUID();
+    const sourceExtension = extname(filePath).split("?")[0] || ".webm";
+    const inputPath = join(tmpdir(), `hireveri-transcript-${token}${sourceExtension}`);
+    const outputPath = join(tmpdir(), `hireveri-transcript-${token}.mp3`);
+
+    try {
+      await fs.writeFile(inputPath, buffer);
+      await runFfmpeg([
+        "-y",
+        "-i", inputPath,
+        "-vn",
+        "-ac", "1",
+        "-ar", "16000",
+        "-b:a", "32k",
+        outputPath,
+      ]);
+      uploadBuffer = await fs.readFile(outputPath);
+      uploadName = "recording-audio.mp3";
+      uploadType = "audio/mpeg";
+    } finally {
+      await Promise.allSettled([fs.unlink(inputPath), fs.unlink(outputPath)]);
+    }
+  }
+
+  if (uploadBuffer.byteLength > MAX_TRANSCRIPTION_UPLOAD_BYTES) {
+    throw new Error("Compressed recording still exceeds the transcription upload limit");
+  }
+
+  const file = new File([uploadBuffer], uploadName, { type: uploadType });
 
   return openai.audio.transcriptions.create({
     file,
@@ -552,9 +630,10 @@ export async function repairPendingAnswersFromRecording(attemptId: string) {
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   const questions = await fetchRepairQuestions(attemptId);
   const existingRecordingTranscript = normalizeText(recording.transcript);
+  const reuseExistingTranscript = isReusableRecordingTranscript(existingRecordingTranscript);
   let transcription;
   try {
-    transcription = existingRecordingTranscript
+    transcription = reuseExistingTranscript
       ? { text: existingRecordingTranscript, segments: [] }
       : await transcribeRecording(openai, recording.file_path);
   } catch (error) {
@@ -595,11 +674,11 @@ export async function repairPendingAnswersFromRecording(attemptId: string) {
   // and billing the full recording again.
   await prisma.$executeRaw`
     update public.interview_recordings
-    set transcript = coalesce(nullif(btrim(transcript), ''), ${transcriptText})
+    set transcript = ${transcriptText}
     where recording_id = ${recording.recording_id}::uuid
   `;
 
-  const billedAudioSeconds = existingRecordingTranscript
+  const billedAudioSeconds = reuseExistingTranscript
     ? 0
     : Number((transcription as { duration?: number; usage?: { seconds?: number } }).usage?.seconds
       ?? (transcription as { duration?: number }).duration
@@ -742,7 +821,7 @@ export async function repairPendingAnswersFromRecording(attemptId: string) {
       set transcript_status = case when ${repaired} > 0 then 'COMPLETED' else transcript_status end
       where attempt_id = ${attemptId}::uuid
     `;
-  });
+  }, { timeout: 60_000 });
 
   await releaseRepairLease({
     attemptId,

@@ -664,6 +664,29 @@ export default function VideoPanel({
             },
           }));
 
+        // A combined camera+microphone request can fall back to camera-only on
+        // some browsers. Never start either recording from that incomplete
+        // stream: acquire a dedicated microphone track and attach it first.
+        // This prevents the UI microphone meter (which uses a separate stream)
+        // from looking healthy while the durable recording is actually silent.
+        if (stream.getAudioTracks().length === 0) {
+          const microphoneStream = await navigator.mediaDevices.getUserMedia({
+            video: false,
+            audio: {
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true,
+              channelCount: 1,
+            },
+          });
+          const microphoneTrack = microphoneStream.getAudioTracks()[0];
+          if (!microphoneTrack || microphoneTrack.readyState !== "live") {
+            microphoneStream.getTracks().forEach((track) => track.stop());
+            throw new Error("A live microphone track is required before recording can start");
+          }
+          stream.addTrack(microphoneTrack);
+        }
+
         cameraStreamRef.current = stream;
         ensureBrowserRecordingStarted(stream, safeAttemptId);
 
