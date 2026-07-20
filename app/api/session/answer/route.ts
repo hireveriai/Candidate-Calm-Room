@@ -141,7 +141,10 @@ export async function POST(request: Request) {
     });
 
     if (!transcript || isNoResponseSentinel(transcript) || invalidTranscript) {
-      if (body.allowPendingTranscription !== true) {
+      // Default to the recording-backed pending path for compatibility with
+      // candidates who opened the interview before a deployment. Only a client
+      // that explicitly opts into strict capture validation may request a 422.
+      if (body.allowPendingTranscription === false) {
         logInterviewEvent("warn", "answer.transcript_capture_required", {
           attemptId: context.attempt_id,
           candidateId: context.candidate_id,

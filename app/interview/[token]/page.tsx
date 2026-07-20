@@ -1716,7 +1716,7 @@ export default function Page() {
         transcript: safeTranscript,
         rawTranscript: rawTranscript || safeTranscript,
         duration: answerDuration,
-        allowPendingTranscription: options.allowPendingTranscription === true,
+        allowPendingTranscription: options.allowPendingTranscription !== false,
       });
 
     const answerText = answer.answer_text
@@ -2033,24 +2033,6 @@ export default function Page() {
       return;
     }
 
-    const capturedTranscript = cleanTranscript(
-      transcriptRef.current.trim() || transcript.trim()
-    );
-    const hasValidTranscript = Boolean(capturedTranscript) && !isInvalidCandidateTranscript({
-      transcript: capturedTranscript,
-      questionText: currentQuestion,
-    });
-    if (!options.allowPendingTranscription && !hasValidTranscript) {
-      setWarning({
-        type: "hard",
-        message: "We heard activity but could not capture your words. Please check that the browser microphone is enabled, repeat your answer, and then select Next Question. Your interview has not advanced.",
-        visible: true,
-      });
-      if (!recognitionRef.current) {
-        startListening();
-      }
-      return;
-    }
     isAdvancingRef.current = true;
 
     stopAll();
