@@ -179,18 +179,7 @@ function ensureStrengths(strengths: string[]) {
     .filter((item) => item && item !== "-");
 
   if (!cleaned.length) {
-    return [
-      "Basic communication clarity",
-      "Attempted structured response",
-    ];
-  }
-
-  if (cleaned.length === 1) {
-    if (cleaned[0] !== "Basic communication clarity") {
-      cleaned.push("Basic communication clarity");
-    } else {
-      cleaned.push("Attempted structured response");
-    }
+    return ["Provided assessable response evidence"];
   }
 
   return cleaned.slice(0, 4);
@@ -1081,7 +1070,7 @@ export async function finalizeInterviewAttempt(params: {
     const weaknesses = cleanWeaknesses(
       [
         avgDepthScore < 0.55 ? "lack of depth" : "",
-        avgClarityScore < 0.55 ? "unclear answers" : "",
+        avgClarityScore < 0.55 ? "some responses need clearer sequencing or more concrete examples" : "",
         avgSkillScore < 0.55 ? "weak problem solving" : "",
       ].filter(Boolean),
       behavioralFlags
