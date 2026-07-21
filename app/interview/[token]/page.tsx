@@ -44,6 +44,10 @@ import {
   RECONNECT_BACKOFF_MS,
 } from "@/app/lib/interviewSessionReliability";
 import { isInvalidCandidateTranscript } from "@/app/lib/transcriptGuards";
+import {
+  MAX_ANSWER_TIME,
+  MAX_CODING_ANSWER_TIME,
+} from "@/app/lib/calmTiming";
 
 type VerisState = "idle" | "listening" | "thinking" | "speaking";
 type TerminationType =
@@ -131,7 +135,6 @@ const VerisOrb = dynamic(
 
 const INACTIVITY_TIMEOUT_MS = 5 * 60 * 1000;
 const DISCONNECT_GRACE_MS = 15 * 1000;
-const MAX_ANSWER_TIME_MS = 3 * 60 * 1000;
 const RECORDING_STARTUP_WAIT_MS = 7000;
 const STRICT_TAB_TERMINATION = false;
 const FINAL_VERIS_CLOSING_LINE =
@@ -266,6 +269,7 @@ export default function Page() {
   const transcriptRef = useRef("");
   const listeningActiveRef = useRef(false);
   const acceptingTranscriptRef = useRef(false);
+  const voiceActivityFramesRef = useRef(0);
   const isAdvancingRef = useRef(false);
   const handleAutoNextRef = useRef<((options?: { allowPendingTranscription?: boolean }) => Promise<void>) | null>(null);
   const terminationInFlightRef = useRef(false);
@@ -281,6 +285,7 @@ export default function Page() {
 
   const audioStreamRef = useRef<MediaStream | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
+  const audioAnimationFrameRef = useRef<number | null>(null);
 
   const { faceCount, faceDetected, multiFace, attention } =
     useCognitiveSignals({ videoRef, enabled: started });
@@ -1567,7 +1572,7 @@ export default function Page() {
     stopAll();
     stopAudioAnalysis();
     acceptingTranscriptRef.current = false;
-    isAdvancingRef.current = false;
+    voiceActivityFramesRef.current = 0;
 
     setTranscript("");
     transcriptRef.current = "";
@@ -1592,6 +1597,7 @@ export default function Page() {
     recognitionRef.current?.resetTranscript?.();
     setTranscript("");
     transcriptRef.current = "";
+    voiceActivityFramesRef.current = 0;
 
     questionStartTimeRef.current = Date.now();
     setAnswerWindowEnded(false);
@@ -1872,6 +1878,7 @@ export default function Page() {
         await getNextQuestion();
       }
       setIsTransitioning(false);
+      isAdvancingRef.current = false;
     } catch (error) {
       isAdvancingRef.current = false;
       setIsTransitioning(false);
@@ -1992,12 +1999,21 @@ export default function Page() {
       const dataArray = new Uint8Array(analyser.frequencyBinCount);
 
       const update = () => {
+        if (audioContextRef.current !== audioContext || audioContext.state === "closed") {
+          return;
+        }
         analyser.getByteFrequencyData(dataArray);
         const avg =
           dataArray.reduce((a, b) => a + b, 0) / dataArray.length;
 
         setAudioLevel(avg / 255);
-        requestAnimationFrame(update);
+        if (acceptingTranscriptRef.current && avg / 255 >= 0.025) {
+          voiceActivityFramesRef.current = Math.min(
+            voiceActivityFramesRef.current + 1,
+            300
+          );
+        }
+        audioAnimationFrameRef.current = requestAnimationFrame(update);
       };
 
       update();
@@ -2008,6 +2024,10 @@ export default function Page() {
   };
 
   const stopAudioAnalysis = () => {
+    if (audioAnimationFrameRef.current !== null) {
+      cancelAnimationFrame(audioAnimationFrameRef.current);
+      audioAnimationFrameRef.current = null;
+    }
     audioStreamRef.current?.getTracks().forEach((t) => t.stop());
     audioStreamRef.current = null;
     setMicrophoneReady(false);
@@ -2033,6 +2053,23 @@ export default function Page() {
       return;
     }
 
+    const bufferedTranscript = transcriptRef.current.trim() || transcript.trim();
+    const voiceWasDetected = voiceActivityFramesRef.current >= 12;
+    const explicitlySkipped = options.allowPendingTranscription === true;
+
+    if (!bufferedTranscript && !voiceWasDetected && !explicitlySkipped) {
+      setWarning({
+        type: "soft",
+        message:
+          "No voice was detected for this answer. Please speak before continuing, or choose Skip if you do not want to answer.",
+        visible: true,
+      });
+      if (!recognitionRef.current) {
+        startListening();
+      }
+      return;
+    }
+
     isAdvancingRef.current = true;
 
     stopAll();
@@ -2043,13 +2080,17 @@ export default function Page() {
     setIsTransitioning(true);
 
     try {
-      await submitAnswer(options);
+      await submitAnswer({
+        allowPendingTranscription:
+          explicitlySkipped || (!bufferedTranscript && voiceWasDetected),
+      });
       if (sessionTimeEnded) {
         await completeAfterFinalAnswer();
       } else {
         await getNextQuestion();
       }
       setIsTransitioning(false);
+      isAdvancingRef.current = false;
     } catch (error) {
       isAdvancingRef.current = false;
       setIsTransitioning(false);
@@ -2306,12 +2347,16 @@ export default function Page() {
       }
 
       const now = Date.now() + serverClockOffsetMsRef.current;
+      const answerWindowMs =
+        currentQuestionType === InterviewQuestionType.CODING
+          ? MAX_CODING_ANSWER_TIME
+          : MAX_ANSWER_TIME;
 
       setSessionTimeEnded(Boolean(sessionEndsAt && now >= sessionEndsAt));
       setAnswerWindowEnded(
         Boolean(
           questionStartTimeRef.current &&
-            now - questionStartTimeRef.current >= MAX_ANSWER_TIME_MS
+            now - questionStartTimeRef.current >= answerWindowMs
         )
       );
     };
@@ -2320,7 +2365,13 @@ export default function Page() {
     const timer = window.setInterval(tick, 1000);
 
     return () => window.clearInterval(timer);
-  }, [isReconnecting, sessionEndsAt, sessionQuestionId, started]);
+  }, [
+    currentQuestionType,
+    isReconnecting,
+    sessionEndsAt,
+    sessionQuestionId,
+    started,
+  ]);
 
   useEffect(() => {
     if (

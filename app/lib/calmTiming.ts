@@ -1,6 +1,6 @@
 export const MAX_ANSWER_TIME = 3 * 60 * 1000;
 export const FINAL_ANSWER_GRACE_MS = 8 * 60 * 1000;
-export const MAX_CODING_ANSWER_TIME = 45 * 60 * 1000;
+export const MAX_CODING_ANSWER_TIME = 10 * 60 * 1000;
 
 type SessionTiming = {
   ends_at: Date | string | null;

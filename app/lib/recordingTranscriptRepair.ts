@@ -108,6 +108,15 @@ function isDegenerateTranscript(value: unknown) {
   return false;
 }
 
+function isUnsafeAlignedAnswer(value: unknown) {
+  const answer = normalizeText(value);
+
+  // A normal spoken response cannot safely be inferred when alignment returns
+  // a huge portion of the interview. Long or repetitive output is usually a
+  // Whisper silence hallucination or a failed whole-transcript alignment.
+  return answer.length > 8_000 || isDegenerateTranscript(answer);
+}
+
 function isReusableRecordingTranscript(value: unknown) {
   const transcript = normalizeText(value);
   if (transcript.length < 1_000) {
@@ -428,6 +437,8 @@ async function alignAnswers(openai: OpenAI, questions: RepairQuestionRow[], tran
           "Return only JSON: {\"answers\":[{\"question_order\":number,\"answer\":string,\"evidence\":string,\"confidence\":number}]}",
           "Use only words and meaning supported by the transcript.",
           "Exclude interviewer questions from candidate answers.",
+          "Return only the candidate's direct response to that one question; never copy later questions or answers into it.",
+          "If the transcript is repetitive, corrupted, or does not contain a clearly attributable answer, use exactly \"No response provided.\"",
           "If the candidate did not substantively answer a question, use exactly \"No response provided.\"",
         ].join("\n"),
       },
@@ -763,6 +774,7 @@ export async function repairPendingAnswersFromRecording(attemptId: string) {
       if (
         !answer ||
         isNoResponse(answer) ||
+        isUnsafeAlignedAnswer(answer) ||
         isInvalidCandidateTranscript({
           transcript: answer,
           questionText: question.question,
