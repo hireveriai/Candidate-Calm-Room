@@ -8,6 +8,7 @@ import {
   S3Upload,
   VideoCodec,
 } from "livekit-server-sdk";
+import { buildCandidateRecordingFilePath } from "@/app/lib/livekit/recordingFileNames";
 
 export type RecordingStartResult = {
   egressId: string;
@@ -116,9 +117,18 @@ function getEgressClient() {
   );
 }
 
-export function buildRecordingFilePath(roomName: string, at = new Date()) {
-  const timestamp = at.toISOString().replace(/[.:]/g, "-");
-  return `recordings/${roomName}-${timestamp}.mp4`;
+export function buildRecordingFilePath(
+  roomName: string,
+  at = new Date(),
+  candidateName?: string | null,
+) {
+  return buildCandidateRecordingFilePath({
+    candidateName,
+    attemptId: roomName,
+    source: "livekit",
+    extension: "mp4",
+    at,
+  });
 }
 
 function buildS3UploadConfig() {
@@ -285,9 +295,10 @@ function buildRecordingEncodingOptions(durationMinutes: number) {
 export async function startRecording(
   roomName: string,
   durationMinutes = 30,
+  candidateName?: string | null,
 ): Promise<RecordingStartResult> {
   const client = getEgressClient();
-  const filePath = buildRecordingFilePath(roomName);
+  const filePath = buildRecordingFilePath(roomName, new Date(), candidateName);
   const output = new EncodedFileOutput({
     fileType: EncodedFileType.MP4,
     filepath: filePath,

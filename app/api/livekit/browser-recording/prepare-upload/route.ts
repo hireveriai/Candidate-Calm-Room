@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { requireCandidateSession } from "@/app/lib/candidateSession";
 import { prisma } from "@/app/lib/prisma";
+import { buildCandidateRecordingFilePath } from "@/app/lib/livekit/recordingFileNames";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -124,9 +125,20 @@ export async function POST(request: NextRequest) {
     const serviceRoleKey = requireEnv("SUPABASE_SERVICE_ROLE_KEY");
     const bucket =
       process.env.RECORDING_S3_BUCKET?.trim() || requireEnv("SUPABASE_STORAGE_BUCKET");
-    const filePath = `recordings/${attemptId}-browser-${new Date()
-      .toISOString()
-      .replace(/[.:]/g, "-")}.${extension}`;
+    const candidateRows = await prisma.$queryRaw<Array<{ candidate_name: string | null }>>`
+      select c.full_name as candidate_name
+      from public.interview_attempts ia
+      join public.interviews i on i.interview_id = ia.interview_id
+      join public.candidates c on c.candidate_id = i.candidate_id
+      where ia.attempt_id = ${attemptId}::uuid
+      limit 1
+    `;
+    const filePath = buildCandidateRecordingFilePath({
+      candidateName: candidateRows[0]?.candidate_name ?? null,
+      attemptId,
+      source: "browser",
+      extension,
+    });
     const videoUrl = getPublicRecordingUrl({ supabaseUrl, bucket, filePath });
 
     const signEndpoint = `${supabaseUrl}/storage/v1/object/upload/sign/${encodeURIComponent(
