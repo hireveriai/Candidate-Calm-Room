@@ -2230,17 +2230,25 @@ export default function Page() {
   }, [attention, faceCount, multiFace, sessionQuestionId, started]);
 
   useEffect(() => {
-    if (!started || !faceDetected || attention) return;
+    if (
+      !started ||
+      currentQuestionType === InterviewQuestionType.CODING ||
+      !faceDetected ||
+      attention
+    ) return;
 
     void sendSignal("attention_loss", {
       faces: faceCount,
       attention,
     });
-  }, [attention, faceCount, faceDetected, sessionQuestionId, started]);
+  }, [attention, currentQuestionType, faceCount, faceDetected, sessionQuestionId, started]);
 
   // 👁️ LONG GAZE DETECTION
   useEffect(() => {
-    if (!started) return;
+    if (
+      !started ||
+      currentQuestionType === InterviewQuestionType.CODING
+    ) return;
 
     let timer: any;
     let startTime: number | null = null;
@@ -2275,7 +2283,7 @@ export default function Page() {
     }
 
     return () => timer && clearInterval(timer);
-  }, [attention, started]);
+  }, [attention, currentQuestionType, started]);
 
   // 📋 CODE EVENTS
   useEffect(() => {
@@ -2297,7 +2305,11 @@ export default function Page() {
     if (!started || !sessionQuestionId || !questionStartTimeRef.current) return;
 
     const now = Date.now();
-    const currentIsLooking = faceDetected && attention;
+    // Looking between the editor and keyboard is expected during a coding task.
+    // Continue requiring a visible face, but do not score gaze direction as lost attention.
+    const currentIsLooking =
+      faceDetected &&
+      (currentQuestionType === InterviewQuestionType.CODING || attention);
 
     if (focusSampleAtRef.current !== null) {
       const delta = Math.max(0, now - focusSampleAtRef.current);
@@ -2332,7 +2344,7 @@ export default function Page() {
 
     isLookingRef.current = currentIsLooking;
     focusSampleAtRef.current = now;
-  }, [attention, faceDetected, sessionQuestionId, started]);
+  }, [attention, currentQuestionType, faceDetected, sessionQuestionId, started]);
 
   useEffect(() => {
     if (!started) {
