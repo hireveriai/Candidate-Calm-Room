@@ -318,6 +318,8 @@ export default function Page() {
   const reconnectTimeoutHandleRef = useRef<number | null>(null);
   const reconnectCountdownIntervalRef = useRef<number | null>(null);
   const reconnectInFlightRef = useRef(false);
+  const reconnectModeRef = useRef(false);
+  const pageLifecycleSignalSentRef = useRef(false);
   const reconnectPauseStartedAtRef = useRef<number | null>(null);
   const reconnectCurrentAttemptRef = useRef(0);
   const pausedPhaseRef = useRef<VerisState>("idle");
@@ -995,6 +997,7 @@ export default function Page() {
     verifyHeartbeat?: boolean;
   } = {}) => {
     clearReconnectSchedulers();
+    reconnectModeRef.current = false;
     reconnectInFlightRef.current = false;
     reconnectCurrentAttemptRef.current = 0;
     setReconnectAttempt(0);
@@ -1007,7 +1010,8 @@ export default function Page() {
 
     if (verifyHeartbeat) {
       try {
-        await sendHeartbeat({ reconnecting: true });
+        // This heartbeat confirms recovery and clears last_disconnect_at.
+        await sendHeartbeat();
       } catch {
         // The next scheduled heartbeat will retry if this one races with recovery.
       }
@@ -1108,11 +1112,15 @@ export default function Page() {
       interviewFinished ||
       interviewInterrupted ||
       terminationInFlightRef.current ||
-      isReconnecting
+      isReconnecting ||
+      reconnectModeRef.current
     ) {
       return;
     }
 
+    // React state updates are asynchronous. The ref prevents repeated
+    // LiveKit callbacks from opening thousands of concurrent reconnect flows.
+    reconnectModeRef.current = true;
     setIsReconnecting(true);
     setReconnectReason(reason);
     setReconnectAttempt(1);
@@ -1327,6 +1335,7 @@ export default function Page() {
     clearHeartbeatLoop();
     clearReconnectSchedulers();
     reconnectInFlightRef.current = false;
+    reconnectModeRef.current = false;
     interviewStartTimeRef.current = null;
     recordingFinalizerRef.current = null;
     questionStartTimeRef.current = null;
@@ -1478,40 +1487,47 @@ export default function Page() {
     }
 
     const handlePageHide = () => {
-      if (terminationInFlightRef.current) {
+      if (
+        terminationInFlightRef.current ||
+        exitIntentRef.current ||
+        pageLifecycleSignalSentRef.current
+      ) {
         return;
       }
 
-      const payload = getTerminationPayload("tab_close");
-      if (!payload) {
-        return;
-      }
-
-      persistPendingRecoveryEvent({
-        attemptId: payload.attemptId,
-        classifier: "BROWSER_CLOSE",
-        reason: "Browser page closed or refreshed",
-        source: "candidate_calm_room",
-        idempotencyKey: `${payload.attemptId}:BROWSER_CLOSE:${sessionQuestionId || "no-question"}`,
+      pageLifecycleSignalSentRef.current = true;
+      const blob = new Blob([JSON.stringify({
+        attemptId,
+        reason: "Browser page lifecycle transition detected",
+        source: "browser_pagehide",
         metadata: {
           sessionQuestionId: sessionQuestionId || null,
           transcriptBuffer: transcriptRef.current.trim() || transcript.trim() || null,
-          currentPhase: payload.currentPhase,
+          currentPhase: getCurrentPhaseFromState(verisState, showCoding),
           pageLifecycle: "pagehide",
         },
-      });
-      void terminateInterview("tab_close", {
-        useBeacon: true,
-        message: "Browser page closed or refreshed.",
-      });
+      })], { type: "application/json" });
+
+      // pagehide does not prove the browser was closed. It also fires for
+      // refresh, bfcache, mobile backgrounding, and browser tab suspension.
+      // Mark the attempt reconnecting and let heartbeat recovery/watchdog
+      // confirmation determine the final outcome.
+      navigator.sendBeacon("/api/interview/reconnect-state", blob);
+    };
+
+    const handlePageShow = () => {
+      pageLifecycleSignalSentRef.current = false;
+      void sendHeartbeat().catch(() => undefined);
     };
 
     window.addEventListener("pagehide", handlePageHide);
     window.addEventListener("beforeunload", handlePageHide);
+    window.addEventListener("pageshow", handlePageShow);
 
     return () => {
       window.removeEventListener("pagehide", handlePageHide);
       window.removeEventListener("beforeunload", handlePageHide);
+      window.removeEventListener("pageshow", handlePageShow);
     };
   }, [attemptId, started, transcript, sessionQuestionId, verisState, showCoding]);
 

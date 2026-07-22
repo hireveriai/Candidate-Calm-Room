@@ -278,6 +278,25 @@ export async function markAttemptReconnecting(params: {
   const reconnectEvents = Array.isArray(attempt.reconnect_events)
     ? [...attempt.reconnect_events]
     : [];
+  const lastReconnectEvent = reconnectEvents.at(-1);
+  const lastReconnectRecord =
+    lastReconnectEvent && typeof lastReconnectEvent === "object"
+      ? lastReconnectEvent as Record<string, unknown>
+      : null;
+  const lastReconnectAt = lastReconnectRecord?.at
+    ? new Date(String(lastReconnectRecord.at)).getTime()
+    : 0;
+  const duplicateDisconnect =
+    lastReconnectRecord?.type === "disconnect_detected" &&
+    lastReconnectRecord?.source === params.source &&
+    lastReconnectRecord?.reason === params.reason &&
+    Number.isFinite(lastReconnectAt) &&
+    Date.now() - lastReconnectAt < 30_000;
+
+  if (duplicateDisconnect) {
+    return { ok: true, duplicate: true };
+  }
+
   reconnectEvents.push({
     type: "disconnect_detected",
     at: new Date().toISOString(),
@@ -288,7 +307,7 @@ export async function markAttemptReconnecting(params: {
 
   await prisma.$executeRaw`
     update public.interview_attempts
-    set last_disconnect_at = now(),
+    set last_disconnect_at = coalesce(last_disconnect_at, now()),
         disconnect_reason = ${params.reason}::text,
         reconnect_count = coalesce(reconnect_count, 0) + 1,
         recovered_successfully = false,
