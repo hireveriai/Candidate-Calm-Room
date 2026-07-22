@@ -236,7 +236,10 @@ async function fetchBestRecording(attemptId: string) {
         or nullif(btrim(coalesce(ir.transcript, '')), '') is not null
       )
       and coalesce((so.metadata->>'size')::bigint, 0) <= ${MAX_REPAIR_OBJECT_BYTES}
-    order by case when ir.file_path ilike '%-browser-%' then 0 else 1 end,
+    -- LiveKit captures the room audio independently of browser speech
+    -- recognition and is the most reliable source when every live answer is
+    -- empty. Browser MediaRecorder remains the fallback.
+    order by case when ir.file_path ilike '%-livekit-%' then 0 else 1 end,
              case when nullif(btrim(coalesce(ir.transcript, '')), '') is not null then 0 else 1 end,
              char_length(coalesce(ir.transcript, '')) desc,
              extract(epoch from (coalesce(ir.ended_at, ir.created_at, now()) - coalesce(ir.started_at, ir.created_at, now()))) desc nulls last,
