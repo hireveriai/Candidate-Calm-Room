@@ -117,6 +117,68 @@ function isUnsafeAlignedAnswer(value: unknown) {
   return answer.length > 8_000 || isDegenerateTranscript(answer);
 }
 
+function wordCount(value: unknown) {
+  return normalizeText(value).split(/\s+/).filter(Boolean).length;
+}
+
+function payloadDurationSeconds(payload: unknown) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return 0;
+  }
+
+  const duration = Number((payload as Record<string, unknown>).duration ?? 0);
+  return Number.isFinite(duration) && duration > 0 ? duration : 0;
+}
+
+function isLikelyIncompleteSpokenAnswer(row: Pick<RepairQuestionRow, "answer_text" | "answer_payload" | "code_text">) {
+  if (normalizeText(row.code_text)) {
+    return false;
+  }
+
+  const answer = normalizeText(row.answer_text);
+  if (!answer || isNoResponse(answer)) {
+    return true;
+  }
+
+  const duration = payloadDurationSeconds(row.answer_payload);
+  const words = wordCount(answer);
+  const wordsPerSecond = duration > 0 ? words / duration : Number.POSITIVE_INFINITY;
+  const endsMidSentence = /\b(and|but|because|so|to|the|a|an|if|when|with|for|of|or)$/i.test(answer);
+
+  // Browser SpeechRecognition can silently stop emitting text while the
+  // MediaRecorder/LiveKit recording continues. A long answer with implausibly
+  // sparse text, or one ending on a connector, is evidence of that cutoff.
+  return (
+    (duration >= 45 && wordsPerSecond < 0.9) ||
+    (duration >= 15 && words >= 8 && endsMidSentence)
+  );
+}
+
+function isRecoveredAnswerMateriallyBetter(existingValue: unknown, recoveredValue: unknown) {
+  const existing = normalizeText(existingValue);
+  const recovered = normalizeText(recoveredValue);
+  if (!recovered || isNoResponse(recovered) || isUnsafeAlignedAnswer(recovered)) {
+    return false;
+  }
+  if (!existing || isNoResponse(existing)) {
+    return true;
+  }
+
+  const existingTokens = existing.toLowerCase().match(/[a-z0-9']+/g) ?? [];
+  const recoveredTokens = recovered.toLowerCase().match(/[a-z0-9']+/g) ?? [];
+  if (recoveredTokens.length < existingTokens.length + 8) {
+    return false;
+  }
+
+  const recoveredSet = new Set(recoveredTokens);
+  const coveredExistingTokens = existingTokens.filter((token) => recoveredSet.has(token)).length;
+  const coverage = existingTokens.length > 0 ? coveredExistingTokens / existingTokens.length : 0;
+
+  // Require strong overlap so a whole-interview alignment mistake cannot
+  // replace a valid answer belonging to another question.
+  return coverage >= 0.58 && recoveredTokens.length >= Math.ceil(existingTokens.length * 1.18);
+}
+
 function isReusableRecordingTranscript(value: unknown) {
   const transcript = normalizeText(value);
   if (transcript.length < 1_000) {
@@ -634,25 +696,37 @@ function skillWeightedScore(clarity: number, depth: number, confidence: number) 
 export async function repairPendingAnswersFromRecording(attemptId: string) {
   const codeRepair = await repairCodingAnswersFromSubmissions(attemptId);
 
-  const pendingRows = await prisma.$queryRaw<Array<{ answer_id: string }>>`
-    select ans.answer_id::text
+  const spokenRows = await prisma.$queryRaw<RepairQuestionRow[]>`
+    select
+      ans.answer_id::text,
+      ans.answer_payload,
+      ans.answer_text,
+      cs.code_text,
+      cs.language,
+      sq.question_order,
+      sq.content as question
     from public.interview_answers ans
     left join public.interview_code_submissions cs
       on cs.answer_id = ans.answer_id
+    left join public.session_questions sq
+      on sq.session_question_id = ans.session_question_id
     where ans.attempt_id = ${attemptId}::uuid
       and cs.answer_id is null
-      and (
-        coalesce(ans.status, '') in ('generating', 'failed')
-        or nullif(btrim(coalesce(ans.answer_text, '')), '') is null
-        or lower(btrim(coalesce(ans.answer_text, ''))) in ('no response provided', 'no response provided.')
-      )
-    limit 1
   `;
+  const hasAnswerNeedingRecordingCheck = spokenRows.some((row: RepairQuestionRow) =>
+    isLikelyIncompleteSpokenAnswer(row) &&
+    !(
+      row.answer_payload &&
+      typeof row.answer_payload === "object" &&
+      !Array.isArray(row.answer_payload) &&
+      (row.answer_payload as Record<string, unknown>).recording_transcript_verified_at
+    )
+  );
 
-  if (pendingRows.length === 0) {
+  if (!hasAnswerNeedingRecordingCheck) {
     return codeRepair.repaired > 0
       ? { repaired: codeRepair.repaired, skipped: "no_spoken_pending_answers" }
-      : { repaired: 0, skipped: "no_pending_answers" };
+      : { repaired: 0, skipped: "no_incomplete_answers_detected" };
   }
 
   if (!process.env.OPENAI_API_KEY || !getSupabaseConfig()) {
@@ -783,27 +857,48 @@ export async function repairPendingAnswersFromRecording(attemptId: string) {
           questionText: question.question,
         })
       ) {
+        if (!alignmentUnavailable) {
+          await tx.$executeRaw`
+            update public.interview_answers
+            set answer_payload = ${mergePayload(question.answer_payload, {
+              recording_transcript_verified_at: new Date().toISOString(),
+              recording_transcript_verified_id: recording.recording_id,
+              recording_alignment_outcome: "no_usable_answer",
+            })}::jsonb
+            where answer_id = ${question.answer_id}::uuid
+          `;
+        }
         continue;
       }
 
-      await tx.$executeRaw`
-        update public.interview_answers
-        set answer_text = ${answer},
-            answer_payload = ${mergePayload(question.answer_payload, {
+      const shouldReplace = isRecoveredAnswerMateriallyBetter(question.answer_text, answer);
+      const verificationFields = {
+        recording_transcript_verified_at: new Date().toISOString(),
+        recording_transcript_verified_id: recording.recording_id,
+        recording_aligned_word_count: wordCount(answer),
+        ...(shouldReplace
+          ? {
+              browser_transcript_before_recording_repair: question.answer_text,
               original_transcript: answer,
               raw_candidate_answer: answer,
               transcript_repaired_from_recording: true,
               transcript_repaired_at: new Date().toISOString(),
               repair_recording_id: recording.recording_id,
-            })}::jsonb,
+            }
+          : {}),
+      };
+
+      await tx.$executeRaw`
+        update public.interview_answers
+        set answer_text = case when ${shouldReplace} then ${answer} else answer_text end,
+            answer_payload = ${mergePayload(question.answer_payload, verificationFields)}::jsonb,
             status = 'completed'
         where answer_id = ${question.answer_id}::uuid
-          and (
-            coalesce(status, '') in ('generating', 'failed')
-            or nullif(btrim(coalesce(answer_text, '')), '') is null
-            or lower(btrim(coalesce(answer_text, ''))) in ('no response provided', 'no response provided.')
-          )
       `;
+
+      if (!shouldReplace) {
+        continue;
+      }
 
       const evaluation = buildRecoveredEvaluation(answer);
       await tx.$executeRaw`

@@ -382,6 +382,52 @@ export async function runInterviewWatchdog() {
             'epoch'::timestamptz
           ) < now() - interval '1 hour'
         )
+        or exists (
+          select 1
+          from public.interview_answers suspected_answer
+          left join public.interview_code_submissions suspected_code
+            on suspected_code.answer_id = suspected_answer.answer_id
+          where suspected_answer.attempt_id = interview_attempts.attempt_id
+            and suspected_code.answer_id is null
+            and not coalesce(
+              suspected_answer.answer_payload ? 'recording_transcript_verified_at',
+              false
+            )
+            and (
+              nullif(btrim(coalesce(suspected_answer.answer_text, '')), '') is null
+              or (
+                coalesce(
+                  case
+                    when coalesce(suspected_answer.answer_payload->>'duration', '') ~ '^[0-9]+([.][0-9]+)?$'
+                      then (suspected_answer.answer_payload->>'duration')::numeric
+                    else 0
+                  end,
+                  0
+                ) >= 15
+                and (
+                  lower(btrim(coalesce(suspected_answer.answer_text, '')))
+                    ~ '\\m(and|but|because|so|to|the|a|an|if|when|with|for|of|or)\\M$'
+                  or (
+                    case
+                      when coalesce(suspected_answer.answer_payload->>'duration', '') ~ '^[0-9]+([.][0-9]+)?$'
+                        then (suspected_answer.answer_payload->>'duration')::numeric
+                      else 0
+                    end >= 45
+                    and array_length(
+                      regexp_split_to_array(btrim(coalesce(suspected_answer.answer_text, '')), '\\s+'),
+                      1
+                    ) < (
+                      case
+                        when coalesce(suspected_answer.answer_payload->>'duration', '') ~ '^[0-9]+([.][0-9]+)?$'
+                          then (suspected_answer.answer_payload->>'duration')::numeric
+                        else 0
+                      end
+                    ) * 0.9
+                  )
+                )
+              )
+            )
+        )
       )
       and (
         upper(coalesce(status, '')) not in ('ABANDONED', 'TIME_EXPIRED')
@@ -457,18 +503,21 @@ export async function runInterviewWatchdog() {
         }
 
         await finalizeActiveRecordings(row.attempt_id);
-        await validateAndRepairCompletionTranscripts(row.attempt_id).catch((error: unknown) => {
-          logInterviewEvent("error", "watchdog.transcript_repair_failed", {
-            attemptId: row.attempt_id,
-            interviewId: row.interview_id,
-            prismaFailure: error,
+        const transcriptIntegrity = await validateAndRepairCompletionTranscripts(row.attempt_id)
+          .catch((error: unknown) => {
+            logInterviewEvent("error", "watchdog.transcript_repair_failed", {
+              attemptId: row.attempt_id,
+              interviewId: row.interview_id,
+              prismaFailure: error,
+            });
+            return null;
           });
-        });
         await finalizeInterviewAttempt({
           attemptId: row.attempt_id,
           earlyExit: false,
           terminationType: row.close_reason === "SESSION_TIME_EXPIRED" ? "timeout" : "completed",
           currentPhase: "closing",
+          forceRecalculate: Number(transcriptIntegrity?.repairedAnswers ?? 0) > 0,
         });
 
         skipped += 1;

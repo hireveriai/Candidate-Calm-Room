@@ -841,6 +841,7 @@ export async function finalizeInterviewAttempt(params: {
   earlyExit: boolean;
   terminationType?: TerminationType;
   currentPhase?: string | null;
+  forceRecalculate?: boolean;
 }) {
   const attemptId = assertUuid(params.attemptId, "attemptId");
   await ensurePhase2SchemaCompatibility();
@@ -862,7 +863,10 @@ export async function finalizeInterviewAttempt(params: {
     );
     const repairingLegacyFinalization =
       isAttemptStatusFinalized(lockedAttempt.status) &&
-      !hasDeterministicFinalizationMarker(existingMetadata);
+      (
+        params.forceRecalculate === true ||
+        !hasDeterministicFinalizationMarker(existingMetadata)
+      );
 
     if (isAttemptStatusFinalized(lockedAttempt.status)) {
       if (repairingLegacyFinalization) {
