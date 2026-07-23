@@ -133,7 +133,10 @@ const VerisOrb = dynamic(
   { ssr: false }
 );
 
-const INACTIVITY_TIMEOUT_MS = 5 * 60 * 1000;
+// Keep inactivity beyond the normal five-minute spoken answer window so
+// answer submission wins the race. Recent microphone activity extends it.
+const INACTIVITY_TIMEOUT_MS = 7 * 60 * 1000;
+const ACTIVE_SPEECH_GRACE_MS = 20 * 1000;
 const DISCONNECT_GRACE_MS = 15 * 1000;
 const RECORDING_STARTUP_WAIT_MS = 7000;
 const STRICT_TAB_TERMINATION = false;
@@ -270,6 +273,7 @@ export default function Page() {
   const listeningActiveRef = useRef(false);
   const acceptingTranscriptRef = useRef(false);
   const voiceActivityFramesRef = useRef(0);
+  const lastVoiceActivityAtRef = useRef(0);
   const isAdvancingRef = useRef(false);
   const handleAutoNextRef = useRef<((options?: { allowPendingTranscription?: boolean }) => Promise<void>) | null>(null);
   const terminationInFlightRef = useRef(false);
@@ -1172,6 +1176,15 @@ export default function Page() {
     }
 
     inactivityTimeoutRef.current = setTimeout(() => {
+      const candidateIsActivelySpeaking =
+        acceptingTranscriptRef.current &&
+        voiceActivityFramesRef.current > 0 &&
+        Date.now() - lastVoiceActivityAtRef.current <= ACTIVE_SPEECH_GRACE_MS;
+      if (candidateIsActivelySpeaking) {
+        resetInactivityTimeout();
+        return;
+      }
+
       void sendSignal("unresponsive", {
         severity: "high",
         inactivitySeconds: Math.round(INACTIVITY_TIMEOUT_MS / 1000),
@@ -1589,6 +1602,7 @@ export default function Page() {
     stopAudioAnalysis();
     acceptingTranscriptRef.current = false;
     voiceActivityFramesRef.current = 0;
+    lastVoiceActivityAtRef.current = 0;
 
     setTranscript("");
     transcriptRef.current = "";
@@ -1614,6 +1628,7 @@ export default function Page() {
     setTranscript("");
     transcriptRef.current = "";
     voiceActivityFramesRef.current = 0;
+    lastVoiceActivityAtRef.current = 0;
 
     questionStartTimeRef.current = Date.now();
     setAnswerWindowEnded(false);
@@ -2037,6 +2052,7 @@ export default function Page() {
             voiceActivityFramesRef.current + 1,
             300
           );
+          lastVoiceActivityAtRef.current = Date.now();
         }
         audioAnimationFrameRef.current = requestAnimationFrame(update);
       };

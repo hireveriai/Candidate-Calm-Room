@@ -192,6 +192,18 @@ export async function recordInterviewHeartbeat(input: HeartbeatInput) {
           when ${shouldRecover} then null
           else last_disconnect_at
         end,
+        disconnect_reason = case
+          when ${shouldRecover} then null
+          else disconnect_reason
+        end,
+        interruption_reason = case
+          when ${shouldRecover} then null
+          else interruption_reason
+        end,
+        interruption_detected_at = case
+          when ${shouldRecover} then null
+          else interruption_detected_at
+        end,
         recovered_successfully = case
           when ${shouldRecover} then true
           else recovered_successfully

@@ -131,6 +131,20 @@ function isValidAttemptId(value: string | null | undefined): value is string {
   return Boolean(value && uuidPattern.test(value.trim()));
 }
 
+function hasLiveCandidateTracks(stream: MediaStream | null) {
+  if (!stream) {
+    return false;
+  }
+
+  const videoTrack = stream
+    .getVideoTracks()
+    .find((track) => track.readyState === "live" && track.enabled);
+  const audioTrack = stream
+    .getAudioTracks()
+    .find((track) => track.readyState === "live" && track.enabled);
+  return Boolean(videoTrack && audioTrack);
+}
+
 async function fetchLiveKitPublisherToken(attemptId: string) {
   const searchParams = new URLSearchParams({
     room: attemptId,
@@ -699,9 +713,17 @@ export default function VideoPanel({
           return;
         }
 
-        const stream =
-          cameraStreamRef.current ??
-          (await acquireCandidateMedia());
+        // Reconnect cleanup can leave a MediaStream object in the ref after
+        // its tracks have ended. Reusing it creates a zero-second fallback
+        // recording and no durable LiveKit audio/video.
+        const existingStream = cameraStreamRef.current;
+        let stream: MediaStream;
+        if (hasLiveCandidateTracks(existingStream)) {
+          stream = existingStream as MediaStream;
+        } else {
+          existingStream?.getTracks().forEach((track) => track.stop());
+          stream = await acquireCandidateMedia();
+        }
 
         // A combined camera+microphone request can fall back to camera-only on
         // some browsers. Never start either recording from that incomplete
