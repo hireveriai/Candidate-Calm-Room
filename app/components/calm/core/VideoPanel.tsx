@@ -55,6 +55,78 @@ const uuidPattern =
 const BROWSER_FALLBACK_VIDEO_BITS_PER_SECOND = 32_000;
 const BROWSER_FALLBACK_AUDIO_BITS_PER_SECOND = 16_000;
 
+const FRONT_CAMERA_CONSTRAINTS: MediaTrackConstraints = {
+  facingMode: { ideal: "user" },
+  width: { ideal: 1280 },
+  height: { ideal: 720 },
+  frameRate: { ideal: 30, max: 30 },
+};
+
+const MICROPHONE_CONSTRAINTS: MediaTrackConstraints = {
+  echoCancellation: true,
+  noiseSuppression: true,
+  autoGainControl: true,
+  channelCount: 1,
+};
+
+async function acquireCandidateMedia() {
+  let stream: MediaStream;
+
+  try {
+    // Mobile browsers may otherwise choose the rear/environment camera.
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        ...FRONT_CAMERA_CONSTRAINTS,
+        facingMode: { exact: "user" },
+      },
+      audio: MICROPHONE_CONSTRAINTS,
+    });
+  } catch (strictFrontCameraError) {
+    console.warn(
+      "Exact front camera selection was unavailable; retrying preferred front camera:",
+      strictFrontCameraError,
+    );
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: FRONT_CAMERA_CONSTRAINTS,
+        audio: MICROPHONE_CONSTRAINTS,
+      });
+    } catch (combinedMediaError) {
+      console.warn(
+        "Combined front camera and microphone request failed; retrying front camera only:",
+        combinedMediaError,
+      );
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: FRONT_CAMERA_CONSTRAINTS,
+        audio: false,
+      });
+    }
+  }
+
+  const selectedVideoTrack = stream.getVideoTracks()[0];
+  if (selectedVideoTrack?.getSettings().facingMode === "environment") {
+    try {
+      const frontOnlyStream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { exact: "user" } },
+        audio: false,
+      });
+      const frontTrack = frontOnlyStream.getVideoTracks()[0];
+      if (frontTrack) {
+        stream.removeTrack(selectedVideoTrack);
+        selectedVideoTrack.stop();
+        stream.addTrack(frontTrack);
+      }
+    } catch (frontCameraCorrectionError) {
+      stream.getTracks().forEach((track) => track.stop());
+      throw new Error(
+        `Front camera is required for the interview: ${String(frontCameraCorrectionError)}`,
+      );
+    }
+  }
+
+  return stream;
+}
+
 function isValidAttemptId(value: string | null | undefined): value is string {
   return Boolean(value && uuidPattern.test(value.trim()));
 }
@@ -317,32 +389,7 @@ export default function VideoPanel({
 
     async function startCamera() {
       try {
-        let stream: MediaStream;
-
-        try {
-          stream = await navigator.mediaDevices.getUserMedia({
-            video: {
-              width: { ideal: 1280 },
-              height: { ideal: 720 },
-              frameRate: { ideal: 30, max: 30 },
-            },
-            audio: {
-              echoCancellation: true,
-              noiseSuppression: true,
-              autoGainControl: true,
-              channelCount: 1,
-            },
-          });
-        } catch (combinedMediaError) {
-          console.warn(
-            "Microphone was unavailable; retrying camera-only preview:",
-            combinedMediaError,
-          );
-          stream = await navigator.mediaDevices.getUserMedia({
-            video: true,
-            audio: false,
-          });
-        }
+        const stream = await acquireCandidateMedia();
 
         if (cancelled) {
           stream.getTracks().forEach((track) => track.stop());
@@ -654,15 +701,7 @@ export default function VideoPanel({
 
         const stream =
           cameraStreamRef.current ??
-          (await navigator.mediaDevices.getUserMedia({
-            video: true,
-            audio: {
-              echoCancellation: true,
-              noiseSuppression: true,
-              autoGainControl: true,
-              channelCount: 1,
-            },
-          }));
+          (await acquireCandidateMedia());
 
         // A combined camera+microphone request can fall back to camera-only on
         // some browsers. Never start either recording from that incomplete
@@ -672,12 +711,7 @@ export default function VideoPanel({
         if (stream.getAudioTracks().length === 0) {
           const microphoneStream = await navigator.mediaDevices.getUserMedia({
             video: false,
-            audio: {
-              echoCancellation: true,
-              noiseSuppression: true,
-              autoGainControl: true,
-              channelCount: 1,
-            },
+            audio: MICROPHONE_CONSTRAINTS,
           });
           const microphoneTrack = microphoneStream.getAudioTracks()[0];
           if (!microphoneTrack || microphoneTrack.readyState !== "live") {

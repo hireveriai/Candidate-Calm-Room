@@ -1997,9 +1997,18 @@ export default function Page() {
   // 🎤 AUDIO ANALYSIS (FIXED CLEANUP)
   const startAudioAnalysis = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: SPEECH_AUDIO_CONSTRAINTS,
-      });
+      const previewStream =
+        videoRef.current?.srcObject instanceof MediaStream
+          ? videoRef.current.srcObject
+          : null;
+      const sharedMicrophoneTrack = previewStream
+        ?.getAudioTracks()
+        .find((track: MediaStreamTrack) => track.readyState === "live");
+      const stream = sharedMicrophoneTrack
+        ? new MediaStream([sharedMicrophoneTrack.clone()])
+        : await navigator.mediaDevices.getUserMedia({
+            audio: SPEECH_AUDIO_CONSTRAINTS,
+          });
       audioStreamRef.current = stream;
       setMicrophoneReady(true);
 
