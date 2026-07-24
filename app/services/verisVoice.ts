@@ -48,17 +48,16 @@ function normalizeChunk(text: string) {
 }
 
 function mergeTranscriptParts(parts: string[]) {
-  const merged: string[] = [];
+  let merged = "";
 
   for (const part of parts.map(normalizeChunk).filter(Boolean)) {
-    const last = merged[merged.length - 1];
-
-    if (!last || (last !== part && !last.endsWith(part))) {
-      merged.push(part);
-    }
+    // Chrome can promote an interim phrase to a longer final phrase. Joining
+    // both verbatim duplicates the entire phrase and can grow the transcript
+    // fast enough to lock the browser's main thread.
+    merged = mergeMonotonicTranscript(merged, part);
   }
 
-  return merged.join(" ").trim();
+  return merged;
 }
 
 export function speak(text: string): Promise<void> {

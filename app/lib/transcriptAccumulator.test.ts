@@ -34,6 +34,16 @@ test("does not replace a complete transcript with a shorter interim revision", (
   );
 });
 
+test("does not duplicate a phrase when recognition promotes it to a longer result", () => {
+  assert.equal(
+    mergeMonotonicTranscript(
+      "Please walk me through your experience",
+      "Please walk me through your experience including your current role"
+    ),
+    "Please walk me through your experience including your current role"
+  );
+});
+
 test("seeds a restarted SpeechRecognition instance with the prior transcript", () => {
   class FakeRecognition {
     static latest: FakeRecognition | null = null;
@@ -84,6 +94,64 @@ test("seeds a restarted SpeechRecognition instance with the prior transcript", (
     assert.equal(
       observed,
       "I led the implementation across three regions and reduced processing time by twenty percent"
+    );
+  } finally {
+    (globalThis as { window?: unknown }).window = previousWindow;
+  }
+});
+
+test("SpeechRecognition does not concatenate an expanded final phrase twice", () => {
+  class FakeRecognition {
+    static latest: FakeRecognition | null = null;
+    continuous = false;
+    interimResults = false;
+    lang = "";
+    onresult: ((event: {
+      resultIndex: number;
+      results: {
+        length: number;
+        [index: number]: { isFinal: boolean; 0: { transcript: string } };
+      };
+    }) => void) | null = null;
+    onend: (() => void) | null = null;
+    start() {
+      FakeRecognition.latest = this;
+    }
+    stop() {}
+  }
+
+  const previousWindow = (globalThis as { window?: unknown }).window;
+  (globalThis as { window?: unknown }).window = {
+    SpeechRecognition: FakeRecognition,
+  };
+
+  try {
+    let observed = "";
+    startRecognition((text) => {
+      observed = text;
+    });
+
+    FakeRecognition.latest?.onresult?.({
+      resultIndex: 0,
+      results: {
+        0: {
+          isFinal: true,
+          0: { transcript: "Please walk me through your experience" },
+        },
+        1: {
+          isFinal: true,
+          0: {
+            transcript:
+              "Please walk me through your experience including your current role",
+          },
+        },
+        length: 2,
+      },
+    });
+
+    assert.equal(
+      observed,
+      "Please walk me through your experience including your current role"
     );
   } finally {
     (globalThis as { window?: unknown }).window = previousWindow;

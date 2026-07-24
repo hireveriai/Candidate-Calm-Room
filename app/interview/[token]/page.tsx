@@ -259,6 +259,9 @@ export default function Page() {
   const recognitionRef = useRef<VerisSpeechRecognition | null>(null);
   const speechRecognitionErrorRef = useRef<string | null>(null);
   const speechRecognitionWasActiveRef = useRef(false);
+  const recognitionRestartTimerRef = useRef<number | null>(null);
+  const recognitionRestartCountRef = useRef(0);
+  const recognitionGenerationRef = useRef(0);
   const silenceTimer = useRef<any>(null);
   const timerRef = useRef<any>(null);
   const questionTimeoutRef = useRef<any>(null);
@@ -1658,18 +1661,15 @@ export default function Page() {
     setShowCoding(false);
     resetInactivityTimeout();
 
-    if (shouldCaptureSpokenAnswer) {
-      startListening();
-    }
-
     setVerisState("speaking");
     await speak(
       options.spokenPrefix ? `${options.spokenPrefix} ${question}` : question
     );
-    if (shouldCaptureSpokenAnswer && !recognitionRef.current) {
+    // Do not run speech recognition while VERIS is speaking. Otherwise Chrome
+    // can transcribe the synthesized question as the candidate's answer.
+    if (shouldCaptureSpokenAnswer) {
       startListening();
     }
-    recognitionRef.current?.resetTranscript?.();
     setTranscript("");
     transcriptRef.current = "";
     voiceActivityFramesRef.current = 0;
@@ -2074,13 +2074,22 @@ export default function Page() {
 
   const startListening = () => {
     listeningActiveRef.current = true;
+    if (recognitionRef.current || recognitionRestartTimerRef.current !== null) {
+      return;
+    }
+
+    const generation = recognitionGenerationRef.current;
+    let restartAllowed = true;
+    let startedInstance: VerisSpeechRecognition | null = null;
 
     const acceptRecognitionUpdate = (text: string) => {
+      if (generation !== recognitionGenerationRef.current) return;
       if (!acceptingTranscriptRef.current) return;
+      recognitionRestartCountRef.current = 0;
 
       const nextTranscript = mergeMonotonicTranscript(
         transcriptRef.current,
-        text
+        text.slice(0, 20_000)
       );
       if (!nextTranscript) return;
       if (
@@ -2111,34 +2120,62 @@ export default function Page() {
       }
     };
 
-    recognitionRef.current = startRecognition(
+    startedInstance = startRecognition(
       acceptRecognitionUpdate,
       () => {
-        recognitionRef.current = null;
+        if (recognitionRef.current === startedInstance) {
+          recognitionRef.current = null;
+        }
+        if (generation !== recognitionGenerationRef.current) return;
         setMicrophoneReady(false);
 
-        if (!listeningActiveRef.current || isAdvancingRef.current) {
+        if (
+          !restartAllowed ||
+          !listeningActiveRef.current ||
+          isAdvancingRef.current
+        ) {
           return;
         }
 
-        window.setTimeout(() => {
+        recognitionRestartCountRef.current += 1;
+        const retryDelay = Math.min(
+          4_000,
+          500 * 2 ** Math.min(recognitionRestartCountRef.current - 1, 3)
+        );
+        recognitionRestartTimerRef.current = window.setTimeout(() => {
+          recognitionRestartTimerRef.current = null;
           if (listeningActiveRef.current && !recognitionRef.current && !isAdvancingRef.current) {
             startListening();
           }
-        }, 250);
+        }, retryDelay);
       },
       acceptRecognitionUpdate,
       transcriptRef.current,
       (error) => {
         speechRecognitionErrorRef.current = error;
+        if (
+          ["not-allowed", "service-not-allowed", "audio-capture"].includes(
+            error.toLowerCase()
+          )
+        ) {
+          restartAllowed = false;
+          listeningActiveRef.current = false;
+        }
       }
     );
-    setMicrophoneReady(Boolean(recognitionRef.current));
+    recognitionRef.current = startedInstance;
+    setMicrophoneReady(Boolean(startedInstance));
   };
 
   const stopAll = () => {
     listeningActiveRef.current = false;
     acceptingTranscriptRef.current = false;
+    recognitionGenerationRef.current += 1;
+    recognitionRestartCountRef.current = 0;
+    if (recognitionRestartTimerRef.current !== null) {
+      window.clearTimeout(recognitionRestartTimerRef.current);
+      recognitionRestartTimerRef.current = null;
+    }
     stopRecognition(recognitionRef.current);
     recognitionRef.current = null;
     setMicrophoneReady(false);
