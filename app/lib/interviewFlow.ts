@@ -916,7 +916,10 @@ export function shouldCompleteInterview(params: {
     phase: "probe",
     difficultyLevel: 4,
   });
-  const wrapUpReserveSeconds = 60;
+  // Reserve enough time for the required motivation and candidate-closing
+  // questions instead of consuming the whole session with competency probes.
+  const wrapUpReserveSeconds =
+    estimateQuestionTimeSeconds({ questionKind: "closing" }) * 2 + 30;
   const lowTime = timeRemainingSeconds <= nextCoreSeconds + wrapUpReserveSeconds;
   const shouldAvoidDeepQuestions =
     timeRemainingSeconds <= deepCoreSeconds + wrapUpReserveSeconds;

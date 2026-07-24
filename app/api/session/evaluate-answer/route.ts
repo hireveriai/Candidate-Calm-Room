@@ -52,6 +52,7 @@ type QuestionContextRow = {
   skill_name: string | null;
   job_title: string | null;
   question_type: string | null;
+  question_kind: string | null;
 };
 
 type EvaluationResult = {
@@ -363,7 +364,8 @@ export async function POST(request: Request) {
         coalesce(iq.target_skill_id, qsm.skill_id) as skill_id,
         sm.skill_name,
         jp.job_title,
-        coalesce(sq.question_kind, iq.question_type) as question_type
+        coalesce(iq.question_type, sq.question_kind) as question_type,
+        sq.question_kind
       from public.interview_answers ia
       join public.session_questions sq
         on sq.session_question_id = ia.session_question_id
@@ -394,6 +396,23 @@ export async function POST(request: Request) {
       attemptId: context.attempt_id,
       operation: "session.evaluate_answer",
     });
+
+    if (context.question_kind === "closing") {
+      logInterviewEvent("info", "answer.closing_response_recorded", {
+        attemptId: context.attempt_id,
+        state: "ANSWER_PROCESSING",
+        nextState: "QUESTION_GENERATING",
+        competencyImpact: "none",
+      });
+      return Response.json({
+        answer_id: answerId,
+        attempt_id: context.attempt_id,
+        not_scored: true,
+        competency_impact: "none",
+        reason:
+          "Motivation and candidate-closing responses are retained for recruiter review and excluded from competency scoring.",
+      });
+    }
 
     const resolvedQuestionType = normalizeInterviewQuestionType(
       context.question_type,

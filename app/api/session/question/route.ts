@@ -6,6 +6,7 @@ import {
   classifyInterviewQuestion,
   normalizeInterviewQuestionType,
 } from "@/app/lib/interviewQuestionTypes";
+import { ROLE_NEUTRAL_OPENING_QUESTION } from "@/app/lib/interviewOpening";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -26,6 +27,7 @@ type SessionQuestionRow = {
   question_order: number;
   asked_at: Date | null;
   question_type: string | null;
+  clarification_count?: number;
 };
 
 type ExistingSessionQuestionRow = {
@@ -36,6 +38,7 @@ type ExistingSessionQuestionRow = {
   asked_at: Date | null;
   question_kind?: string | null;
   question_order?: number | null;
+  source_context?: unknown;
 };
 
 type AttemptInterviewRow = {
@@ -47,6 +50,31 @@ type QuestionTypeRow = {
   question_type: string | null;
 };
 
+function getPersistedClarification(sourceContext: unknown) {
+  if (!sourceContext || typeof sourceContext !== "object" || Array.isArray(sourceContext)) {
+    return { count: 0, latestQuestion: null as string | null };
+  }
+
+  const clarifications = (sourceContext as Record<string, unknown>)["clarifications"];
+  if (!Array.isArray(clarifications)) {
+    return { count: 0, latestQuestion: null as string | null };
+  }
+
+  const latest = clarifications.at(-1);
+  const latestQuestion =
+    latest && typeof latest === "object" && !Array.isArray(latest)
+      ? (latest as Record<string, unknown>)["clarified_question"]
+      : null;
+
+  return {
+    count: Math.min(clarifications.length, 2),
+    latestQuestion:
+      typeof latestQuestion === "string" && latestQuestion.trim()
+        ? latestQuestion.trim()
+        : null,
+  };
+}
+
 export async function POST(request: Request) {
   const startedAt = Date.now();
 
@@ -56,7 +84,7 @@ export async function POST(request: Request) {
     const { attemptId, content, source } = body;
     const fallbackContent =
       content?.trim() ||
-      "Tell me about your experience and the work most relevant to this role.";
+      ROLE_NEUTRAL_OPENING_QUESTION;
     const fallbackSource = source ?? "system";
 
     if (!attemptId) {
@@ -81,7 +109,8 @@ export async function POST(request: Request) {
         source,
         asked_at,
         question_kind,
-        question_order
+        question_order,
+        source_context
       from public.session_questions
       where attempt_id = ${attemptId}::uuid
       order by question_order desc nulls last, asked_at desc nulls last, session_question_id desc
@@ -90,6 +119,9 @@ export async function POST(request: Request) {
     const existingQuestion = existingQuestions[0];
 
     if (existingQuestion) {
+      const persistedClarification = getPersistedClarification(
+        existingQuestion.source_context
+      );
       const questionTypes = existingQuestion.question_id
         ? await prisma.$queryRaw<QuestionTypeRow[]>`
             select question_type
@@ -101,8 +133,10 @@ export async function POST(request: Request) {
 
       return Response.json({
         ...existingQuestion,
+        content: persistedClarification.latestQuestion ?? existingQuestion.content,
         question_kind: existingQuestion.question_kind ?? "core",
         question_order: existingQuestion.question_order ?? 1,
+        clarification_count: persistedClarification.count,
         question_type: normalizeInterviewQuestionType(
           questionTypes[0]?.question_type,
           classifyInterviewQuestion(existingQuestion.content ?? "").questionType
@@ -135,8 +169,7 @@ export async function POST(request: Request) {
       );
     }
 
-    const openingQuestion =
-      fallbackContent || "Tell me about your experience and the work most relevant to this role.";
+    const openingQuestion = fallbackContent || ROLE_NEUTRAL_OPENING_QUESTION;
     const createdQuestionType = classifyInterviewQuestion(openingQuestion).questionType;
 
     const createdQuestions = await prisma.$queryRaw<ExistingSessionQuestionRow[]>`

@@ -46,9 +46,14 @@ import {
 import { isInvalidCandidateTranscript } from "@/app/lib/transcriptGuards";
 import { mergeMonotonicTranscript } from "@/app/lib/transcriptAccumulator";
 import {
+  isClarificationRequest,
+  MAX_CLARIFICATIONS_PER_QUESTION,
+} from "@/app/lib/interviewClarification";
+import {
   MAX_ANSWER_TIME,
   MAX_CODING_ANSWER_TIME,
 } from "@/app/lib/calmTiming";
+import { ROLE_NEUTRAL_OPENING_QUESTION } from "@/app/lib/interviewOpening";
 
 type VerisState = "idle" | "listening" | "thinking" | "speaking";
 type TerminationType =
@@ -247,6 +252,7 @@ export default function Page() {
   const [sessionEndsAt, setSessionEndsAt] = useState<number | null>(null);
   const [sessionTimeEnded, setSessionTimeEnded] = useState(false);
   const [answerWindowEnded, setAnswerWindowEnded] = useState(false);
+  const [clarificationsUsed, setClarificationsUsed] = useState(0);
 
   const [audioLevel, setAudioLevel] = useState(0);
 
@@ -280,6 +286,15 @@ export default function Page() {
   const lastVoiceActivityAtRef = useRef(0);
   const isAdvancingRef = useRef(false);
   const handleAutoNextRef = useRef<((options?: { allowPendingTranscription?: boolean }) => Promise<void>) | null>(null);
+  const handleClarificationRef = useRef<
+    ((options: {
+      source: "voice" | "button";
+      candidateUtterance?: string | null;
+    }) => Promise<void>) | null
+  >(null);
+  const clarificationIntentTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
   const terminationInFlightRef = useRef(false);
   const completionInFlightRef = useRef(false);
   const lastSignalSentRef = useRef<Record<string, number>>({});
@@ -1605,7 +1620,12 @@ export default function Page() {
     question: string,
     nextSessionQuestionId: string,
     nextQuestionId?: string | null,
-    questionType?: string | null
+    questionType?: string | null,
+    options: {
+      preserveClarifications?: boolean;
+      spokenPrefix?: string;
+      clarificationCount?: number;
+    } = {}
   ) => {
     const resolvedQuestionType = normalizeInterviewQuestionType(
       questionType,
@@ -1627,6 +1647,9 @@ export default function Page() {
     setQuestionId(nextQuestionId || nextSessionQuestionId);
     setCurrentQuestion(question);
     setCurrentQuestionType(resolvedQuestionType);
+    if (!options.preserveClarifications) {
+      setClarificationsUsed(options.clarificationCount ?? 0);
+    }
     setVerisState("thinking");
     setShowCoding(false);
     resetInactivityTimeout();
@@ -1636,7 +1659,9 @@ export default function Page() {
     }
 
     setVerisState("speaking");
-    await speak(question);
+    await speak(
+      options.spokenPrefix ? `${options.spokenPrefix} ${question}` : question
+    );
     if (shouldCaptureSpokenAnswer && !recognitionRef.current) {
       startListening();
     }
@@ -1702,9 +1727,10 @@ export default function Page() {
         question_id?: string | null;
         session_question_id: string;
         question_type?: string | null;
+        clarification_count?: number;
       }>("/api/session/question", {
         attemptId: session.attemptId,
-        content: "Explain your experience",
+        content: ROLE_NEUTRAL_OPENING_QUESTION,
         source: "system",
       });
       const [data, recordingReady] = await Promise.all([
@@ -1723,7 +1749,8 @@ export default function Page() {
         data.content,
         data.session_question_id,
         data.question_id ?? data.session_question_id,
-        data.question_type
+        data.question_type,
+        { clarificationCount: data.clarification_count ?? 0 }
       );
     } catch (error) {
       setIsTransitioning(false);
@@ -1820,6 +1847,87 @@ export default function Page() {
 
     resetInactivityTimeout();
   };
+
+  const requestQuestionClarification = async (options: {
+    source: "voice" | "button";
+    candidateUtterance?: string | null;
+  }) => {
+    if (
+      isAdvancingRef.current ||
+      !attemptId ||
+      !sessionQuestionId ||
+      showCoding ||
+      sessionTimeEnded
+    ) {
+      return;
+    }
+
+    if (clarificationsUsed >= MAX_CLARIFICATIONS_PER_QUESTION) {
+      setWarning({
+        type: "soft",
+        message:
+          "You have used both clarifications for this question. Please answer in your own words or choose Skip.",
+        visible: true,
+      });
+      return;
+    }
+
+    isAdvancingRef.current = true;
+    stopAll();
+    stopAudioAnalysis();
+    setIsTransitioning(true);
+    setVerisState("thinking");
+
+    try {
+      const data = await postJson<{
+        message: string;
+        clarifiedQuestion: string;
+        originalQuestion: string;
+        clarificationCount: number;
+        maxClarifications: number;
+      }>("/api/session/clarify-question", {
+        attemptId,
+        sessionQuestionId,
+        candidateUtterance: options.candidateUtterance ?? null,
+        source: options.source,
+      });
+
+      setClarificationsUsed(data.clarificationCount);
+      setWarning((previous) => ({ ...previous, visible: false }));
+      await askQuestion(
+        data.clarifiedQuestion,
+        sessionQuestionId,
+        questionId,
+        currentQuestionType,
+        {
+          preserveClarifications: true,
+          spokenPrefix: data.message,
+        }
+      );
+      setIsTransitioning(false);
+      isAdvancingRef.current = false;
+    } catch (error) {
+      isAdvancingRef.current = false;
+      setIsTransitioning(false);
+      setWarning({
+        type: "soft",
+        message:
+          error instanceof Error
+            ? error.message
+            : "I could not rephrase the question just now. Please try once more.",
+        visible: true,
+      });
+
+      if (!recognitionRef.current) {
+        startListening();
+      }
+      acceptingTranscriptRef.current = true;
+      setVerisState("listening");
+      void startAudioAnalysis();
+    }
+  };
+
+  handleClarificationRef.current = requestQuestionClarification;
 
   const getNextQuestion = async () => {
     if (!attemptId) {
@@ -1963,6 +2071,21 @@ export default function Page() {
 
       transcriptRef.current = nextTranscript;
       setTranscript(nextTranscript);
+
+      if (clarificationIntentTimerRef.current) {
+        clearTimeout(clarificationIntentTimerRef.current);
+        clarificationIntentTimerRef.current = null;
+      }
+
+      if (isClarificationRequest(nextTranscript)) {
+        clarificationIntentTimerRef.current = setTimeout(() => {
+          clarificationIntentTimerRef.current = null;
+          void handleClarificationRef.current?.({
+            source: "voice",
+            candidateUtterance: nextTranscript,
+          });
+        }, 900);
+      }
     };
 
     recognitionRef.current = startRecognition(
@@ -1996,6 +2119,10 @@ export default function Page() {
 
     clearTimeout(questionTimeoutRef.current);
     clearTimeout(silenceTimer.current);
+    if (clarificationIntentTimerRef.current) {
+      clearTimeout(clarificationIntentTimerRef.current);
+      clarificationIntentTimerRef.current = null;
+    }
   };
 
   const startRecordingTimer = () => {
@@ -2789,6 +2916,16 @@ export default function Page() {
               <InterviewControls
                 disabled={isTransitioning || isReconnecting}
                 skipDisabled={sessionTimeEnded}
+                explainDisabled={
+                  sessionTimeEnded ||
+                  showCoding ||
+                  clarificationsUsed >= MAX_CLARIFICATIONS_PER_QUESTION
+                }
+                explainLabel={
+                  clarificationsUsed >= MAX_CLARIFICATIONS_PER_QUESTION
+                    ? "Clarification limit reached"
+                    : "Explain differently"
+                }
                 primaryLabel={sessionTimeEnded ? "Finish Answer" : "Next Question"}
                 message={
                   answerWindowEnded
@@ -2799,6 +2936,9 @@ export default function Page() {
                 }
                 onNext={() => void handleAutoNext()}
                 onSkip={() => void handleAutoNext({ allowPendingTranscription: true })}
+                onExplainDifferently={() =>
+                  void requestQuestionClarification({ source: "button" })
+                }
               />
             </div>
           </aside>

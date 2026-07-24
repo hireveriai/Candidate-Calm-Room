@@ -318,7 +318,7 @@ begin
   values (
     p_attempt_id,
     v_first.question_id,
-    coalesce(v_first.content, 'Tell me about your experience and the work most relevant to this role.'),
+    coalesce(v_first.content, 'Please walk me through your experience, including your current or most recent role, your main responsibilities, key achievements, and the kind of work you have handled.'),
     'system',
     'core',
     1,

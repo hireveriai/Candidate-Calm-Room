@@ -43,3 +43,33 @@ test("does not treat a partially asked interview as complete", () => {
     false
   );
 });
+
+test("does not finalize while a required closing question is unanswered", () => {
+  assert.equal(
+    hasCompletionEvidence({
+      expected_questions: 12,
+      session_questions: 12,
+      answer_rows: 11,
+      non_empty_answers: 11,
+      completed_recordings: 1,
+      required_closing_questions: 2,
+      answered_required_closing_questions: 1,
+    }),
+    false
+  );
+});
+
+test("protects the completed attempt after both closing responses are saved", () => {
+  assert.equal(
+    hasCompletionEvidence({
+      expected_questions: 12,
+      session_questions: 12,
+      answer_rows: 12,
+      non_empty_answers: 11,
+      completed_recordings: 1,
+      required_closing_questions: 2,
+      answered_required_closing_questions: 2,
+    }),
+    true
+  );
+});

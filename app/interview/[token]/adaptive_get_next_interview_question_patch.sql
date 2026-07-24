@@ -588,7 +588,7 @@ begin
     values (
       p_attempt_id,
       v_next_core.question_id,
-      coalesce(v_next_core.content, 'Tell me about your experience and the work most relevant to this role.'),
+      coalesce(v_next_core.content, 'Please walk me through your experience, including your current or most recent role, your main responsibilities, key achievements, and the kind of work you have handled.'),
       'system',
       case when v_phase = 'closing' then 'closing' else 'core' end,
       v_next_order,

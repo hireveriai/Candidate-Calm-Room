@@ -36,6 +36,13 @@ import {
 import { toFiniteNumber } from "@/app/lib/interviewScoring";
 import { isInvalidCandidateTranscript } from "@/app/lib/transcriptGuards";
 import { canFinalizeWithTranscriptIntegrity } from "@/app/lib/completionTranscriptPolicy";
+import {
+  getNextRequiredClosingQuestion,
+  getClosingStage,
+  hasStartedRequiredClosingSequence,
+  inferCandidateCareerStage,
+  type CandidateCareerStage,
+} from "@/app/lib/interviewClosing";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -64,6 +71,7 @@ type AskedQuestionRow = {
   content: string;
   source: string;
   question_kind: string | null;
+  source_context: unknown;
   asked_at: Date | null;
 };
 
@@ -83,11 +91,14 @@ type AttemptContextRow = {
   job_title: string | null;
   job_description: string | null;
   core_skills: string[] | null;
+  candidate_experience: string | null;
 };
 
 type ResumeSignalRow = {
   extracted_skills: string[] | null;
   extracted_claims: unknown;
+  claimed_experience_years: number | null;
+  raw_resume: string | null;
 };
 
 type LatestAnswerRow = {
@@ -145,6 +156,183 @@ type FollowUpGenerationResult = {
   followUpQuestion: string;
   intent: FollowUpIntent;
 };
+
+async function createNextRequiredClosingQuestion(params: {
+  attemptId: string;
+  careerStage: CandidateCareerStage;
+  lastKnownSessionQuestionId: string | null;
+}) {
+  return prisma.$transaction(async (tx: typeof prisma) => {
+    const lockedAttempts = await tx.$queryRaw<
+      Array<{ ends_at: Date | null; status: string | null }>
+    >`
+      select ends_at, status
+      from public.interview_attempts
+      where attempt_id = ${params.attemptId}::uuid
+      for update
+    `;
+    const lockedAttempt = lockedAttempts[0];
+    if (
+      !lockedAttempt ||
+      (lockedAttempt.ends_at &&
+        new Date(lockedAttempt.ends_at).getTime() <= Date.now()) ||
+      ["COMPLETED", "FINALIZED", "TERMINATED", "ABANDONED"].includes(
+        (lockedAttempt.status ?? "").toUpperCase()
+      )
+    ) {
+      return null;
+    }
+
+    const askedQuestions = await tx.$queryRaw<
+      Array<{
+        session_question_id: string;
+        question_id: string | null;
+        content: string;
+        source: string;
+        question_kind: string | null;
+        source_context: unknown;
+        question_order: number;
+        asked_at: Date | null;
+        answered: boolean;
+      }>
+    >`
+      select
+        session_question_id,
+        question_id,
+        content,
+        source,
+        question_kind,
+        source_context,
+        question_order,
+        asked_at,
+        exists (
+          select 1
+          from public.interview_answers ans
+          where ans.session_question_id = sq.session_question_id
+        ) as answered
+      from public.session_questions sq
+      where attempt_id = ${params.attemptId}::uuid
+      order by question_order asc, asked_at asc nulls last
+    `;
+    const latestPersistedQuestion = askedQuestions.at(-1) ?? null;
+
+    if (
+      latestPersistedQuestion &&
+      (latestPersistedQuestion.session_question_id !==
+        params.lastKnownSessionQuestionId ||
+        (getClosingStage(latestPersistedQuestion.source_context) !== null &&
+          !latestPersistedQuestion.answered))
+    ) {
+      return {
+        session_question_id: latestPersistedQuestion.session_question_id,
+        question_id: latestPersistedQuestion.question_id,
+        content: latestPersistedQuestion.content,
+        source: latestPersistedQuestion.source,
+        question_kind: latestPersistedQuestion.question_kind,
+        question_order: latestPersistedQuestion.question_order,
+        asked_at: latestPersistedQuestion.asked_at,
+        is_complete: false,
+        question_type:
+          latestPersistedQuestion.question_kind === "closing"
+            ? "behavioral"
+            : "open_ended",
+        follow_up_intent: null,
+      } satisfies NextQuestionRow;
+    }
+    const nextClosing = getNextRequiredClosingQuestion({
+      askedQuestions: askedQuestions.map((question: {
+        question_kind: string | null;
+        source_context: unknown;
+      }) => ({
+        questionKind: question.question_kind,
+        sourceContext: question.source_context,
+      })),
+      careerStage: params.careerStage,
+    });
+
+    if (!nextClosing) {
+      return null;
+    }
+
+    const nextOrder =
+      Math.max(
+        0,
+        ...askedQuestions.map(
+          (question: { question_order: number }) => question.question_order ?? 0
+        )
+      ) + 1;
+    const expectedAtCompletion =
+      nextOrder + (nextClosing.stage === "motivation" ? 1 : 0);
+    const sourceContext = {
+      ending_stage: nextClosing.stage,
+      required: true,
+      scored: false,
+      competency_impact: "none",
+    };
+    const created = (
+      await tx.$queryRaw<CreatedSessionQuestionRow[]>`
+        insert into public.session_questions (
+          attempt_id,
+          question_id,
+          content,
+          source,
+          question_kind,
+          question_order,
+          source_context,
+          phase,
+          difficulty_level
+        )
+        values (
+          ${params.attemptId}::uuid,
+          ${null}::uuid,
+          ${nextClosing.question}::text,
+          ${"system"}::text,
+          ${"closing"}::text,
+          ${nextOrder}::integer,
+          ${JSON.stringify(sourceContext)}::jsonb,
+          ${"closing"}::text,
+          ${1}::integer
+        )
+        returning
+          session_question_id,
+          question_id,
+          content,
+          source,
+          asked_at,
+          question_kind
+      `
+    )[0];
+
+    await tx.$executeRaw`
+      update public.interview_attempts
+      set current_phase = 'closing',
+          expected_questions = greatest(
+            coalesce(expected_questions, 0),
+            ${expectedAtCompletion}::integer
+          ),
+          last_activity_at = now()
+      where attempt_id = ${params.attemptId}::uuid
+        and upper(coalesce(status, '')) not in ('COMPLETED', 'FINALIZED')
+    `;
+
+    logInterviewEvent("info", "question.required_closing_created", {
+      attemptId: params.attemptId,
+      questionSequence: nextOrder,
+      endingStage: nextClosing.stage,
+      state: "QUESTION_GENERATING",
+      nextState: "QUESTION_ACTIVE",
+    });
+
+    return {
+      ...created,
+      question_kind: "closing",
+      question_order: nextOrder,
+      is_complete: false,
+      question_type: "behavioral",
+      follow_up_intent: null,
+    } satisfies NextQuestionRow;
+  });
+}
 
 async function completeInterviewWithoutStrandingCandidate(params: {
   attemptId: string;
@@ -836,6 +1024,7 @@ export async function POST(request: Request) {
           jp.job_title,
           jp.job_description,
           jp.core_skills,
+          ia.candidate_experience,
           (
             select count(*)
             from public.interview_questions iq
@@ -866,6 +1055,7 @@ export async function POST(request: Request) {
           ${null}::text as job_title,
           ${null}::text as job_description,
           ${null}::text[] as core_skills,
+          ${null}::text as candidate_experience,
           (
             select count(*)
             from public.interview_questions iq
@@ -915,6 +1105,7 @@ export async function POST(request: Request) {
           content,
           source,
           question_kind,
+          source_context,
           asked_at
         from public.session_questions
         where attempt_id = ${attemptId}::uuid
@@ -1008,13 +1199,55 @@ export async function POST(request: Request) {
       await prisma.$queryRaw<ResumeSignalRow[]>`
         select
           cra.extracted_skills,
-          cra.extracted_claims
+          cra.extracted_claims,
+          cra.claimed_experience_years,
+          cra.raw_resume
         from public.candidate_resume_ai cra
         where cra.interview_id = ${attempt.interview_id}::uuid
         order by cra.created_at desc nulls last, cra.resume_ai_id desc
         limit 1
       `
     )[0] ?? null;
+    const careerStage = inferCandidateCareerStage({
+      candidateExperience: attempt.candidate_experience,
+      claimedExperienceYears: resumeSignal?.claimed_experience_years,
+      resumeText: resumeSignal?.raw_resume,
+      extractedClaims: resumeSignal?.extracted_claims,
+    });
+
+    if (
+      hasStartedRequiredClosingSequence(
+        askedQuestions.map((question: AskedQuestionRow) => ({
+          questionKind: question.question_kind,
+          sourceContext: question.source_context,
+        }))
+      )
+    ) {
+      const closingQuestion = await createNextRequiredClosingQuestion({
+        attemptId,
+        careerStage,
+        lastKnownSessionQuestionId: latestQuestion?.session_question_id ?? null,
+      });
+
+      if (closingQuestion?.session_question_id) {
+        return Response.json({
+          complete: false,
+          question: closingQuestion.content,
+          question_id: closingQuestion.question_id,
+          session_question_id: closingQuestion.session_question_id,
+          question_kind: closingQuestion.question_kind,
+          question_type: closingQuestion.question_type,
+          follow_up_intent: null,
+        });
+      }
+
+      return completeInterviewWithoutStrandingCandidate({
+        attemptId,
+        reason: "required_closing_completed",
+        message:
+          "Interview complete. Your motivation and closing statement have been recorded.",
+      });
+    }
     const resumeClaimValues = extractClaimAnchors(
       flattenClaimTexts(resumeSignal?.extracted_claims)
     );
@@ -1058,6 +1291,20 @@ export async function POST(request: Request) {
       totalLimit,
       1
     );
+
+    // The watchdog uses expected_questions as completion evidence. Include the
+    // two required ending responses up front so a stale/reconnect check cannot
+    // finalize the attempt after the competency budget but before the closing
+    // sequence has actually run.
+    await prisma.$executeRaw`
+      update public.interview_attempts
+      set expected_questions = greatest(
+            coalesce(expected_questions, 0),
+            ${maxQuestionInteractions + 2}::integer
+          )
+      where attempt_id = ${attemptId}::uuid
+        and upper(coalesce(status, '')) not in ('COMPLETED', 'FINALIZED')
+    `;
 
     const completion = shouldCompleteInterview({
       askedTotalQuestions: askedTotal,
@@ -1604,6 +1851,24 @@ export async function POST(request: Request) {
     }
 
     if (sessionQuestion.is_complete || !sessionQuestion.session_question_id) {
+      const closingQuestion = await createNextRequiredClosingQuestion({
+        attemptId,
+        careerStage,
+        lastKnownSessionQuestionId: latestQuestion?.session_question_id ?? null,
+      });
+
+      if (closingQuestion?.session_question_id) {
+        return Response.json({
+          complete: false,
+          question: closingQuestion.content,
+          question_id: closingQuestion.question_id,
+          session_question_id: closingQuestion.session_question_id,
+          question_kind: closingQuestion.question_kind,
+          question_type: closingQuestion.question_type,
+          follow_up_intent: null,
+        });
+      }
+
       return completeInterviewWithoutStrandingCandidate({
         attemptId,
         reason: "question_budget_completed",

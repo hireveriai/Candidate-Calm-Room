@@ -134,6 +134,13 @@ export async function POST(request: Request) {
           questionText: context.question_text,
         });
     const finalTranscript = repairResult?.text ?? transcript;
+    const submittedQuestionText = body.questionText?.trim() || null;
+    const clarifiedQuestionText =
+      submittedQuestionText &&
+      submittedQuestionText.replace(/\s+/g, " ").trim().toLowerCase() !==
+        context.question_text.replace(/\s+/g, " ").trim().toLowerCase()
+        ? submittedQuestionText
+        : null;
     const answerPayload = {
       original_transcript: rawTranscript || transcript,
       browser_transcript: transcript,
@@ -147,7 +154,9 @@ export async function POST(request: Request) {
             model: repairResult.model ?? null,
           }
         : null,
-      submitted_question_text: body.questionText?.trim() || null,
+      original_question_text: context.question_text,
+      submitted_question_text: submittedQuestionText,
+      clarified_question_text: clarifiedQuestionText,
       transcript_source:
         submittedTranscript && checkpoint
           ? "browser_submission_with_checkpoint"

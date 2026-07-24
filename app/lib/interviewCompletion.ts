@@ -986,11 +986,14 @@ export async function finalizeInterviewAttempt(params: {
       avg_fraud_score: 0,
     };
 
-    const expectedQuestions = resolveEffectiveQuestionCount({
-      configuredCount: attempt.expected_questions ?? attempt.question_count,
-      durationMinutes: attempt.duration_minutes,
-      plannedQuestionCount: attempt.planned_question_count,
-    });
+    const expectedQuestions =
+      attempt.expected_questions && attempt.expected_questions > 0
+        ? attempt.expected_questions
+        : resolveEffectiveQuestionCount({
+            configuredCount: attempt.question_count,
+            durationMinutes: attempt.duration_minutes,
+            plannedQuestionCount: attempt.planned_question_count,
+          });
     const questionsAnswered = Math.max(aggregate.questions_answered ?? 0, 0);
     const askedQuestions = Math.max(aggregate.asked_questions ?? 0, 0);
     const avgSkillScore = clamp(asNumber(aggregate.avg_skill_score), 0, 1);
