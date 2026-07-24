@@ -4,6 +4,7 @@ import { assertUuid, logInterviewEvent } from "@/app/lib/interviewReliability";
 import { finalizeActiveRecordings } from "@/app/lib/livekit/recordingLifecycle";
 import { validateAndRepairCompletionTranscripts } from "@/app/lib/recordingTranscriptRepair";
 import { prisma } from "@/app/lib/prisma";
+import { canFinalizeWithTranscriptIntegrity } from "@/app/lib/completionTranscriptPolicy";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -41,7 +42,7 @@ export async function POST(request: Request) {
     // Never convert missing transcription evidence into a completed zero-score
     // interview. Keep the attempt recoverable so the watchdog/background
     // repair path can retry the finalized recording.
-    if (!transcriptIntegrity || transcriptIntegrity.remainingIssues > 0) {
+    if (!canFinalizeWithTranscriptIntegrity(transcriptIntegrity)) {
       await prisma.$executeRaw`
         update public.interview_attempts
         set status = 'COMPLETING',

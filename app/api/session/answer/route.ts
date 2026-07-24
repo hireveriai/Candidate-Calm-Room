@@ -4,6 +4,7 @@ import {
   generateAnswer,
   getLogicalQuestionId,
   getSessionQuestionContext,
+  getTranscriptCheckpoint,
   type AnswerRecord,
   type JsonValue,
 } from "@/app/lib/calmAnswerPipeline";
@@ -12,6 +13,7 @@ import { requireCandidateSession } from "@/app/lib/candidateSession";
 import { assertUuid, logInterviewEvent } from "@/app/lib/interviewReliability";
 import { repairSpokenTranscript } from "@/app/lib/spokenTranscriptRepair";
 import { isInvalidCandidateTranscript } from "@/app/lib/transcriptGuards";
+import { mergeMonotonicTranscript } from "@/app/lib/transcriptAccumulator";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -63,8 +65,8 @@ export async function POST(request: Request) {
 
     const body = (await request.json()) as RequestBody;
     const sessionQuestionId = body.sessionQuestionId?.trim();
-    const transcript = normalizeTranscript(body.transcript ?? "");
-    const rawTranscript = normalizeTranscript(body.rawTranscript ?? "");
+    const submittedTranscript = normalizeTranscript(body.transcript ?? "");
+    const submittedRawTranscript = normalizeTranscript(body.rawTranscript ?? "");
 
     if (!sessionQuestionId) {
       return Response.json(
@@ -83,6 +85,19 @@ export async function POST(request: Request) {
         { status: 400 }
       );
     }
+
+    const checkpoint = await getTranscriptCheckpoint({
+      attemptId: context.attempt_id,
+      sessionQuestionId: context.session_question_id,
+    });
+    const transcript = mergeMonotonicTranscript(
+      checkpoint?.transcript,
+      submittedTranscript
+    );
+    const rawTranscript = mergeMonotonicTranscript(
+      checkpoint?.transcript,
+      submittedRawTranscript || submittedTranscript
+    );
 
     assertAnswerContextMatches({
       context,
@@ -133,6 +148,15 @@ export async function POST(request: Request) {
           }
         : null,
       submitted_question_text: body.questionText?.trim() || null,
+      transcript_source:
+        submittedTranscript && checkpoint
+          ? "browser_submission_with_checkpoint"
+          : submittedTranscript
+            ? "browser_submission"
+            : checkpoint
+              ? "heartbeat_checkpoint"
+              : "missing",
+      checkpoint_captured_at: checkpoint?.capturedAt ?? null,
     } satisfies JsonValue;
 
     const invalidTranscript = isInvalidCandidateTranscript({

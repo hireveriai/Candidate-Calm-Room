@@ -10,6 +10,10 @@ import {
   STALE_ATTEMPT_THRESHOLD_SECONDS,
   isFinalSessionStatus,
 } from "@/app/lib/interviewSessionReliability";
+import {
+  canFinalizeWithTranscriptIntegrity,
+  hasCompletionEvidence,
+} from "@/app/lib/completionTranscriptPolicy";
 
 type HeartbeatInput = {
   interviewId?: string | null;
@@ -17,6 +21,9 @@ type HeartbeatInput = {
   sessionId?: string | null;
   timestamp?: string | null;
   reconnecting?: boolean;
+  sessionQuestionId?: string | null;
+  questionId?: string | null;
+  transcriptBuffer?: string | null;
 };
 
 type WatchdogResult = {
@@ -34,6 +41,50 @@ type CompletionEvidenceRow = {
   completed_recordings: number;
   recordings_with_transcript: number;
 };
+
+const MAX_TRANSCRIPT_CHECKPOINT_CHARACTERS = 100_000;
+
+function buildTranscriptCheckpoint(params: {
+  attemptId: string;
+  sessionQuestionId?: unknown;
+  questionId?: unknown;
+  transcriptBuffer?: unknown;
+  capturedAt?: unknown;
+}) {
+  const sessionQuestionId =
+    typeof params.sessionQuestionId === "string"
+      ? params.sessionQuestionId.trim()
+      : "";
+  const transcript =
+    typeof params.transcriptBuffer === "string"
+      ? params.transcriptBuffer.replace(/\s+/g, " ").trim()
+      : "";
+
+  if (!sessionQuestionId || !transcript) {
+    return null;
+  }
+
+  assertUuid(sessionQuestionId, "sessionQuestionId");
+  const questionId =
+    typeof params.questionId === "string" && params.questionId.trim()
+      ? assertUuid(params.questionId.trim(), "questionId")
+      : null;
+  const parsedCapturedAt =
+    typeof params.capturedAt === "string"
+      ? new Date(params.capturedAt)
+      : new Date();
+  const capturedAt = Number.isFinite(parsedCapturedAt.getTime())
+    ? parsedCapturedAt
+    : new Date();
+
+  return {
+    attemptId: params.attemptId,
+    sessionQuestionId,
+    questionId,
+    transcript: transcript.slice(0, MAX_TRANSCRIPT_CHECKPOINT_CHARACTERS),
+    capturedAt,
+  };
+}
 
 async function loadCompletionEvidence(attemptId: string) {
   const rows = await prisma.$queryRaw<CompletionEvidenceRow[]>`
@@ -88,25 +139,25 @@ async function loadCompletionEvidence(attemptId: string) {
   return rows[0] ?? null;
 }
 
-function hasCompletionEvidence(evidence: CompletionEvidenceRow | null) {
-  if (!evidence) {
-    return false;
-  }
-
-  const expectedQuestions = Math.max(evidence.expected_questions ?? 0, 1);
-  const askedEnough = evidence.session_questions >= expectedQuestions;
-  const answeredEnough =
-    evidence.non_empty_answers >= Math.max(expectedQuestions - 1, 1) ||
-    (evidence.answer_rows >= expectedQuestions && evidence.completed_recordings > 0);
-
-  // A missing live transcript is recoverable from the finalized recording.
-  // Requiring a transcript here caused fully answered attempts to be marked
-  // abandoned before the recording transcript repair could run.
-  return askedEnough && answeredEnough;
-}
-
 export async function recordInterviewHeartbeat(input: HeartbeatInput) {
   const attemptId = assertUuid(input.attemptId, "attemptId");
+  const transcriptCheckpoint = buildTranscriptCheckpoint({
+    attemptId,
+    sessionQuestionId: input.sessionQuestionId,
+    questionId: input.questionId,
+    transcriptBuffer: input.transcriptBuffer,
+    capturedAt: input.timestamp,
+  });
+  const serializedCheckpoint = transcriptCheckpoint
+    ? JSON.stringify({
+        attempt_id: transcriptCheckpoint.attemptId,
+        session_question_id: transcriptCheckpoint.sessionQuestionId,
+        question_id: transcriptCheckpoint.questionId,
+        transcript: transcriptCheckpoint.transcript,
+        captured_at: transcriptCheckpoint.capturedAt.toISOString(),
+        source: "heartbeat",
+      })
+    : null;
 
   const rows = await prisma.$queryRaw<
     {
@@ -221,6 +272,23 @@ export async function recordInterviewHeartbeat(input: HeartbeatInput) {
         inactivity_seconds = case
           when last_activity_at is null then inactivity_seconds
           else greatest(extract(epoch from (now() - last_activity_at))::int, 0)
+        end,
+        termination_metadata = case
+          when ${serializedCheckpoint}::jsonb is null then termination_metadata
+          when coalesce(
+            nullif(
+              termination_metadata #>> '{live_transcript_checkpoint,captured_at}',
+              ''
+            )::timestamptz,
+            'epoch'::timestamptz
+          ) <= ${transcriptCheckpoint?.capturedAt ?? null}::timestamptz
+          then jsonb_set(
+            coalesce(termination_metadata, '{}'::jsonb),
+            '{live_transcript_checkpoint}',
+            ${serializedCheckpoint}::jsonb,
+            true
+          )
+          else termination_metadata
         end
     where attempt_id = ${attemptId}::uuid
   `;
@@ -268,6 +336,23 @@ export async function markAttemptReconnecting(params: {
   metadata?: Record<string, unknown>;
 }) {
   const attemptId = assertUuid(params.attemptId, "attemptId");
+  const transcriptCheckpoint = buildTranscriptCheckpoint({
+    attemptId,
+    sessionQuestionId: params.metadata?.sessionQuestionId,
+    questionId: params.metadata?.questionId,
+    transcriptBuffer: params.metadata?.transcriptBuffer,
+    capturedAt: new Date().toISOString(),
+  });
+  const serializedCheckpoint = transcriptCheckpoint
+    ? JSON.stringify({
+        attempt_id: transcriptCheckpoint.attemptId,
+        session_question_id: transcriptCheckpoint.sessionQuestionId,
+        question_id: transcriptCheckpoint.questionId,
+        transcript: transcriptCheckpoint.transcript,
+        captured_at: transcriptCheckpoint.capturedAt.toISOString(),
+        source: params.source,
+      })
+    : null;
   const rows = await prisma.$queryRaw<
     {
       status: string | null;
@@ -306,6 +391,18 @@ export async function markAttemptReconnecting(params: {
     Date.now() - lastReconnectAt < 30_000;
 
   if (duplicateDisconnect) {
+    if (serializedCheckpoint) {
+      await prisma.$executeRaw`
+        update public.interview_attempts
+        set termination_metadata = jsonb_set(
+          coalesce(termination_metadata, '{}'::jsonb),
+          '{live_transcript_checkpoint}',
+          ${serializedCheckpoint}::jsonb,
+          true
+        )
+        where attempt_id = ${attemptId}::uuid
+      `;
+    }
     return { ok: true, duplicate: true };
   }
 
@@ -323,7 +420,16 @@ export async function markAttemptReconnecting(params: {
         disconnect_reason = ${params.reason}::text,
         reconnect_count = coalesce(reconnect_count, 0) + 1,
         recovered_successfully = false,
-        reconnect_events = ${JSON.stringify(reconnectEvents)}::jsonb
+        reconnect_events = ${JSON.stringify(reconnectEvents)}::jsonb,
+        termination_metadata = case
+          when ${serializedCheckpoint}::jsonb is null then termination_metadata
+          else jsonb_set(
+            coalesce(termination_metadata, '{}'::jsonb),
+            '{live_transcript_checkpoint}',
+            ${serializedCheckpoint}::jsonb,
+            true
+          )
+        end
     where attempt_id = ${attemptId}::uuid
       and upper(coalesce(status, '')) not in ('COMPLETED', 'TERMINATED', 'ABANDONED', 'EXPIRED', 'FINALIZED', 'FAILED', 'TIME_EXPIRED')
   `;
@@ -524,6 +630,29 @@ export async function runInterviewWatchdog() {
             });
             return null;
           });
+
+        if (!canFinalizeWithTranscriptIntegrity(transcriptIntegrity)) {
+          await prisma.$executeRaw`
+            update public.interview_attempts
+            set status = 'COMPLETING',
+                transcript_status = 'PARTIAL',
+                last_activity_at = now()
+            where attempt_id = ${row.attempt_id}::uuid
+              and upper(coalesce(status, '')) not in (
+                'TERMINATED', 'EXPIRED', 'FAILED'
+              )
+          `;
+          skipped += 1;
+          logInterviewEvent("warn", "watchdog.completion_waiting_for_transcript", {
+            attemptId: row.attempt_id,
+            interviewId: row.interview_id,
+            state: row.status,
+            nextState: "COMPLETING",
+            transcriptIntegrity,
+          });
+          continue;
+        }
+
         await finalizeInterviewAttempt({
           attemptId: row.attempt_id,
           earlyExit: false,

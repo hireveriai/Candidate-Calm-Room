@@ -519,6 +519,34 @@ export async function getSessionQuestionContext(params: {
   return rows[0] ?? null;
 }
 
+export async function getTranscriptCheckpoint(params: {
+  attemptId: string;
+  sessionQuestionId: string;
+}) {
+  const rows = await prisma.$queryRaw<Array<{
+    transcript: string | null;
+    captured_at: string | null;
+  }>>`
+    select
+      termination_metadata #>> '{live_transcript_checkpoint,transcript}' as transcript,
+      termination_metadata #>> '{live_transcript_checkpoint,captured_at}' as captured_at
+    from public.interview_attempts
+    where attempt_id = ${params.attemptId}::uuid
+      and termination_metadata
+        #>> '{live_transcript_checkpoint,session_question_id}'
+        = ${params.sessionQuestionId}
+    limit 1
+  `;
+
+  const transcript = normalizeText(rows[0]?.transcript);
+  return transcript
+    ? {
+        transcript,
+        capturedAt: rows[0]?.captured_at ?? null,
+      }
+    : null;
+}
+
 export function getLogicalQuestionId(context: SessionQuestionContext) {
   return context.question_id ?? context.session_question_id;
 }

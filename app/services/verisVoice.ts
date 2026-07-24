@@ -1,3 +1,5 @@
+import { mergeMonotonicTranscript } from "@/app/lib/transcriptAccumulator";
+
 export type VerisSpeechRecognition = {
   continuous: boolean;
   interimResults: boolean;
@@ -97,7 +99,8 @@ export function speak(text: string): Promise<void> {
 export function startRecognition(
   onResult: (text: string) => void,
   onEnd?: () => void,
-  onFinalResult?: (text: string) => void
+  onFinalResult?: (text: string) => void,
+  initialTranscript = ""
 ) {
   const SpeechRecognition =
     (window as SpeechRecognitionWindow).webkitSpeechRecognition ||
@@ -112,13 +115,15 @@ export function startRecognition(
   const activeRecognition = recognition;
   stopRequested = false;
   activeRecognition.stopRequested = false;
+  let sessionBaseTranscript = normalizeChunk(initialTranscript);
   let finalizedChunks: string[] = [];
-  let bestTranscript = "";
+  let bestTranscript = sessionBaseTranscript;
 
   activeRecognition.continuous = true;
   activeRecognition.interimResults = true;
   activeRecognition.lang = "en-US";
   activeRecognition.resetTranscript = () => {
+    sessionBaseTranscript = "";
     finalizedChunks = [];
     bestTranscript = "";
   };
@@ -144,8 +149,14 @@ export function startRecognition(
       }
     }
 
-    const finalizedText = mergeTranscriptParts(finalizedChunks);
-    const observedText = mergeTranscriptParts([...finalizedChunks, ...interimChunks]);
+    const finalizedText = mergeMonotonicTranscript(
+      sessionBaseTranscript,
+      mergeTranscriptParts(finalizedChunks)
+    );
+    const observedText = mergeMonotonicTranscript(
+      sessionBaseTranscript,
+      mergeTranscriptParts([...finalizedChunks, ...interimChunks])
+    );
 
     if (observedText.length >= bestTranscript.length) {
       bestTranscript = observedText;
@@ -162,7 +173,12 @@ export function startRecognition(
 
     if (bestTranscript) {
       onResult(bestTranscript);
-      onFinalResult?.(mergeTranscriptParts(finalizedChunks) || bestTranscript);
+      onFinalResult?.(
+        mergeMonotonicTranscript(
+          sessionBaseTranscript,
+          mergeTranscriptParts(finalizedChunks)
+        ) || bestTranscript
+      );
     }
 
     if (!stopRequested && onEnd) onEnd();

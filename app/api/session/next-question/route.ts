@@ -35,6 +35,7 @@ import {
 } from "@/app/lib/interviewQuestionTypes";
 import { toFiniteNumber } from "@/app/lib/interviewScoring";
 import { isInvalidCandidateTranscript } from "@/app/lib/transcriptGuards";
+import { canFinalizeWithTranscriptIntegrity } from "@/app/lib/completionTranscriptPolicy";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -181,12 +182,36 @@ async function completeInterviewWithoutStrandingCandidate(params: {
           prismaFailure: recordingError,
         });
       });
-      await validateAndRepairCompletionTranscripts(params.attemptId).catch((repairError: unknown) => {
-        logInterviewEvent("error", "question.transcript_auto_repair_failed", {
+      const transcriptIntegrity =
+        await validateAndRepairCompletionTranscripts(params.attemptId).catch(
+          (repairError: unknown) => {
+            logInterviewEvent("error", "question.transcript_auto_repair_failed", {
+              attemptId: params.attemptId,
+              prismaFailure: repairError,
+            });
+            return null;
+          }
+        );
+
+      if (!canFinalizeWithTranscriptIntegrity(transcriptIntegrity)) {
+        await prisma.$executeRaw`
+          update public.interview_attempts
+          set status = 'COMPLETING',
+              transcript_status = 'PARTIAL',
+              last_activity_at = now()
+          where attempt_id = ${params.attemptId}::uuid
+            and upper(coalesce(status, '')) not in (
+              'TERMINATED', 'ABANDONED', 'EXPIRED', 'FAILED', 'TIME_EXPIRED'
+            )
+        `;
+        logInterviewEvent("warn", "question.completion_waiting_for_transcript", {
           attemptId: params.attemptId,
-          prismaFailure: repairError,
+          state: "COMPLETING",
+          nextState: "COMPLETING",
+          transcriptIntegrity,
         });
-      });
+        return;
+      }
 
       await finalizeInterviewAttempt({
         attemptId: params.attemptId,

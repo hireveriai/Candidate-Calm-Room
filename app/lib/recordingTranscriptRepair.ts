@@ -9,6 +9,9 @@ import ffmpegPath from "ffmpeg-static";
 
 import { prisma } from "@/app/lib/prisma";
 import { isInvalidCandidateTranscript } from "@/app/lib/transcriptGuards";
+import {
+  hasUnverifiedIncompleteSpokenAnswer,
+} from "@/app/lib/transcriptIntegrity";
 
 type RepairQuestionRow = {
   answer_id: string;
@@ -119,39 +122,6 @@ function isUnsafeAlignedAnswer(value: unknown) {
 
 function wordCount(value: unknown) {
   return normalizeText(value).split(/\s+/).filter(Boolean).length;
-}
-
-function payloadDurationSeconds(payload: unknown) {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    return 0;
-  }
-
-  const duration = Number((payload as Record<string, unknown>).duration ?? 0);
-  return Number.isFinite(duration) && duration > 0 ? duration : 0;
-}
-
-function isLikelyIncompleteSpokenAnswer(row: Pick<RepairQuestionRow, "answer_text" | "answer_payload" | "code_text">) {
-  if (normalizeText(row.code_text)) {
-    return false;
-  }
-
-  const answer = normalizeText(row.answer_text);
-  if (!answer || isNoResponse(answer)) {
-    return true;
-  }
-
-  const duration = payloadDurationSeconds(row.answer_payload);
-  const words = wordCount(answer);
-  const wordsPerSecond = duration > 0 ? words / duration : Number.POSITIVE_INFINITY;
-  const endsMidSentence = /\b(and|but|because|so|to|the|a|an|if|when|with|for|of|or)$/i.test(answer);
-
-  // Browser SpeechRecognition can silently stop emitting text while the
-  // MediaRecorder/LiveKit recording continues. A long answer with implausibly
-  // sparse text, or one ending on a connector, is evidence of that cutoff.
-  return (
-    (duration >= 45 && wordsPerSecond < 0.9) ||
-    (duration >= 15 && words >= 8 && endsMidSentence)
-  );
 }
 
 function isRecoveredAnswerMateriallyBetter(existingValue: unknown, recoveredValue: unknown) {
@@ -420,11 +390,32 @@ async function releaseRepairLease(params: {
   `;
 }
 
-async function runFfmpeg(args: string[]) {
-  if (!ffmpegPath) {
-    throw new Error("FFmpeg is unavailable for large recording transcription");
+async function resolveFfmpegExecutable() {
+  const binaryName = process.platform === "win32" ? "ffmpeg.exe" : "ffmpeg";
+  const candidates = [
+    process.env.FFMPEG_PATH?.trim(),
+    join(process.cwd(), "node_modules", "ffmpeg-static", binaryName),
+    ffmpegPath,
+    process.platform === "win32" ? null : "/usr/bin/ffmpeg",
+    process.platform === "win32" ? null : "/usr/local/bin/ffmpeg",
+  ].filter((value): value is string => Boolean(value));
+
+  for (const candidate of candidates) {
+    try {
+      await fs.access(candidate);
+      return candidate;
+    } catch {
+      // Check the next packaged or system path.
+    }
   }
-  const executable = ffmpegPath;
+
+  throw new Error(
+    "FFmpeg binary is unavailable at runtime; recording transcription remains queued"
+  );
+}
+
+async function runFfmpeg(args: string[]) {
+  const executable = await resolveFfmpegExecutable();
 
   await new Promise<void>((resolve, reject) => {
     const process = spawn(executable, args, { windowsHide: true });
@@ -574,6 +565,7 @@ function hasAnswerIssue(row: CompletionAuditRow) {
     isNoResponse(answer) ||
     row.status === "generating" ||
     row.status === "failed" ||
+    hasUnverifiedIncompleteSpokenAnswer(row) ||
     isInvalidCandidateTranscript({
       transcript: answer,
       questionText: row.question,
@@ -714,13 +706,7 @@ export async function repairPendingAnswersFromRecording(attemptId: string) {
       and cs.answer_id is null
   `;
   const hasAnswerNeedingRecordingCheck = spokenRows.some((row: RepairQuestionRow) =>
-    isLikelyIncompleteSpokenAnswer(row) &&
-    !(
-      row.answer_payload &&
-      typeof row.answer_payload === "object" &&
-      !Array.isArray(row.answer_payload) &&
-      (row.answer_payload as Record<string, unknown>).recording_transcript_verified_at
-    )
+    hasUnverifiedIncompleteSpokenAnswer(row)
   );
 
   if (!hasAnswerNeedingRecordingCheck) {

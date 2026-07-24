@@ -1,6 +1,27 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // Recording recovery compresses large interview videos before transcription.
+  // Explicit tracing keeps the platform-specific FFmpeg binary inside every
+  // server function that may run completion or watchdog recovery.
+  outputFileTracingIncludes: {
+    "/api/interview/watchdog": [
+      "./node_modules/ffmpeg-static/ffmpeg",
+      "./node_modules/ffmpeg-static/ffmpeg.exe",
+    ],
+    "/api/session/complete": [
+      "./node_modules/ffmpeg-static/ffmpeg",
+      "./node_modules/ffmpeg-static/ffmpeg.exe",
+    ],
+    "/api/session/next-question": [
+      "./node_modules/ffmpeg-static/ffmpeg",
+      "./node_modules/ffmpeg-static/ffmpeg.exe",
+    ],
+    "/api/session/terminate": [
+      "./node_modules/ffmpeg-static/ffmpeg",
+      "./node_modules/ffmpeg-static/ffmpeg.exe",
+    ],
+  },
   experimental: {
     cpus: 1,
   },

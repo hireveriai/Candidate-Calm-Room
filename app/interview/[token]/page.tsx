@@ -44,6 +44,7 @@ import {
   RECONNECT_BACKOFF_MS,
 } from "@/app/lib/interviewSessionReliability";
 import { isInvalidCandidateTranscript } from "@/app/lib/transcriptGuards";
+import { mergeMonotonicTranscript } from "@/app/lib/transcriptAccumulator";
 import {
   MAX_ANSWER_TIME,
   MAX_CODING_ANSWER_TIME,
@@ -270,6 +271,9 @@ export default function Page() {
   const exitIntentRef = useRef(false);
   const currentQuestionRef = useRef("");
   const transcriptRef = useRef("");
+  const sessionQuestionIdRef = useRef("");
+  const questionIdRef = useRef("");
+  const showCodingRef = useRef(false);
   const listeningActiveRef = useRef(false);
   const acceptingTranscriptRef = useRef(false);
   const voiceActivityFramesRef = useRef(0);
@@ -334,6 +338,12 @@ export default function Page() {
       ? crypto.randomUUID()
       : `session-${Date.now()}`
   );
+
+  useEffect(() => {
+    sessionQuestionIdRef.current = sessionQuestionId;
+    questionIdRef.current = questionId;
+    showCodingRef.current = showCoding;
+  }, [questionId, sessionQuestionId, showCoding]);
 
   useEffect(() => {
     return () => {
@@ -694,6 +704,12 @@ export default function Page() {
       sessionId: reconnectRequestIdRef.current,
       timestamp: new Date().toISOString(),
       reconnecting,
+      sessionQuestionId: sessionQuestionIdRef.current || null,
+      questionId: questionIdRef.current || null,
+      transcriptBuffer:
+        acceptingTranscriptRef.current && !showCodingRef.current
+          ? transcriptRef.current.trim() || null
+          : null,
     });
 
     const timeoutPromise = new Promise((_, reject) => {
@@ -1927,24 +1943,30 @@ export default function Page() {
 
   const startListening = () => {
     listeningActiveRef.current = true;
+
+    const acceptRecognitionUpdate = (text: string) => {
+      if (!acceptingTranscriptRef.current) return;
+
+      const nextTranscript = mergeMonotonicTranscript(
+        transcriptRef.current,
+        text
+      );
+      if (!nextTranscript) return;
+      if (
+        isInvalidCandidateTranscript({
+          transcript: nextTranscript,
+          questionText: currentQuestionRef.current,
+        })
+      ) {
+        return;
+      }
+
+      transcriptRef.current = nextTranscript;
+      setTranscript(nextTranscript);
+    };
+
     recognitionRef.current = startRecognition(
-      (text) => {
-        if (!acceptingTranscriptRef.current) return;
-
-        const nextTranscript = text.trim();
-        if (!nextTranscript) return;
-        if (
-          isInvalidCandidateTranscript({
-            transcript: nextTranscript,
-            questionText: currentQuestionRef.current,
-          })
-        ) {
-          return;
-        }
-
-        transcriptRef.current = nextTranscript;
-        setTranscript(nextTranscript);
-      },
+      acceptRecognitionUpdate,
       () => {
         recognitionRef.current = null;
         setMicrophoneReady(false);
@@ -1959,25 +1981,8 @@ export default function Page() {
           }
         }, 250);
       },
-      (text) => {
-        if (!acceptingTranscriptRef.current) return;
-
-        const nextTranscript = text.trim();
-        if (!nextTranscript || nextTranscript.length < transcriptRef.current.length) {
-          return;
-        }
-        if (
-          isInvalidCandidateTranscript({
-            transcript: nextTranscript,
-            questionText: currentQuestionRef.current,
-          })
-        ) {
-          return;
-        }
-
-        transcriptRef.current = nextTranscript;
-        setTranscript(nextTranscript);
-      }
+      acceptRecognitionUpdate,
+      transcriptRef.current
     );
     setMicrophoneReady(Boolean(recognitionRef.current));
   };

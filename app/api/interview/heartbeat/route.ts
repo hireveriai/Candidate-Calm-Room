@@ -11,6 +11,9 @@ type RequestBody = {
   sessionId?: string;
   timestamp?: string;
   reconnecting?: boolean;
+  sessionQuestionId?: string | null;
+  questionId?: string | null;
+  transcriptBuffer?: string | null;
 };
 
 export async function POST(request: Request) {
@@ -32,6 +35,9 @@ export async function POST(request: Request) {
       sessionId: body.sessionId?.trim() ?? null,
       timestamp: body.timestamp ?? null,
       reconnecting: Boolean(body.reconnecting),
+      sessionQuestionId: body.sessionQuestionId?.trim() ?? null,
+      questionId: body.questionId?.trim() ?? null,
+      transcriptBuffer: body.transcriptBuffer ?? null,
     });
 
     return Response.json(result);
