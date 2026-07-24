@@ -8,6 +8,7 @@ import {
   logInterviewEvent,
 } from "@/app/lib/interviewReliability";
 import { startRecoveryAttemptFromToken } from "@/app/lib/interviewRecovery";
+import { isAmbiguousDatabaseColumnError } from "@/app/lib/sessionStartDatabaseError";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -347,7 +348,8 @@ export async function POST(request: Request) {
       } else
       if (
         !hasMissingFunctionError(error, "public.start_interview_session") &&
-        !hasMissingDatabaseRoutineError(error)
+        !hasMissingDatabaseRoutineError(error) &&
+        !isAmbiguousDatabaseColumnError(error)
       ) {
         if (
           error instanceof Error &&
@@ -389,7 +391,7 @@ export async function POST(request: Request) {
             ii.interview_id::text,
             ii.status,
             ii.expires_at,
-            ii.max_attempts,
+            coalesce(ii.max_attempts, i.max_attempts, 1) as max_attempts,
             ii.attempts_used,
             i.candidate_id::text,
             i.duration_minutes,
@@ -443,6 +445,12 @@ export async function POST(request: Request) {
           !isAttemptStatusFinalized(latestAttempt.status) &&
           !["COMPLETING", "FINALIZING"].includes(String(latestAttempt.status ?? "").toUpperCase())
         ) {
+          await tx.$executeRaw`
+            update public.interview_attempts
+            set last_activity_at = timezone('utc', now())
+            where attempt_id = ${latestAttempt.attempt_id}::uuid
+          `;
+
           logInterviewEvent("info", "session.start_fallback_reused_locked_attempt", {
             attemptId: latestAttempt.attempt_id,
             interviewId: latestAttempt.interview_id,

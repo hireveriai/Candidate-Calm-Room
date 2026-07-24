@@ -255,7 +255,7 @@ begin
   select *
   into v_invite
   from public.interview_invites
-  where token = trim(p_token)
+  where public.interview_invites.token = trim(p_token)
   for update;
 
   if not found then
@@ -273,7 +273,7 @@ begin
   select *
   into v_interview
   from public.interviews
-  where interview_id = v_invite.interview_id;
+  where public.interviews.interview_id = v_invite.interview_id;
 
   if not found then
     raise exception 'Interview not found';
@@ -282,11 +282,25 @@ begin
   select *
   into v_latest_attempt
   from public.interview_attempts
-  where interview_id = v_invite.interview_id
-  order by attempt_number desc, started_at desc
+  where public.interview_attempts.interview_id = v_invite.interview_id
+  order by public.interview_attempts.attempt_number desc, public.interview_attempts.started_at desc
   limit 1;
 
-  if found and lower(coalesce(v_latest_attempt.status, '')) = 'started' then
+  if found and upper(coalesce(v_latest_attempt.status, '')) not in (
+    'COMPLETED',
+    'TERMINATED',
+    'ABANDONED',
+    'EXPIRED',
+    'FINALIZED',
+    'FAILED',
+    'TIME_EXPIRED',
+    'COMPLETING',
+    'FINALIZING'
+  ) then
+    update public.interview_attempts
+    set last_activity_at = now()
+    where public.interview_attempts.attempt_id = v_latest_attempt.attempt_id;
+
     return query
     select v_latest_attempt.attempt_id, v_latest_attempt.interview_id, v_latest_attempt.attempt_number, true;
     return;
@@ -329,9 +343,10 @@ begin
   into attempt_id, interview_id, attempt_number;
 
   update public.interview_invites
-  set attempts_used = coalesce(attempts_used, 0) + 1,
+  set attempts_used =
+        coalesce(public.interview_invites.attempts_used, 0) + 1,
       used_at = now()
-  where invite_id = v_invite.invite_id;
+  where public.interview_invites.invite_id = v_invite.invite_id;
 
   reused := false;
   return next;

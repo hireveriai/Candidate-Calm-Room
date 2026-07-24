@@ -50,7 +50,9 @@ begin
   into v_latest_attempt
   from public.interview_attempts
   where public.interview_attempts.interview_id = v_invite.interview_id
-  order by public.interview_attempts.attempt_number desc, public.interview_attempts.started_at desc
+  order by
+    public.interview_attempts.attempt_number desc,
+    public.interview_attempts.started_at desc
   limit 1;
 
   if found and upper(coalesce(v_latest_attempt.status, '')) not in (
@@ -78,13 +80,18 @@ begin
   end if;
 
   v_attempts_used := coalesce(v_invite.attempts_used, 0);
-  v_max_attempts := coalesce(v_invite.max_attempts, coalesce(v_interview.max_attempts, 1), 1);
+  v_max_attempts := coalesce(
+    v_invite.max_attempts,
+    coalesce(v_interview.max_attempts, 1),
+    1
+  );
 
   if v_attempts_used >= v_max_attempts then
     raise exception 'Maximum attempts reached for this invite';
   end if;
 
-  v_initial_difficulty := public.get_initial_difficulty_level(v_interview.interview_id, null);
+  v_initial_difficulty :=
+    public.get_initial_difficulty_level(v_interview.interview_id, null);
 
   insert into public.interview_attempts (
     interview_id,
@@ -107,7 +114,8 @@ begin
       'skills_covered', 0,
       'last_answer_score', null,
       'difficulty_level', v_initial_difficulty,
-      'duration_minutes', public.get_effective_duration_minutes(v_invite.interview_id)
+      'duration_minutes',
+        public.get_effective_duration_minutes(v_invite.interview_id)
     )
   )
   returning
@@ -117,8 +125,10 @@ begin
   into attempt_id, interview_id, attempt_number;
 
   update public.interview_invites
-  set attempts_used = coalesce(public.interview_invites.attempts_used, 0) + 1,
-      used_at = now()
+  set
+    attempts_used =
+      coalesce(public.interview_invites.attempts_used, 0) + 1,
+    used_at = now()
   where public.interview_invites.invite_id = v_invite.invite_id;
 
   reused := false;
@@ -126,4 +136,5 @@ begin
 end;
 $$;
 
-grant all on function public.start_interview_session(text) to anon, authenticated, service_role;
+grant all on function public.start_interview_session(text)
+  to anon, authenticated, service_role;
