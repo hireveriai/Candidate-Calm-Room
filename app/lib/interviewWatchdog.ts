@@ -31,6 +31,9 @@ type WatchdogResult = {
   abandoned: number;
   skipped: number;
   attempts: string[];
+  transcriptRepairs: number;
+  deferredTranscriptRepairs: number;
+  runtimeBudgetReached: boolean;
 };
 
 type CompletionEvidenceRow = {
@@ -45,6 +48,8 @@ type CompletionEvidenceRow = {
 };
 
 const MAX_TRANSCRIPT_CHECKPOINT_CHARACTERS = 100_000;
+const WATCHDOG_RUNTIME_BUDGET_MS = 240_000;
+const WATCHDOG_MAX_TRANSCRIPT_REPAIRS = 1;
 
 function buildTranscriptCheckpoint(params: {
   attemptId: string;
@@ -593,15 +598,44 @@ export async function runInterviewWatchdog() {
           coalesce(last_activity_at, started_at) < now() - (${STALE_ATTEMPT_THRESHOLD_SECONDS} * interval '1 second')
         )
       )
-    order by coalesce(last_activity_at, started_at) asc
+    order by
+      case
+        when upper(coalesce(status, '')) in ('COMPLETING', 'FINALIZING', 'COMPLETED')
+          then 0
+        else 1
+      end,
+      case
+        when upper(coalesce(status, '')) in ('COMPLETING', 'FINALIZING', 'COMPLETED')
+          then coalesce(last_activity_at, started_at)
+      end desc,
+      case
+        when upper(coalesce(status, '')) not in ('COMPLETING', 'FINALIZING', 'COMPLETED')
+          then coalesce(last_activity_at, started_at)
+      end asc
     limit 100
   `;
 
+  const watchdogStartedAt = Date.now();
   let abandoned = 0;
   let skipped = 0;
+  let transcriptRepairs = 0;
+  let deferredTranscriptRepairs = 0;
+  let runtimeBudgetReached = false;
   const attempts: string[] = [];
 
-  for (const row of staleRows) {
+  for (const [rowIndex, row] of staleRows.entries()) {
+    if (Date.now() - watchdogStartedAt >= WATCHDOG_RUNTIME_BUDGET_MS) {
+      runtimeBudgetReached = true;
+      skipped += staleRows.length - rowIndex;
+      logInterviewEvent("warn", "watchdog.runtime_budget_reached", {
+        processed: rowIndex,
+        remaining: staleRows.length - rowIndex,
+        transcriptRepairs,
+        runtimeBudgetMs: WATCHDOG_RUNTIME_BUDGET_MS,
+      });
+      break;
+    }
+
     const recentReconnect =
       row.last_disconnect_at &&
       Date.now() - new Date(row.last_disconnect_at).getTime() <
@@ -617,6 +651,13 @@ export async function runInterviewWatchdog() {
       (row.status ?? "").trim().toUpperCase()
     );
     if (completionWasCommitted || hasCompletionEvidence(completionEvidence)) {
+      if (transcriptRepairs >= WATCHDOG_MAX_TRANSCRIPT_REPAIRS) {
+        deferredTranscriptRepairs += 1;
+        skipped += 1;
+        continue;
+      }
+
+      transcriptRepairs += 1;
       try {
         if (
           hasCompletionEvidence(completionEvidence) &&
@@ -790,5 +831,8 @@ export async function runInterviewWatchdog() {
     abandoned,
     skipped,
     attempts,
+    transcriptRepairs,
+    deferredTranscriptRepairs,
+    runtimeBudgetReached,
   } satisfies WatchdogResult;
 }

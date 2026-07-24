@@ -13,6 +13,7 @@
     "report:test-run": "node scripts/generate-test-run-report.js",
     "recordings:finalize-active": "node scripts/finalize-active-recordings.js",
     "repair:recording-transcripts": "node scripts/repair-recording-transcripts.js",
+    "recover:completed-interview": "tsx scripts/recover-completed-interview.ts",
     "backfill:vocal-pressure": "node scripts/backfill-vocal-pressure.js",
     "stability:full-interview": "node scripts/full-interview-stability-simulation.js"
   },

@@ -257,6 +257,8 @@ export default function Page() {
   const [audioLevel, setAudioLevel] = useState(0);
 
   const recognitionRef = useRef<VerisSpeechRecognition | null>(null);
+  const speechRecognitionErrorRef = useRef<string | null>(null);
+  const speechRecognitionWasActiveRef = useRef(false);
   const silenceTimer = useRef<any>(null);
   const timerRef = useRef<any>(null);
   const questionTimeoutRef = useRef<any>(null);
@@ -1639,6 +1641,8 @@ export default function Page() {
     acceptingTranscriptRef.current = false;
     voiceActivityFramesRef.current = 0;
     lastVoiceActivityAtRef.current = 0;
+    speechRecognitionErrorRef.current = null;
+    speechRecognitionWasActiveRef.current = false;
 
     setTranscript("");
     transcriptRef.current = "";
@@ -1797,6 +1801,25 @@ export default function Page() {
         rawTranscript: rawTranscript || safeTranscript,
         duration: answerDuration,
         allowPendingTranscription: options.allowPendingTranscription !== false,
+        speechRecognitionSupported:
+          typeof window !== "undefined" &&
+          Boolean(
+            (
+              window as Window & {
+                webkitSpeechRecognition?: unknown;
+                SpeechRecognition?: unknown;
+              }
+            ).webkitSpeechRecognition ||
+              (
+                window as Window & {
+                  webkitSpeechRecognition?: unknown;
+                  SpeechRecognition?: unknown;
+                }
+              ).SpeechRecognition
+          ),
+        speechRecognitionActive: speechRecognitionWasActiveRef.current,
+        speechRecognitionError: speechRecognitionErrorRef.current,
+        voiceActivityDetected: voiceActivityFramesRef.current >= 12,
       });
 
     const answerText = answer.answer_text
@@ -2105,7 +2128,10 @@ export default function Page() {
         }, 250);
       },
       acceptRecognitionUpdate,
-      transcriptRef.current
+      transcriptRef.current,
+      (error) => {
+        speechRecognitionErrorRef.current = error;
+      }
     );
     setMicrophoneReady(Boolean(recognitionRef.current));
   };
@@ -2245,6 +2271,7 @@ export default function Page() {
 
     isAdvancingRef.current = true;
 
+    speechRecognitionWasActiveRef.current = Boolean(recognitionRef.current);
     stopAll();
     stopAudioAnalysis();
 

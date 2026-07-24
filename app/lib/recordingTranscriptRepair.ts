@@ -12,6 +12,12 @@ import { isInvalidCandidateTranscript } from "@/app/lib/transcriptGuards";
 import {
   hasUnverifiedIncompleteSpokenAnswer,
 } from "@/app/lib/transcriptIntegrity";
+import {
+  findFirstUsableRecordingTranscript,
+  isDegenerateRecordingTranscript,
+  isReusableRecordingTranscript,
+  prioritizeRecordingCandidates,
+} from "@/app/lib/recordingRepairPolicy";
 
 type RepairQuestionRow = {
   answer_id: string;
@@ -36,6 +42,19 @@ type AlignedAnswer = {
   answer?: string;
   evidence?: string;
   confidence?: number;
+};
+
+type RecordingTranscription = {
+  text?: unknown;
+  segments?: Array<{
+    start?: number;
+    end?: number;
+    text?: unknown;
+  }>;
+  duration?: number;
+  usage?: {
+    seconds?: number;
+  };
 };
 
 type CompletionAuditRow = {
@@ -79,45 +98,13 @@ function isNoResponse(value: unknown) {
   return /^no response provided\.?$/i.test(normalizeText(value));
 }
 
-function isDegenerateTranscript(value: unknown) {
-  const words = normalizeText(value)
-    .toLowerCase()
-    .replace(/[^a-z0-9' ]/g, " ")
-    .split(/\s+/)
-    .filter(Boolean);
-  if (words.length < 8) {
-    return words.length > 0 && new Set(words).size <= 2;
-  }
-
-  const wordCounts = new Map<string, number>();
-  for (const word of words) {
-    wordCounts.set(word, (wordCounts.get(word) ?? 0) + 1);
-  }
-  const mostFrequentWord = Math.max(...wordCounts.values());
-  if (mostFrequentWord / words.length >= 0.32) {
-    return true;
-  }
-
-  if (words.length >= 36) {
-    const shingles = new Set<string>();
-    for (let index = 0; index <= words.length - 6; index += 1) {
-      shingles.add(words.slice(index, index + 6).join(" "));
-    }
-    if (shingles.size / (words.length - 5) < 0.3) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
 function isUnsafeAlignedAnswer(value: unknown) {
   const answer = normalizeText(value);
 
   // A normal spoken response cannot safely be inferred when alignment returns
   // a huge portion of the interview. Long or repetitive output is usually a
   // Whisper silence hallucination or a failed whole-transcript alignment.
-  return answer.length > 8_000 || isDegenerateTranscript(answer);
+  return answer.length > 8_000 || isDegenerateRecordingTranscript(answer);
 }
 
 function wordCount(value: unknown) {
@@ -147,23 +134,6 @@ function isRecoveredAnswerMateriallyBetter(existingValue: unknown, recoveredValu
   // Require strong overlap so a whole-interview alignment mistake cannot
   // replace a valid answer belonging to another question.
   return coverage >= 0.58 && recoveredTokens.length >= Math.ceil(existingTokens.length * 1.18);
-}
-
-function isReusableRecordingTranscript(value: unknown) {
-  const transcript = normalizeText(value);
-  if (transcript.length < 1_000) {
-    return false;
-  }
-  if (isDegenerateTranscript(transcript)) {
-    return false;
-  }
-
-  // Completion summaries from older deployments were sometimes written into
-  // the recording transcript field. They contain question labels or mostly
-  // source code, and must never be mistaken for a raw microphone transcript.
-  const labeledQuestionCount = (transcript.match(/\bVERIS Q\d+:/gi) ?? []).length;
-  const codePunctuationCount = (transcript.match(/[{};]|=>/g) ?? []).length;
-  return labeledQuestionCount < 2 && codePunctuationCount < Math.max(12, transcript.length * 0.02);
 }
 
 function getRecordingBucket() {
@@ -245,7 +215,7 @@ async function fetchRepairQuestions(attemptId: string) {
   }));
 }
 
-async function fetchBestRecording(attemptId: string) {
+async function fetchRepairRecordings(attemptId: string) {
   const rows = await prisma.$queryRaw<RepairRecordingRow[]>`
     select
       ir.recording_id::text,
@@ -268,19 +238,9 @@ async function fetchBestRecording(attemptId: string) {
         or nullif(btrim(coalesce(ir.transcript, '')), '') is not null
       )
       and coalesce((so.metadata->>'size')::bigint, 0) <= ${MAX_REPAIR_OBJECT_BYTES}
-    -- LiveKit captures the room audio independently of browser speech
-    -- recognition and is the most reliable source when every live answer is
-    -- empty. Browser MediaRecorder remains the fallback.
-    order by case when ir.file_path ilike '%-livekit-%' then 0 else 1 end,
-             case when nullif(btrim(coalesce(ir.transcript, '')), '') is not null then 0 else 1 end,
-             char_length(coalesce(ir.transcript, '')) desc,
-             extract(epoch from (coalesce(ir.ended_at, ir.created_at, now()) - coalesce(ir.started_at, ir.created_at, now()))) desc nulls last,
-             case when ir.file_path ilike '%.mp4%' then 0 else 1 end,
-             coalesce(ir.started_at, ir.created_at) asc
-    limit 1
   `;
 
-  return rows[0] ?? null;
+  return prioritizeRecordingCandidates(rows);
 }
 
 async function claimRepairLease(attemptId: string, recordingId: string) {
@@ -721,64 +681,95 @@ export async function repairPendingAnswersFromRecording(attemptId: string) {
       : { repaired: 0, skipped: "missing_configuration" };
   }
 
-  const recording = await fetchBestRecording(attemptId);
-  if (!recording) {
+  const recordings = await fetchRepairRecordings(attemptId);
+  if (recordings.length === 0) {
     return { repaired: 0, skipped: "no_usable_recording" };
   }
 
-  if (
-    !normalizeText(recording.transcript) &&
-    Number(recording.duration_seconds ?? 0) > MAX_REPAIR_AUDIO_SECONDS
-  ) {
+  const eligibleRecordings = recordings.filter(
+    (recording) =>
+      normalizeText(recording.transcript) ||
+      Number(recording.duration_seconds ?? 0) <= MAX_REPAIR_AUDIO_SECONDS
+  );
+  if (eligibleRecordings.length === 0) {
     return { repaired: codeRepair.repaired, skipped: "recording_exceeds_transcription_cost_limit" };
   }
 
-  const leaseToken = await claimRepairLease(attemptId, recording.recording_id);
+  const leaseRecording = eligibleRecordings[0];
+  const leaseToken = await claimRepairLease(
+    attemptId,
+    leaseRecording.recording_id
+  );
   if (!leaseToken) {
     return { repaired: codeRepair.repaired, skipped: "repair_already_running_or_backing_off" };
   }
 
-  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  const openai = new OpenAI({
+    apiKey: process.env.OPENAI_API_KEY,
+    timeout: 120_000,
+    maxRetries: 1,
+  });
   const questions = await fetchRepairQuestions(attemptId);
-  const existingRecordingTranscript = normalizeText(recording.transcript);
-  const reuseExistingTranscript = isReusableRecordingTranscript(existingRecordingTranscript);
-  let transcription;
-  try {
-    transcription = reuseExistingTranscript
-      ? { text: existingRecordingTranscript, segments: [] }
-      : await transcribeRecording(openai, recording.file_path);
-  } catch (error) {
-    console.error("Recording transcription recovery is temporarily unavailable", {
+  const selectedTranscript = await findFirstUsableRecordingTranscript(
+    eligibleRecordings,
+    async (recording): Promise<RecordingTranscription> => {
+      const existingRecordingTranscript = normalizeText(recording.transcript);
+      if (isReusableRecordingTranscript(existingRecordingTranscript)) {
+        return {
+          text: existingRecordingTranscript,
+          segments: [],
+          duration: 0,
+        };
+      }
+
+      return (await transcribeRecording(
+        openai,
+        recording.file_path
+      )) as RecordingTranscription;
+    }
+  );
+
+  for (const failure of selectedTranscript.failures) {
+    console.warn("Recording transcription source rejected", {
       attemptId,
-      recordingId: recording.recording_id,
-      error,
+      recordingId: failure.recordingId,
+      filePath: failure.filePath,
+      reason: failure.reason,
     });
+  }
+
+  if (
+    !selectedTranscript.recording ||
+    !selectedTranscript.transcription ||
+    !selectedTranscript.transcriptText
+  ) {
+    const sourceFailureSummary =
+      selectedTranscript.failures
+        .map((failure) => `${failure.recordingId}:${failure.reason}`)
+        .join("; ")
+        .slice(0, 500) || "No recording source produced a usable transcript";
+
     await releaseRepairLease({
       attemptId,
       token: leaseToken,
-      recordingId: recording.recording_id,
+      recordingId: leaseRecording.recording_id,
       outcome: "failed",
       rawTranscriptPersisted: false,
-      error,
+      error: sourceFailureSummary,
     });
+
     return {
       repaired: codeRepair.repaired,
-      skipped: "recording_transcription_unavailable",
+      skipped: "all_recording_sources_failed",
     };
   }
-  const transcriptText = normalizeText(transcription.text);
 
-  if (!transcriptText || isDegenerateTranscript(transcriptText)) {
-    await releaseRepairLease({
-      attemptId,
-      token: leaseToken,
-      recordingId: recording.recording_id,
-      outcome: "failed",
-      rawTranscriptPersisted: false,
-      error: transcriptText ? "Degenerate repetitive transcription" : "Empty transcription",
-    });
-    return { repaired: 0, skipped: transcriptText ? "degenerate_transcription" : "empty_transcription" };
-  }
+  const recording = selectedTranscript.recording;
+  const transcription = selectedTranscript.transcription;
+  const transcriptText = selectedTranscript.transcriptText;
+  const reuseExistingTranscript = isReusableRecordingTranscript(
+    recording.transcript
+  );
 
   // Persist the costly Whisper result before optional answer alignment. If a
   // later step fails, every retry reuses this transcript instead of uploading
@@ -791,8 +782,8 @@ export async function repairPendingAnswersFromRecording(attemptId: string) {
 
   const billedAudioSeconds = reuseExistingTranscript
     ? 0
-    : Number((transcription as { duration?: number; usage?: { seconds?: number } }).usage?.seconds
-      ?? (transcription as { duration?: number }).duration
+    : Number(transcription.usage?.seconds
+      ?? transcription.duration
       ?? 0);
 
   let alignmentUnavailable = false;
@@ -963,7 +954,14 @@ export async function repairPendingAnswersFromRecording(attemptId: string) {
     outcome: alignmentUnavailable ? "partial" : "completed",
     rawTranscriptPersisted: true,
     billedAudioSeconds,
-    error: alignmentUnavailable ? "Answer alignment unavailable" : null,
+    error: alignmentUnavailable
+      ? "Answer alignment unavailable"
+      : selectedTranscript.failures.length > 0
+        ? `Recovered after source fallback: ${selectedTranscript.failures
+            .map((failure) => `${failure.recordingId}:${failure.reason}`)
+            .join("; ")
+            .slice(0, 420)}`
+        : null,
   });
 
   return {

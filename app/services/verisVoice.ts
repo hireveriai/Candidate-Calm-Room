@@ -6,6 +6,7 @@ export type VerisSpeechRecognition = {
   lang: string;
   onresult: ((event: SpeechRecognitionEventLike) => void) | null;
   onend: (() => void) | null;
+  onerror?: ((event: { error?: string; message?: string }) => void) | null;
   start: () => void;
   stop: () => void;
   resetTranscript?: () => void;
@@ -100,7 +101,8 @@ export function startRecognition(
   onResult: (text: string) => void,
   onEnd?: () => void,
   onFinalResult?: (text: string) => void,
-  initialTranscript = ""
+  initialTranscript = "",
+  onError?: (error: string) => void
 ) {
   const SpeechRecognition =
     (window as SpeechRecognitionWindow).webkitSpeechRecognition ||
@@ -184,7 +186,18 @@ export function startRecognition(
     if (!stopRequested && onEnd) onEnd();
   };
 
-  activeRecognition.start();
+  activeRecognition.onerror = (event) => {
+    onError?.(event.error || event.message || "speech_recognition_error");
+  };
+
+  try {
+    activeRecognition.start();
+  } catch (error) {
+    onError?.(
+      error instanceof Error ? error.message : "speech_recognition_start_failed"
+    );
+    return null;
+  }
 
   return activeRecognition;
 }

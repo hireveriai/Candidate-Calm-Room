@@ -28,6 +28,10 @@ type RequestBody = {
   rawTranscript?: string;
   duration?: number;
   allowPendingTranscription?: boolean;
+  speechRecognitionSupported?: boolean;
+  speechRecognitionActive?: boolean;
+  speechRecognitionError?: string | null;
+  voiceActivityDetected?: boolean;
 };
 
 function normalizeTranscript(text: string) {
@@ -166,6 +170,12 @@ export async function POST(request: Request) {
               ? "heartbeat_checkpoint"
               : "missing",
       checkpoint_captured_at: checkpoint?.capturedAt ?? null,
+      speech_recognition_supported:
+        body.speechRecognitionSupported ?? null,
+      speech_recognition_active: body.speechRecognitionActive ?? null,
+      speech_recognition_error:
+        body.speechRecognitionError?.slice(0, 180) ?? null,
+      voice_activity_detected: body.voiceActivityDetected ?? null,
     } satisfies JsonValue;
 
     const invalidTranscript = isInvalidCandidateTranscript({
