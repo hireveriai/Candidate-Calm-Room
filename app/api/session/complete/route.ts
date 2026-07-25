@@ -3,8 +3,8 @@ import { requireCandidateSession } from "@/app/lib/candidateSession";
 import { assertUuid, logInterviewEvent } from "@/app/lib/interviewReliability";
 import { finalizeActiveRecordings } from "@/app/lib/livekit/recordingLifecycle";
 import { validateAndRepairCompletionTranscripts } from "@/app/lib/recordingTranscriptRepair";
-import { prisma } from "@/app/lib/prisma";
 import { canFinalizeWithTranscriptIntegrity } from "@/app/lib/completionTranscriptPolicy";
+import { markInterviewCompletedPendingTranscriptReview } from "@/app/lib/completionPendingReview";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -43,23 +43,10 @@ export async function POST(request: Request) {
     // interview. Keep the attempt recoverable so the watchdog/background
     // repair path can retry the finalized recording.
     if (!canFinalizeWithTranscriptIntegrity(transcriptIntegrity)) {
-      await prisma.$executeRaw`
-        update public.interview_attempts
-        set status = 'COMPLETING',
-            transcript_status = 'PARTIAL',
-            last_activity_at = now(),
-            termination_metadata = jsonb_set(
-              coalesce(termination_metadata, '{}'::jsonb),
-              '{transcript_integrity}',
-              ${JSON.stringify(transcriptIntegrity ?? {
-                status: "needs_review",
-                reason: "transcript_repair_unavailable",
-              })}::jsonb,
-              true
-            )
-        where attempt_id = ${attemptId}::uuid
-          and upper(coalesce(status, '')) not in ('COMPLETED', 'FINALIZED')
-      `;
+      await markInterviewCompletedPendingTranscriptReview({
+        attemptId,
+        transcriptIntegrity,
+      });
 
       logInterviewEvent("warn", "interview.completion_waiting_for_transcript", {
         attemptId,
@@ -69,8 +56,8 @@ export async function POST(request: Request) {
       return Response.json(
         {
           ok: true,
-          status: "TRANSCRIPT_PROCESSING",
-          message: "Interview responses were saved and transcription recovery is still processing.",
+          status: "COMPLETED_TRANSCRIPT_REVIEW",
+          message: "Interview completed. Transcript quality review will continue separately.",
           transcriptIntegrity,
         },
         { status: 202 }

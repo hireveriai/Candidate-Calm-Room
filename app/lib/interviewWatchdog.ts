@@ -14,6 +14,7 @@ import {
   canFinalizeWithTranscriptIntegrity,
   hasCompletionEvidence,
 } from "@/app/lib/completionTranscriptPolicy";
+import { markInterviewCompletedPendingTranscriptReview } from "@/app/lib/completionPendingReview";
 
 type HeartbeatInput = {
   interviewId?: string | null;
@@ -694,22 +695,16 @@ export async function runInterviewWatchdog() {
           });
 
         if (!canFinalizeWithTranscriptIntegrity(transcriptIntegrity)) {
-          await prisma.$executeRaw`
-            update public.interview_attempts
-            set status = 'COMPLETING',
-                transcript_status = 'PARTIAL',
-                last_activity_at = now()
-            where attempt_id = ${row.attempt_id}::uuid
-              and upper(coalesce(status, '')) not in (
-                'TERMINATED', 'EXPIRED', 'FAILED'
-              )
-          `;
+          await markInterviewCompletedPendingTranscriptReview({
+            attemptId: row.attempt_id,
+            transcriptIntegrity,
+          });
           skipped += 1;
           logInterviewEvent("warn", "watchdog.completion_waiting_for_transcript", {
             attemptId: row.attempt_id,
             interviewId: row.interview_id,
             state: row.status,
-            nextState: "COMPLETING",
+            nextState: "COMPLETED",
             transcriptIntegrity,
           });
           continue;

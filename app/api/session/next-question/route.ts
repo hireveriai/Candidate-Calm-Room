@@ -36,6 +36,7 @@ import {
 import { toFiniteNumber } from "@/app/lib/interviewScoring";
 import { isInvalidCandidateTranscript } from "@/app/lib/transcriptGuards";
 import { canFinalizeWithTranscriptIntegrity } from "@/app/lib/completionTranscriptPolicy";
+import { markInterviewCompletedPendingTranscriptReview } from "@/app/lib/completionPendingReview";
 import { requiresOpeningFollowUp } from "@/app/lib/openingFollowUpPolicy";
 import {
   getNextRequiredClosingQuestion,
@@ -383,20 +384,14 @@ async function completeInterviewWithoutStrandingCandidate(params: {
         );
 
       if (!canFinalizeWithTranscriptIntegrity(transcriptIntegrity)) {
-        await prisma.$executeRaw`
-          update public.interview_attempts
-          set status = 'COMPLETING',
-              transcript_status = 'PARTIAL',
-              last_activity_at = now()
-          where attempt_id = ${params.attemptId}::uuid
-            and upper(coalesce(status, '')) not in (
-              'TERMINATED', 'ABANDONED', 'EXPIRED', 'FAILED', 'TIME_EXPIRED'
-            )
-        `;
+        await markInterviewCompletedPendingTranscriptReview({
+          attemptId: params.attemptId,
+          transcriptIntegrity,
+        });
         logInterviewEvent("warn", "question.completion_waiting_for_transcript", {
           attemptId: params.attemptId,
           state: "COMPLETING",
-          nextState: "COMPLETING",
+          nextState: "COMPLETED",
           transcriptIntegrity,
         });
         return;
