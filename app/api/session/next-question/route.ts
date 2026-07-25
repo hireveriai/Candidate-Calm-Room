@@ -36,6 +36,7 @@ import {
 import { toFiniteNumber } from "@/app/lib/interviewScoring";
 import { isInvalidCandidateTranscript } from "@/app/lib/transcriptGuards";
 import { canFinalizeWithTranscriptIntegrity } from "@/app/lib/completionTranscriptPolicy";
+import { requiresOpeningFollowUp } from "@/app/lib/openingFollowUpPolicy";
 import {
   getNextRequiredClosingQuestion,
   getClosingStage,
@@ -1472,7 +1473,21 @@ export async function POST(request: Request) {
       const shouldPreferNextCore =
         Boolean(nextCore) &&
         isExperienceOverviewQuestion(latestQuestion?.content) &&
-        answerAlreadyCoversExperienceOverview(effectiveLastAnswer);
+        answerAlreadyCoversExperienceOverview(effectiveLastAnswer) &&
+        !requiresOpeningFollowUp(
+          askedQuestions.map((question: AskedQuestionRow) => ({
+            content: question.content,
+            questionKind: question.question_kind,
+          })),
+          requiredFollowUps
+        );
+      const openingFollowUpRequired = requiresOpeningFollowUp(
+        askedQuestions.map((question: AskedQuestionRow) => ({
+          content: question.content,
+          questionKind: question.question_kind,
+        })),
+        requiredFollowUps
+      );
 
       const shouldAskFollowUp =
         !pendingTranscription &&
@@ -1482,7 +1497,8 @@ export async function POST(request: Request) {
         remainingFollowUps > 0 &&
         completion.allowFollowUp &&
         Boolean(effectiveLastAnswer) &&
-        (wordCount >= 25 ||
+        (openingFollowUpRequired ||
+          wordCount >= 25 ||
           skillScore <= 0.55 ||
           !nextCore);
 
