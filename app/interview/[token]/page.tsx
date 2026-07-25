@@ -54,6 +54,7 @@ import {
   MAX_CODING_ANSWER_TIME,
 } from "@/app/lib/calmTiming";
 import { ROLE_NEUTRAL_OPENING_QUESTION } from "@/app/lib/interviewOpening";
+import { shouldAdvanceSpokenAnswer } from "@/app/lib/spokenAnswerAdvancePolicy";
 
 type VerisState = "idle" | "listening" | "thinking" | "speaking";
 type TerminationType =
@@ -2086,6 +2087,7 @@ export default function Page() {
       if (generation !== recognitionGenerationRef.current) return;
       if (!acceptingTranscriptRef.current) return;
       recognitionRestartCountRef.current = 0;
+      lastVoiceActivityAtRef.current = Date.now();
 
       const nextTranscript = mergeMonotonicTranscript(
         transcriptRef.current,
@@ -2643,6 +2645,53 @@ export default function Page() {
     void handleAutoNextRef.current?.({ allowPendingTranscription: true });
   }, [
     answerWindowEnded,
+    interviewFinished,
+    interviewInterrupted,
+    isReconnecting,
+    sessionQuestionId,
+    sessionTimeEnded,
+    showCoding,
+    started,
+  ]);
+
+  useEffect(() => {
+    if (
+      !started ||
+      !sessionQuestionId ||
+      sessionTimeEnded ||
+      interviewFinished ||
+      interviewInterrupted ||
+      isReconnecting ||
+      showCoding
+    ) {
+      return;
+    }
+
+    const checkForCompletedSpokenAnswer = () => {
+      if (
+        isAdvancingRef.current ||
+        !acceptingTranscriptRef.current ||
+        !shouldAdvanceSpokenAnswer({
+          now: Date.now(),
+          questionStartedAt: questionStartTimeRef.current,
+          lastCandidateActivityAt: lastVoiceActivityAtRef.current,
+          voiceActivityFrames: voiceActivityFramesRef.current,
+          transcript: transcriptRef.current,
+        })
+      ) {
+        return;
+      }
+
+      // Next, Skip, timeout, and silence completion share the same advancing
+      // lock, preventing duplicate saves if two triggers occur together.
+      void handleAutoNextRef.current?.({
+        allowPendingTranscription: !transcriptRef.current.trim(),
+      });
+    };
+
+    const timer = window.setInterval(checkForCompletedSpokenAnswer, 500);
+    return () => window.clearInterval(timer);
+  }, [
     interviewFinished,
     interviewInterrupted,
     isReconnecting,
