@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { mergeMonotonicTranscript } from "./transcriptAccumulator";
+import {
+  boundBrowserTranscript,
+  MAX_BROWSER_TRANSCRIPT_CHARS,
+  mergeMonotonicTranscript,
+} from "./transcriptAccumulator";
 import { startRecognition } from "../services/verisVoice";
 
 test("keeps the full answer when a restarted recognizer emits a shorter result", () => {
@@ -41,6 +45,14 @@ test("does not duplicate a phrase when recognition promotes it to a longer resul
       "Please walk me through your experience including your current role"
     ),
     "Please walk me through your experience including your current role"
+  );
+});
+
+test("hard-bounds browser transcripts before they can overload React or JSON", () => {
+  const oversized = "candidate response ".repeat(2_000);
+  assert.equal(
+    boundBrowserTranscript(oversized).length,
+    MAX_BROWSER_TRANSCRIPT_CHARS
   );
 });
 
@@ -138,14 +150,20 @@ test("SpeechRecognition does not concatenate an expanded final phrase twice", ()
           isFinal: true,
           0: { transcript: "Please walk me through your experience" },
         },
-        1: {
+        length: 1,
+      },
+    });
+    FakeRecognition.latest?.onresult?.({
+      resultIndex: 0,
+      results: {
+        0: {
           isFinal: true,
           0: {
             transcript:
               "Please walk me through your experience including your current role",
           },
         },
-        length: 2,
+        length: 1,
       },
     });
 

@@ -1,4 +1,7 @@
-import { mergeMonotonicTranscript } from "@/app/lib/transcriptAccumulator";
+import {
+  boundBrowserTranscript,
+  mergeMonotonicTranscript,
+} from "@/app/lib/transcriptAccumulator";
 
 export type VerisSpeechRecognition = {
   continuous: boolean;
@@ -117,46 +120,56 @@ export function startRecognition(
   stopRequested = false;
   activeRecognition.stopRequested = false;
   let sessionBaseTranscript = normalizeChunk(initialTranscript);
-  let finalizedChunks: string[] = [];
-  let bestTranscript = sessionBaseTranscript;
+  const recognizedResults = new Map<number, { text: string; final: boolean }>();
+  let bestTranscript = boundBrowserTranscript(sessionBaseTranscript);
 
   activeRecognition.continuous = true;
   activeRecognition.interimResults = true;
   activeRecognition.lang = "en-US";
   activeRecognition.resetTranscript = () => {
     sessionBaseTranscript = "";
-    finalizedChunks = [];
+    recognizedResults.clear();
     bestTranscript = "";
   };
 
   activeRecognition.onresult = (event) => {
-    let interimChunks: string[] = [];
-
     for (let i = event.resultIndex; i < event.results.length; i++) {
       const chunk = normalizeChunk(event.results[i][0]?.transcript || "");
 
       if (!chunk) {
+        recognizedResults.delete(i);
         continue;
       }
 
-      if (event.results[i].isFinal) {
-        const lastChunk = finalizedChunks[finalizedChunks.length - 1];
-
-        if (lastChunk !== chunk) {
-          finalizedChunks = [...finalizedChunks, chunk];
-        }
-      } else {
-        interimChunks = [...interimChunks, chunk];
-      }
+      // A result index is revised in place by Chrome. Replacing that index
+      // prevents progressive hypotheses ("prim", "primary", "primarily")
+      // from being concatenated as separate sentences.
+      recognizedResults.set(i, {
+        text: chunk,
+        final: event.results[i].isFinal,
+      });
     }
 
-    const finalizedText = mergeMonotonicTranscript(
-      sessionBaseTranscript,
-      mergeTranscriptParts(finalizedChunks)
+    const orderedResults = [...recognizedResults.entries()].sort(
+      ([left], [right]) => left - right
     );
-    const observedText = mergeMonotonicTranscript(
-      sessionBaseTranscript,
-      mergeTranscriptParts([...finalizedChunks, ...interimChunks])
+    const finalizedText = boundBrowserTranscript(
+      mergeMonotonicTranscript(
+        sessionBaseTranscript,
+        mergeTranscriptParts(
+          orderedResults
+            .filter(([, result]) => result.final)
+            .map(([, result]) => result.text)
+        )
+      )
+    );
+    const observedText = boundBrowserTranscript(
+      mergeMonotonicTranscript(
+        sessionBaseTranscript,
+        mergeTranscriptParts(
+          orderedResults.map(([, result]) => result.text)
+        )
+      )
     );
 
     if (observedText.length >= bestTranscript.length) {
@@ -175,9 +188,16 @@ export function startRecognition(
     if (bestTranscript) {
       onResult(bestTranscript);
       onFinalResult?.(
-        mergeMonotonicTranscript(
-          sessionBaseTranscript,
-          mergeTranscriptParts(finalizedChunks)
+        boundBrowserTranscript(
+          mergeMonotonicTranscript(
+            sessionBaseTranscript,
+            mergeTranscriptParts(
+              [...recognizedResults.entries()]
+                .sort(([left], [right]) => left - right)
+                .filter(([, result]) => result.final)
+                .map(([, result]) => result.text)
+            )
+          )
         ) || bestTranscript
       );
     }

@@ -44,7 +44,11 @@ import {
   RECONNECT_BACKOFF_MS,
 } from "@/app/lib/interviewSessionReliability";
 import { isInvalidCandidateTranscript } from "@/app/lib/transcriptGuards";
-import { mergeMonotonicTranscript } from "@/app/lib/transcriptAccumulator";
+import {
+  boundBrowserTranscript,
+  MAX_BROWSER_TRANSCRIPT_CHARS,
+  mergeMonotonicTranscript,
+} from "@/app/lib/transcriptAccumulator";
 import {
   isClarificationRequest,
   MAX_CLARIFICATIONS_PER_QUESTION,
@@ -55,6 +59,7 @@ import {
 } from "@/app/lib/calmTiming";
 import { ROLE_NEUTRAL_OPENING_QUESTION } from "@/app/lib/interviewOpening";
 import { shouldAdvanceSpokenAnswer } from "@/app/lib/spokenAnswerAdvancePolicy";
+import { shouldAllowPendingSpokenTranscription } from "@/app/lib/pendingTranscriptionPolicy";
 
 type VerisState = "idle" | "listening" | "thinking" | "speaking";
 type TerminationType =
@@ -317,7 +322,10 @@ export default function Page() {
   const audioAnimationFrameRef = useRef<number | null>(null);
 
   const { faceCount, faceDetected, multiFace, attention } =
-    useCognitiveSignals({ videoRef, enabled: started });
+    useCognitiveSignals({
+      videoRef,
+      enabled: started && !isTransitioning,
+    });
 
   const { events, addEvent } = useEventTimeline();
 
@@ -1788,6 +1796,13 @@ export default function Page() {
       : 0;
     const focusMetrics = finalizeFocusMetrics() satisfies FocusMetrics;
     const behaviorSignals = collectBehaviorSignalsForCurrentQuestion();
+    const voiceActivityDetected = voiceActivityFramesRef.current >= 12;
+    const allowPendingTranscription =
+      options.allowPendingTranscription !== false ||
+      shouldAllowPendingSpokenTranscription({
+        voiceActivityDetected,
+        speechRecognitionError: speechRecognitionErrorRef.current,
+      });
 
     const answer = await postJson<{
       answer_id: string;
@@ -1801,7 +1816,7 @@ export default function Page() {
         transcript: safeTranscript,
         rawTranscript: rawTranscript || safeTranscript,
         duration: answerDuration,
-        allowPendingTranscription: options.allowPendingTranscription !== false,
+        allowPendingTranscription,
         speechRecognitionSupported:
           typeof window !== "undefined" &&
           Boolean(
@@ -1820,7 +1835,7 @@ export default function Page() {
           ),
         speechRecognitionActive: speechRecognitionWasActiveRef.current,
         speechRecognitionError: speechRecognitionErrorRef.current,
-        voiceActivityDetected: voiceActivityFramesRef.current >= 12,
+        voiceActivityDetected,
       });
 
     const answerText = answer.answer_text
@@ -2089,10 +2104,16 @@ export default function Page() {
       recognitionRestartCountRef.current = 0;
       lastVoiceActivityAtRef.current = Date.now();
 
-      const nextTranscript = mergeMonotonicTranscript(
+      const mergedTranscript = mergeMonotonicTranscript(
         transcriptRef.current,
-        text.slice(0, 20_000)
+        boundBrowserTranscript(text)
       );
+      const transcriptExceededLimit =
+        mergedTranscript.length > MAX_BROWSER_TRANSCRIPT_CHARS;
+      const nextTranscript = boundBrowserTranscript(mergedTranscript);
+      if (transcriptExceededLimit) {
+        speechRecognitionErrorRef.current = "transcript_limit_reached";
+      }
       if (!nextTranscript) return;
       if (
         isInvalidCandidateTranscript({

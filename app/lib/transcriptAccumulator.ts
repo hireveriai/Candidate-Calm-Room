@@ -10,6 +10,12 @@ function wordsMatch(left: string, right: string) {
   return comparableWord(left) === comparableWord(right);
 }
 
+export const MAX_BROWSER_TRANSCRIPT_CHARS = 12_000;
+
+export function boundBrowserTranscript(value: unknown) {
+  return normalizeTranscript(value).slice(0, MAX_BROWSER_TRANSCRIPT_CHARS);
+}
+
 /**
  * SpeechRecognition periodically ends and has to be recreated. A recreated
  * recognizer only knows about its new session, so its first result must be
@@ -53,4 +59,3 @@ export function mergeMonotonicTranscript(
 
   return `${existing} ${incoming}`.trim();
 }
-

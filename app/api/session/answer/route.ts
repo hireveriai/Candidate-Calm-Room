@@ -13,7 +13,12 @@ import { requireCandidateSession } from "@/app/lib/candidateSession";
 import { assertUuid, logInterviewEvent } from "@/app/lib/interviewReliability";
 import { repairSpokenTranscript } from "@/app/lib/spokenTranscriptRepair";
 import { isInvalidCandidateTranscript } from "@/app/lib/transcriptGuards";
-import { mergeMonotonicTranscript } from "@/app/lib/transcriptAccumulator";
+import {
+  boundBrowserTranscript,
+  MAX_BROWSER_TRANSCRIPT_CHARS,
+  mergeMonotonicTranscript,
+} from "@/app/lib/transcriptAccumulator";
+import { shouldAllowPendingSpokenTranscription } from "@/app/lib/pendingTranscriptionPolicy";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -69,8 +74,14 @@ export async function POST(request: Request) {
 
     const body = (await request.json()) as RequestBody;
     const sessionQuestionId = body.sessionQuestionId?.trim();
-    const submittedTranscript = normalizeTranscript(body.transcript ?? "");
-    const submittedRawTranscript = normalizeTranscript(body.rawTranscript ?? "");
+    const normalizedSubmittedTranscript = normalizeTranscript(body.transcript ?? "");
+    const normalizedRawTranscript = normalizeTranscript(body.rawTranscript ?? "");
+    const transcriptExceededLimit =
+      normalizedSubmittedTranscript.length > MAX_BROWSER_TRANSCRIPT_CHARS ||
+      normalizedRawTranscript.length > MAX_BROWSER_TRANSCRIPT_CHARS ||
+      body.speechRecognitionError === "transcript_limit_reached";
+    const submittedTranscript = boundBrowserTranscript(normalizedSubmittedTranscript);
+    const submittedRawTranscript = boundBrowserTranscript(normalizedRawTranscript);
 
     if (!sessionQuestionId) {
       return Response.json(
@@ -94,13 +105,14 @@ export async function POST(request: Request) {
       attemptId: context.attempt_id,
       sessionQuestionId: context.session_question_id,
     });
-    const transcript = mergeMonotonicTranscript(
-      checkpoint?.transcript,
-      submittedTranscript
+    const transcript = boundBrowserTranscript(
+      mergeMonotonicTranscript(checkpoint?.transcript, submittedTranscript)
     );
-    const rawTranscript = mergeMonotonicTranscript(
-      checkpoint?.transcript,
-      submittedRawTranscript || submittedTranscript
+    const rawTranscript = boundBrowserTranscript(
+      mergeMonotonicTranscript(
+        checkpoint?.transcript,
+        submittedRawTranscript || submittedTranscript
+      )
     );
 
     assertAnswerContextMatches({
@@ -130,7 +142,7 @@ export async function POST(request: Request) {
     }
 
     const logicalQuestionId = getLogicalQuestionId(context);
-    const repairResult = !transcript || isNoResponseSentinel(transcript)
+    const repairResult = transcriptExceededLimit || !transcript || isNoResponseSentinel(transcript)
       ? null
       : await repairSpokenTranscript({
           transcript,
@@ -178,16 +190,24 @@ export async function POST(request: Request) {
       voice_activity_detected: body.voiceActivityDetected ?? null,
     } satisfies JsonValue;
 
-    const invalidTranscript = isInvalidCandidateTranscript({
-      transcript: finalTranscript,
-      questionText: context.question_text,
-    });
+    const invalidTranscript =
+      transcriptExceededLimit ||
+      isInvalidCandidateTranscript({
+        transcript: finalTranscript,
+        questionText: context.question_text,
+      });
 
     if (!transcript || isNoResponseSentinel(transcript) || invalidTranscript) {
       // Default to the recording-backed pending path for compatibility with
       // candidates who opened the interview before a deployment. Only a client
       // that explicitly opts into strict capture validation may request a 422.
-      if (body.allowPendingTranscription === false) {
+      const recordingFallbackAllowed =
+        body.allowPendingTranscription !== false ||
+        shouldAllowPendingSpokenTranscription({
+          voiceActivityDetected: body.voiceActivityDetected,
+          speechRecognitionError: body.speechRecognitionError,
+        });
+      if (!recordingFallbackAllowed) {
         logInterviewEvent("warn", "answer.transcript_capture_required", {
           attemptId: context.attempt_id,
           candidateId: context.candidate_id,
@@ -222,7 +242,9 @@ export async function POST(request: Request) {
           original_transcript: rawTranscript || null,
           rejected_transcript: invalidTranscript ? finalTranscript : null,
           transcript_rejected_reason: invalidTranscript
-            ? "interviewer_prompt_echo"
+            ? transcriptExceededLimit
+              ? "browser_transcript_overflow"
+              : "interviewer_prompt_echo"
             : null,
         },
       });
@@ -235,7 +257,9 @@ export async function POST(request: Request) {
         state: "ANSWER_PROCESSING",
         nextState: "FOLLOWUP_GENERATING",
         reason: invalidTranscript
-          ? "interviewer_prompt_echo"
+          ? transcriptExceededLimit
+            ? "browser_transcript_overflow"
+            : "interviewer_prompt_echo"
           : "browser_speech_recognition_empty",
       });
 

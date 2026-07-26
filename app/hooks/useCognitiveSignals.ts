@@ -33,7 +33,6 @@ export default function useCognitiveSignals({
   const [multiFace, setMultiFace] = useState(false);
   const [attention, setAttention] = useState(true);
   const [tabActive, setTabActive] = useState(true);
-  const [audioAnomaly, setAudioAnomaly] = useState(false);
 
   useEffect(() => {
     if (!enabled) {
@@ -42,6 +41,7 @@ export default function useCognitiveSignals({
 
     let interval: ReturnType<typeof setInterval> | null = null;
     let cancelled = false;
+    let detectionInFlight = false;
 
     const detect = async (faceapi: typeof import("face-api.js")) => {
       const video = videoRef.current;
@@ -49,13 +49,15 @@ export default function useCognitiveSignals({
       if (!video || video.readyState !== 4) {
         return;
       }
+      if (detectionInFlight) return;
+      detectionInFlight = true;
 
       try {
         const detections = await faceapi
           .detectAllFaces(
             video,
             new faceapi.TinyFaceDetectorOptions({
-              inputSize: 320,
+              inputSize: 224,
               scoreThreshold: 0.3,
             })
           )
@@ -85,6 +87,8 @@ export default function useCognitiveSignals({
         }
       } catch (error) {
         console.error("Face detection error:", error);
+      } finally {
+        detectionInFlight = false;
       }
     };
 
@@ -97,7 +101,7 @@ export default function useCognitiveSignals({
 
       interval = setInterval(() => {
         void detect(faceapi);
-      }, 1_200);
+      }, 2_000);
     };
 
     void start();
@@ -121,71 +125,12 @@ export default function useCognitiveSignals({
       document.removeEventListener("visibilitychange", handleVisibilityChange);
   }, []);
 
-  useEffect(() => {
-    if (!enabled) {
-      return;
-    }
-
-    let frame = 0;
-    let stream: MediaStream | null = null;
-    let ctx: AudioContext | null = null;
-    let cancelled = false;
-
-    const setup = async () => {
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-
-        if (cancelled) {
-          stream.getTracks().forEach((track) => track.stop());
-          return;
-        }
-
-        ctx = new AudioContext();
-        const src = ctx.createMediaStreamSource(stream);
-        const analyser = ctx.createAnalyser();
-
-        analyser.fftSize = 256;
-        src.connect(analyser);
-
-        const data = new Uint8Array(analyser.frequencyBinCount);
-
-        const loop = () => {
-          if (cancelled) {
-            return;
-          }
-
-          analyser.getByteFrequencyData(data);
-          const avg = data.reduce((sum, value) => sum + value, 0) / data.length;
-
-          setAudioAnomaly(avg > 180);
-          frame = requestAnimationFrame(loop);
-        };
-
-        loop();
-      } catch (error) {
-        console.error(error);
-      }
-    };
-
-    void setup();
-
-    return () => {
-      cancelled = true;
-      cancelAnimationFrame(frame);
-      stream?.getTracks().forEach((track) => track.stop());
-
-      if (ctx && ctx.state !== "closed") {
-        void ctx.close();
-      }
-    };
-  }, [enabled]);
-
   return {
     faceCount: enabled ? faceCount : 0,
     faceDetected: enabled ? faceDetected : false,
     multiFace: enabled ? multiFace : false,
     attention: enabled ? attention : true,
     tabActive,
-    audioAnomaly: enabled ? audioAnomaly : false,
+    audioAnomaly: false,
   };
 }
