@@ -46,8 +46,6 @@ import {
 import { isInvalidCandidateTranscript } from "@/app/lib/transcriptGuards";
 import {
   boundBrowserTranscript,
-  MAX_BROWSER_TRANSCRIPT_CHARS,
-  mergeMonotonicTranscript,
 } from "@/app/lib/transcriptAccumulator";
 import {
   isClarificationRequest,
@@ -2104,16 +2102,10 @@ export default function Page() {
       recognitionRestartCountRef.current = 0;
       lastVoiceActivityAtRef.current = Date.now();
 
-      const mergedTranscript = mergeMonotonicTranscript(
-        transcriptRef.current,
-        boundBrowserTranscript(text)
-      );
-      const transcriptExceededLimit =
-        mergedTranscript.length > MAX_BROWSER_TRANSCRIPT_CHARS;
-      const nextTranscript = boundBrowserTranscript(mergedTranscript);
-      if (transcriptExceededLimit) {
-        speechRecognitionErrorRef.current = "transcript_limit_reached";
-      }
+      // The recognizer already returns the full answer snapshot, including
+      // text preserved across automatic restarts. Merging every interim
+      // revision here caused exponential duplication and eventual overflow.
+      const nextTranscript = boundBrowserTranscript(text);
       if (!nextTranscript) return;
       if (
         isInvalidCandidateTranscript({

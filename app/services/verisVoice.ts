@@ -121,7 +121,7 @@ export function startRecognition(
   activeRecognition.stopRequested = false;
   let sessionBaseTranscript = normalizeChunk(initialTranscript);
   const recognizedResults = new Map<number, { text: string; final: boolean }>();
-  let bestTranscript = boundBrowserTranscript(sessionBaseTranscript);
+  let latestTranscript = boundBrowserTranscript(sessionBaseTranscript);
 
   activeRecognition.continuous = true;
   activeRecognition.interimResults = true;
@@ -129,7 +129,7 @@ export function startRecognition(
   activeRecognition.resetTranscript = () => {
     sessionBaseTranscript = "";
     recognizedResults.clear();
-    bestTranscript = "";
+    latestTranscript = "";
   };
 
   activeRecognition.onresult = (event) => {
@@ -172,12 +172,12 @@ export function startRecognition(
       )
     );
 
-    if (observedText.length >= bestTranscript.length) {
-      bestTranscript = observedText;
-    }
-
-    onResult(bestTranscript || observedText || finalizedText);
-    onFinalResult?.(finalizedText || bestTranscript);
+    // `observedText` is an authoritative snapshot of this recognition
+    // session. Keeping a previous, longer interim hypothesis makes Chrome's
+    // in-place revisions look like additional speech at the page boundary.
+    latestTranscript = observedText || finalizedText;
+    onResult(latestTranscript);
+    onFinalResult?.(finalizedText || latestTranscript);
   };
 
   activeRecognition.onend = () => {
@@ -185,8 +185,8 @@ export function startRecognition(
       return;
     }
 
-    if (bestTranscript) {
-      onResult(bestTranscript);
+    if (latestTranscript) {
+      onResult(latestTranscript);
       onFinalResult?.(
         boundBrowserTranscript(
           mergeMonotonicTranscript(
@@ -198,7 +198,7 @@ export function startRecognition(
                 .map(([, result]) => result.text)
             )
           )
-        ) || bestTranscript
+        ) || latestTranscript
       );
     }
 

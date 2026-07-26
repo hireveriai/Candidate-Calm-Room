@@ -175,3 +175,61 @@ test("SpeechRecognition does not concatenate an expanded final phrase twice", ()
     (globalThis as { window?: unknown }).window = previousWindow;
   }
 });
+
+test("SpeechRecognition replaces a longer interim hypothesis when Chrome revises it", () => {
+  class FakeRecognition {
+    static latest: FakeRecognition | null = null;
+    continuous = false;
+    interimResults = false;
+    lang = "";
+    onresult: ((event: {
+      resultIndex: number;
+      results: {
+        length: number;
+        [index: number]: { isFinal: boolean; 0: { transcript: string } };
+      };
+    }) => void) | null = null;
+    onend: (() => void) | null = null;
+    start() {
+      FakeRecognition.latest = this;
+    }
+    stop() {}
+  }
+
+  const previousWindow = (globalThis as { window?: unknown }).window;
+  (globalThis as { window?: unknown }).window = {
+    SpeechRecognition: FakeRecognition,
+  };
+
+  try {
+    let observed = "";
+    startRecognition((text) => {
+      observed = text;
+    });
+
+    FakeRecognition.latest?.onresult?.({
+      resultIndex: 0,
+      results: {
+        0: {
+          isFinal: false,
+          0: { transcript: "I primarily worked with SQL Server databases" },
+        },
+        length: 1,
+      },
+    });
+    FakeRecognition.latest?.onresult?.({
+      resultIndex: 0,
+      results: {
+        0: {
+          isFinal: false,
+          0: { transcript: "I worked with SQL Server" },
+        },
+        length: 1,
+      },
+    });
+
+    assert.equal(observed, "I worked with SQL Server");
+  } finally {
+    (globalThis as { window?: unknown }).window = previousWindow;
+  }
+});
