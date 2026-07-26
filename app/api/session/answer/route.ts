@@ -19,6 +19,7 @@ import {
   mergeMonotonicTranscript,
 } from "@/app/lib/transcriptAccumulator";
 import { shouldAllowPendingSpokenTranscription } from "@/app/lib/pendingTranscriptionPolicy";
+import { isLikelyIncompleteSpokenAnswer } from "@/app/lib/transcriptIntegrity";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -190,8 +191,14 @@ export async function POST(request: Request) {
       voice_activity_detected: body.voiceActivityDetected ?? null,
     } satisfies JsonValue;
 
+    const incompleteTranscript = isLikelyIncompleteSpokenAnswer({
+      answer_text: finalTranscript,
+      answer_payload: { duration: body.duration },
+      code_text: null,
+    });
     const invalidTranscript =
       transcriptExceededLimit ||
+      incompleteTranscript ||
       isInvalidCandidateTranscript({
         transcript: finalTranscript,
         questionText: context.question_text,
@@ -244,6 +251,8 @@ export async function POST(request: Request) {
           transcript_rejected_reason: invalidTranscript
             ? transcriptExceededLimit
               ? "browser_transcript_overflow"
+              : incompleteTranscript
+                ? "browser_transcript_incomplete"
               : "interviewer_prompt_echo"
             : null,
         },
@@ -259,6 +268,8 @@ export async function POST(request: Request) {
         reason: invalidTranscript
           ? transcriptExceededLimit
             ? "browser_transcript_overflow"
+            : incompleteTranscript
+              ? "browser_transcript_incomplete"
             : "interviewer_prompt_echo"
           : "browser_speech_recognition_empty",
       });

@@ -233,3 +233,59 @@ test("SpeechRecognition replaces a longer interim hypothesis when Chrome revises
     (globalThis as { window?: unknown }).window = previousWindow;
   }
 });
+
+test("SpeechRecognition does not overwrite an interim tail with a shorter final prefix", () => {
+  class FakeRecognition {
+    static latest: FakeRecognition | null = null;
+    continuous = false;
+    interimResults = false;
+    lang = "";
+    onresult: ((event: {
+      resultIndex: number;
+      results: {
+        length: number;
+        [index: number]: { isFinal: boolean; 0: { transcript: string } };
+      };
+    }) => void) | null = null;
+    onend: (() => void) | null = null;
+    start() {
+      FakeRecognition.latest = this;
+    }
+    stop() {}
+  }
+
+  const previousWindow = (globalThis as { window?: unknown }).window;
+  (globalThis as { window?: unknown }).window = {
+    SpeechRecognition: FakeRecognition,
+  };
+
+  try {
+    let observed = "";
+    const acceptSnapshot = (text: string) => {
+      observed = text;
+    };
+    startRecognition(acceptSnapshot, undefined, acceptSnapshot);
+
+    FakeRecognition.latest?.onresult?.({
+      resultIndex: 0,
+      results: {
+        0: {
+          isFinal: true,
+          0: { transcript: "I documented the architecture" },
+        },
+        1: {
+          isFinal: false,
+          0: { transcript: "and reviewed every change with the team" },
+        },
+        length: 2,
+      },
+    });
+
+    assert.equal(
+      observed,
+      "I documented the architecture and reviewed every change with the team"
+    );
+  } finally {
+    (globalThis as { window?: unknown }).window = previousWindow;
+  }
+});

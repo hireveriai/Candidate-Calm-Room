@@ -177,7 +177,10 @@ export function startRecognition(
     // in-place revisions look like additional speech at the page boundary.
     latestTranscript = observedText || finalizedText;
     onResult(latestTranscript);
-    onFinalResult?.(finalizedText || latestTranscript);
+    // Do not publish `finalizedText` as a second, shorter snapshot while an
+    // interim tail exists. The interview page intentionally uses one handler
+    // for both streams, so doing so truncates the answer just before save.
+    onFinalResult?.(latestTranscript);
   };
 
   activeRecognition.onend = () => {
@@ -187,19 +190,7 @@ export function startRecognition(
 
     if (latestTranscript) {
       onResult(latestTranscript);
-      onFinalResult?.(
-        boundBrowserTranscript(
-          mergeMonotonicTranscript(
-            sessionBaseTranscript,
-            mergeTranscriptParts(
-              [...recognizedResults.entries()]
-                .sort(([left], [right]) => left - right)
-                .filter(([, result]) => result.final)
-                .map(([, result]) => result.text)
-            )
-          )
-        ) || latestTranscript
-      );
+      onFinalResult?.(latestTranscript);
     }
 
     if (!stopRequested && onEnd) onEnd();
