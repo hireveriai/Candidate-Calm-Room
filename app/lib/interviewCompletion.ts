@@ -382,7 +382,11 @@ function buildEvidenceBasedSummary(params: {
 }) {
   const answerWords = params.answers.reduce((total, answer) => total + wordCount(answer.answer), 0);
   const transcriptWords = wordCount(params.transcript);
-  const evidenceWordCount = Math.max(answerWords, transcriptWords);
+  // Question-aligned answers are the recruiter-facing source of truth. A raw
+  // whole-recording transcript may include interviewer speech or ASR silence
+  // hallucinations, so use it only when no substantive answers exist at all.
+  const useTranscriptFallback = params.answers.length === 0;
+  const evidenceWordCount = useTranscriptFallback ? transcriptWords : answerWords;
   const strongestAnswers = [...params.answers]
     .sort((left, right) => wordCount(right.answer) - wordCount(left.answer))
     .slice(0, 4);
@@ -392,7 +396,7 @@ function buildEvidenceBasedSummary(params: {
     return `${prefix}${question}: ${clipWords(item.answer, 34)}`;
   });
   const transcriptHighlight =
-    params.transcript && transcriptWords > answerWords + 25
+    useTranscriptFallback && params.transcript
       ? `Additional recording evidence: ${clipWords(params.transcript, 60)}`
       : null;
   const coverage = `${params.questionsAnswered}/${Math.max(params.expectedQuestions, params.questionsAnswered, 1)} questions`;

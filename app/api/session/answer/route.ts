@@ -38,6 +38,9 @@ type RequestBody = {
   speechRecognitionActive?: boolean;
   speechRecognitionError?: string | null;
   voiceActivityDetected?: boolean;
+  clientDeviceType?: string;
+  clientUserAgent?: string | null;
+  mediaRecorderSupported?: boolean;
 };
 
 function normalizeTranscript(text: string) {
@@ -189,6 +192,10 @@ export async function POST(request: Request) {
       speech_recognition_error:
         body.speechRecognitionError?.slice(0, 180) ?? null,
       voice_activity_detected: body.voiceActivityDetected ?? null,
+      client_device_type:
+        body.clientDeviceType === "mobile_or_tablet" ? "mobile_or_tablet" : "desktop",
+      client_user_agent: body.clientUserAgent?.slice(0, 320) ?? null,
+      media_recorder_supported: body.mediaRecorderSupported ?? null,
     } satisfies JsonValue;
 
     const incompleteTranscript = isLikelyIncompleteSpokenAnswer({

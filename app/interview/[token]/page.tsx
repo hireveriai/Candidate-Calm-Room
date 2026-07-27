@@ -1834,6 +1834,16 @@ export default function Page() {
         speechRecognitionActive: speechRecognitionWasActiveRef.current,
         speechRecognitionError: speechRecognitionErrorRef.current,
         voiceActivityDetected,
+        clientDeviceType:
+          typeof navigator !== "undefined" &&
+          (/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent) ||
+            (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1))
+            ? "mobile_or_tablet"
+            : "desktop",
+        clientUserAgent:
+          typeof navigator !== "undefined" ? navigator.userAgent : null,
+        mediaRecorderSupported:
+          typeof window !== "undefined" && typeof window.MediaRecorder !== "undefined",
       });
 
     const answerText = answer.answer_text

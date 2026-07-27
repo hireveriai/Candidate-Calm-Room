@@ -27,6 +27,7 @@ type RepairQuestionRow = {
   answer_text: string | null;
   code_text: string | null;
   language: string | null;
+  status: string | null;
 };
 
 type RepairRecordingRow = {
@@ -55,6 +56,14 @@ type RecordingTranscription = {
   usage?: {
     seconds?: number;
   };
+};
+
+type QuestionWindowRow = {
+  answer_id: string;
+  question_order: number;
+  question: string;
+  start_seconds: number | string;
+  end_seconds: number | string;
 };
 
 type CompletionAuditRow = {
@@ -118,6 +127,12 @@ function isRecoveredAnswerMateriallyBetter(existingValue: unknown, recoveredValu
     return false;
   }
   if (!existing || isNoResponse(existing)) {
+    return true;
+  }
+  if (
+    isDegenerateRecordingTranscript(existing) &&
+    !isDegenerateRecordingTranscript(recovered)
+  ) {
     return true;
   }
 
@@ -185,6 +200,7 @@ async function fetchRepairQuestions(attemptId: string) {
       ans.answer_text,
       cs.code_text,
       cs.language,
+      ans.status,
       coalesce(sq.question_order, iq.question_order) as question_order,
       coalesce(sq.content, iq.question_text, q.question_text) as question
     from public.interview_answers ans
@@ -396,7 +412,18 @@ async function transcribeRecording(openai: OpenAI, filePath: string) {
   const buffer = await fetchObjectBuffer(filePath);
   let uploadBuffer = buffer;
   let uploadName = `recording${extname(filePath).split("?")[0] || ".webm"}`;
-  let uploadType = filePath.toLowerCase().includes(".mp4") ? "video/mp4" : "video/webm";
+  const lowerPath = filePath.toLowerCase();
+  let uploadType = lowerPath.includes(".m4a")
+    ? "audio/mp4"
+    : lowerPath.includes(".mp3")
+      ? "audio/mpeg"
+      : lowerPath.includes(".ogg")
+        ? "audio/ogg"
+        : lowerPath.includes(".mp4")
+          ? "video/mp4"
+          : lowerPath.includes(".webm")
+            ? "audio/webm"
+            : "application/octet-stream";
 
   if (buffer.byteLength > MAX_TRANSCRIPTION_UPLOAD_BYTES) {
     const token = randomUUID();
@@ -433,11 +460,188 @@ async function transcribeRecording(openai: OpenAI, filePath: string) {
     file,
     model: "whisper-1",
     language: "en",
-    prompt: "English technical job interview. Transcribe only clearly audible speech. Do not repeat phrases to fill silence.",
     response_format: "verbose_json",
     timestamp_granularities: ["segment"],
     temperature: 0,
   });
+}
+
+function needsRecordingRepair(question: RepairQuestionRow) {
+  const answer = normalizeText(question.answer_text);
+  return (
+    !answer ||
+    isNoResponse(answer) ||
+    question.status === "generating" ||
+    question.status === "failed" ||
+    isDegenerateRecordingTranscript(answer) ||
+    hasUnverifiedIncompleteSpokenAnswer(question)
+  );
+}
+
+async function fetchQuestionWindows(
+  attemptId: string,
+  recordingId: string
+): Promise<QuestionWindowRow[]> {
+  return prisma.$queryRaw<QuestionWindowRow[]>`
+    with ordered_questions as (
+      select
+        sq.session_question_id,
+        sq.question_order,
+        sq.content as question,
+        sq.asked_at,
+        lead(sq.asked_at) over (
+          order by sq.question_order asc, sq.asked_at asc
+        ) as next_asked_at
+      from public.session_questions sq
+      where sq.attempt_id = ${attemptId}::uuid
+    )
+    select
+      ans.answer_id::text,
+      oq.question_order,
+      oq.question,
+      greatest(
+        extract(epoch from (oq.asked_at - ir.started_at)),
+        0
+      ) as start_seconds,
+      greatest(
+        extract(epoch from (
+          least(
+            coalesce(oq.next_asked_at, ia.ended_at, ir.ended_at),
+            coalesce(ir.ended_at, ia.ended_at, now())
+          ) - ir.started_at
+        )),
+        0
+      ) as end_seconds
+    from ordered_questions oq
+    join public.interview_answers ans
+      on ans.session_question_id = oq.session_question_id
+    join public.interview_attempts ia
+      on ia.attempt_id = ans.attempt_id
+    join public.interview_recordings ir
+      on ir.recording_id = ${recordingId}::uuid
+    order by oq.question_order
+  `;
+}
+
+async function transcribeQuestionWindow(
+  openai: OpenAI,
+  sourcePath: string,
+  startSeconds: number,
+  endSeconds: number,
+  question: RepairQuestionRow
+) {
+  const outputPath = join(
+    tmpdir(),
+    `hireveri-question-window-${randomUUID()}.mp3`
+  );
+
+  try {
+    await runFfmpeg([
+      "-y",
+      "-ss", String(Math.max(0, startSeconds)),
+      "-t", String(Math.max(1, endSeconds - startSeconds)),
+      "-i", sourcePath,
+      "-vn",
+      "-ac", "1",
+      "-ar", "16000",
+      "-b:a", "32k",
+      outputPath,
+    ]);
+    const audio = await fs.readFile(outputPath);
+    const result = await openai.audio.transcriptions.create({
+      file: new File([audio], "question-window.mp3", { type: "audio/mpeg" }),
+      model:
+        process.env.OPENAI_RECORDING_WINDOW_TRANSCRIPTION_MODEL ||
+        "gpt-4o-transcribe-diarize",
+      language: "en",
+      response_format: "diarized_json",
+      chunking_strategy: "auto",
+    });
+    const transcript = normalizeText(result.text);
+    if (!transcript || isDegenerateRecordingTranscript(transcript)) {
+      return null;
+    }
+
+    const aligned = await alignAnswers(openai, [question], transcript);
+    const answer = normalizeText(aligned[0]?.answer);
+    return answer &&
+      !isNoResponse(answer) &&
+      !isUnsafeAlignedAnswer(answer) &&
+      !isInvalidCandidateTranscript({
+        transcript: answer,
+        questionText: question.question,
+      })
+      ? answer
+      : null;
+  } finally {
+    await fs.unlink(outputPath).catch(() => undefined);
+  }
+}
+
+async function recoverAnswersFromQuestionWindows(params: {
+  openai: OpenAI;
+  attemptId: string;
+  recording: RepairRecordingRow;
+  questions: RepairQuestionRow[];
+  answersByOrder: Map<number, string>;
+}) {
+  const targets = params.questions.filter((question) => {
+    if (!needsRecordingRepair(question)) return false;
+    const aligned = params.answersByOrder.get(Number(question.question_order));
+    return (
+      !aligned ||
+      isNoResponse(aligned) ||
+      isUnsafeAlignedAnswer(aligned) ||
+      isInvalidCandidateTranscript({
+        transcript: aligned,
+        questionText: question.question,
+      })
+    );
+  });
+  if (targets.length === 0) return;
+
+  const windows = await fetchQuestionWindows(
+    params.attemptId,
+    params.recording.recording_id
+  );
+  const windowsByOrder = new Map<number, QuestionWindowRow>(
+    windows.map((window: QuestionWindowRow) => [
+      Number(window.question_order),
+      window,
+    ])
+  );
+  const sourceBuffer = await fetchObjectBuffer(params.recording.file_path);
+  const sourceExtension =
+    extname(params.recording.file_path).split("?")[0] || ".webm";
+  const sourcePath = join(
+    tmpdir(),
+    `hireveri-window-source-${randomUUID()}${sourceExtension}`
+  );
+  await fs.writeFile(sourcePath, sourceBuffer);
+
+  try {
+    for (let index = 0; index < targets.length; index += 3) {
+      const batch = targets.slice(index, index + 3);
+      await Promise.all(
+        batch.map(async (question) => {
+          const window = windowsByOrder.get(Number(question.question_order));
+          if (!window) return;
+          const answer = await transcribeQuestionWindow(
+            params.openai,
+            sourcePath,
+            Number(window.start_seconds),
+            Number(window.end_seconds),
+            question
+          );
+          if (answer) {
+            params.answersByOrder.set(Number(question.question_order), answer);
+          }
+        })
+      );
+    }
+  } finally {
+    await fs.unlink(sourcePath).catch(() => undefined);
+  }
 }
 
 async function alignAnswers(openai: OpenAI, questions: RepairQuestionRow[], transcript: string) {
@@ -525,6 +729,7 @@ function hasAnswerIssue(row: CompletionAuditRow) {
     isNoResponse(answer) ||
     row.status === "generating" ||
     row.status === "failed" ||
+    isDegenerateRecordingTranscript(answer) ||
     hasUnverifiedIncompleteSpokenAnswer(row) ||
     isInvalidCandidateTranscript({
       transcript: answer,
@@ -665,9 +870,7 @@ export async function repairPendingAnswersFromRecording(attemptId: string) {
     where ans.attempt_id = ${attemptId}::uuid
       and cs.answer_id is null
   `;
-  const hasAnswerNeedingRecordingCheck = spokenRows.some((row: RepairQuestionRow) =>
-    hasUnverifiedIncompleteSpokenAnswer(row)
-  );
+  const hasAnswerNeedingRecordingCheck = spokenRows.some(needsRecordingRepair);
 
   if (!hasAnswerNeedingRecordingCheck) {
     return codeRepair.repaired > 0
@@ -810,6 +1013,22 @@ export async function repairPendingAnswersFromRecording(attemptId: string) {
     }
   }
 
+  try {
+    await recoverAnswersFromQuestionWindows({
+      openai,
+      attemptId,
+      recording: recording as RepairRecordingRow,
+      questions,
+      answersByOrder,
+    });
+  } catch (error) {
+    console.error("Question-window transcript recovery failed", {
+      attemptId,
+      recordingId: recording.recording_id,
+      error,
+    });
+  }
+
   const segments = (transcription.segments ?? []).map((segment, index) => ({
     index: index + 1,
     startMs: Math.round(Number(segment.start ?? 0) * 1000),
@@ -838,8 +1057,8 @@ export async function repairPendingAnswersFromRecording(attemptId: string) {
           await tx.$executeRaw`
             update public.interview_answers
             set answer_payload = ${mergePayload(question.answer_payload, {
-              recording_transcript_verified_at: new Date().toISOString(),
-              recording_transcript_verified_id: recording.recording_id,
+              recording_alignment_attempted_at: new Date().toISOString(),
+              recording_alignment_attempted_id: recording.recording_id,
               recording_alignment_outcome: "no_usable_answer",
             })}::jsonb
             where answer_id = ${question.answer_id}::uuid
@@ -996,6 +1215,7 @@ export async function validateAndRepairCompletionTranscripts(attemptId: string) 
   await prisma.$executeRaw`
     update public.interview_attempts
     set transcript_status = case
+          when ${remainingIssues} = 0 and transcript_status = 'FINALIZED' then 'FINALIZED'
           when ${remainingIssues} = 0 then 'COMPLETED'
           when ${createdPlaceholders + rejectedQuestionEchoes + repairedAnswers} > 0 then 'PARTIAL'
           else transcript_status

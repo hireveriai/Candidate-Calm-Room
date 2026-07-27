@@ -15,6 +15,26 @@ function normalizeText(value: unknown) {
   return String(value ?? "").replace(/\s+/g, " ").trim();
 }
 
+function hasRepeatedTranscriptHalf(words: string[]) {
+  if (words.length < 30) return false;
+
+  for (let offset = -3; offset <= 3; offset += 1) {
+    const split = Math.floor(words.length / 2) + offset;
+    const left = words.slice(0, split);
+    const right = words.slice(split);
+    const comparable = Math.min(left.length, right.length);
+    if (comparable < 15) continue;
+
+    let matching = 0;
+    for (let index = 0; index < comparable; index += 1) {
+      if (left[index] === right[index]) matching += 1;
+    }
+    if (matching / comparable >= 0.9) return true;
+  }
+
+  return false;
+}
+
 export function isDegenerateRecordingTranscript(value: unknown) {
   const words = normalizeText(value)
     .toLowerCase()
@@ -23,6 +43,9 @@ export function isDegenerateRecordingTranscript(value: unknown) {
     .filter(Boolean);
   if (words.length < 8) {
     return words.length > 0 && new Set(words).size <= 2;
+  }
+  if (hasRepeatedTranscriptHalf(words)) {
+    return true;
   }
 
   const wordCounts = new Map<string, number>();

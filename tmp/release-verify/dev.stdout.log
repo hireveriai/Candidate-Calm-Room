@@ -1,0 +1,16 @@
+
+> hireveri-calm@0.1.0 dev
+> next dev -p 3116
+
+▲ Next.js 16.1.1 (Turbopack)
+- Local:         http://localhost:3116
+- Network:       http://192.168.0.106:3116
+- Environments: .env.local, .env
+- Experiments (use with caution):
+  · cpus: 1
+
+✓ Starting...
+{"event":"startup.diagnostics","ok":true,"generatedAt":"2026-07-27T10:30:39.705Z","warnings":[]}
+✓ Ready in 3.3s
+ GET /api/health 200 in 1836ms (compile: 476ms, render: 1361ms)
+ GET /api/health 200 in 1492ms (compile: 7ms, render: 1485ms)

@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   findFirstUsableRecordingTranscript,
+  isDegenerateRecordingTranscript,
   prioritizeRecordingCandidates,
 } from "./recordingRepairPolicy";
 
@@ -79,4 +80,14 @@ test("continues after a source cannot be transcribed", async () => {
 
   assert.equal(result.recording?.recording_id, "livekit");
   assert.match(result.failures[0].reason, /^transcription_unavailable:/);
+});
+
+test("rejects an answer duplicated end-to-end by speech recognition", () => {
+  const answer =
+    "I communicate with employees, review the system record, document the correction, obtain approval, and verify the next payroll cycle";
+
+  assert.equal(
+    isDegenerateRecordingTranscript(`${answer} ${answer}`),
+    true
+  );
 });

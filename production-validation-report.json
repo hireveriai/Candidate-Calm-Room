@@ -1,12 +1,12 @@
 {
-  "generatedAt": "2026-06-24T07:57:27.934Z",
+  "generatedAt": "2026-07-27T10:24:12.757Z",
   "baseUrl": "http://127.0.0.1:3114",
   "build": {
     "ok": true
   },
   "runtime": {
     "ok": true,
-    "pid": null,
+    "pid": 40864,
     "status": 200
   },
   "routes": {

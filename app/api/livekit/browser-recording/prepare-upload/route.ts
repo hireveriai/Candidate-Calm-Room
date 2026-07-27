@@ -14,6 +14,9 @@ type PrepareUploadBody = {
 };
 
 const allowedMimeTypes = new Map([
+  ["audio/webm", "webm"],
+  ["audio/mp4", "m4a"],
+  ["audio/ogg", "ogg"],
   ["video/webm", "webm"],
   ["video/mp4", "mp4"],
   ["video/ogg", "ogv"],

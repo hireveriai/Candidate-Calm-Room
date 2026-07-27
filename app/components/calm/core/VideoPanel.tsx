@@ -48,11 +48,9 @@ type StartRecordingResponse = {
 const uuidPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-// Keep the browser safety recording below the 25 MB speech-to-text upload
-// limit for a full 60-minute interview. LiveKit remains the high-quality
-// review recording; this copy exists so an empty browser speech transcript can
-// always be recovered from the candidate microphone.
-const BROWSER_FALLBACK_VIDEO_BITS_PER_SECOND = 32_000;
+// Keep a microphone-only browser safety recording below the speech-to-text
+// upload limit. LiveKit remains the review video; this copy is intentionally
+// audio-only so mobile devices do not retain a large video Blob in memory.
 const BROWSER_FALLBACK_AUDIO_BITS_PER_SECOND = 16_000;
 
 const FRONT_CAMERA_CONSTRAINTS: MediaTrackConstraints = {
@@ -93,13 +91,20 @@ async function acquireCandidateMedia() {
       });
     } catch (combinedMediaError) {
       console.warn(
-        "Combined front camera and microphone request failed; retrying front camera only:",
+        "Combined front camera and microphone request failed; acquiring tracks separately:",
         combinedMediaError,
       );
-      stream = await navigator.mediaDevices.getUserMedia({
-        video: FRONT_CAMERA_CONSTRAINTS,
-        audio: false,
-      });
+      const [videoStream, audioStream] = await Promise.all([
+        navigator.mediaDevices.getUserMedia({
+          video: FRONT_CAMERA_CONSTRAINTS,
+          audio: false,
+        }),
+        acquireCandidateMicrophone(),
+      ]);
+      stream = new MediaStream([
+        ...videoStream.getVideoTracks(),
+        ...audioStream.getAudioTracks(),
+      ]);
     }
   }
 
@@ -125,6 +130,24 @@ async function acquireCandidateMedia() {
   }
 
   return stream;
+}
+
+async function acquireCandidateMicrophone() {
+  try {
+    return await navigator.mediaDevices.getUserMedia({
+      video: false,
+      audio: MICROPHONE_CONSTRAINTS,
+    });
+  } catch (constrainedAudioError) {
+    console.warn(
+      "Preferred microphone constraints were unavailable; retrying the default microphone:",
+      constrainedAudioError,
+    );
+    return navigator.mediaDevices.getUserMedia({
+      video: false,
+      audio: true,
+    });
+  }
 }
 
 function isValidAttemptId(value: string | null | undefined): value is string {
@@ -200,15 +223,19 @@ function getBrowserRecordingMimeType() {
   }
 
   const candidates = [
-    "video/webm;codecs=vp9,opus",
-    "video/webm;codecs=vp8,opus",
-    "video/webm",
-    "video/mp4",
+    "audio/webm;codecs=opus",
+    "audio/webm",
+    "audio/mp4;codecs=mp4a.40.2",
+    "audio/mp4",
+    "audio/ogg;codecs=opus",
+    "audio/ogg",
   ];
 
   return (
-    candidates.find((candidate) => MediaRecorder.isTypeSupported(candidate)) ??
-    null
+    typeof MediaRecorder.isTypeSupported === "function"
+      ? candidates.find((candidate) => MediaRecorder.isTypeSupported(candidate)) ??
+        null
+      : ""
   );
 }
 
@@ -490,13 +517,20 @@ export default function VideoPanel({
       }
 
       try {
-        const recorder = new MediaRecorder(stream, {
+        const audioTrack = stream
+          .getAudioTracks()
+          .find((track) => track.readyState === "live" && track.enabled);
+        if (!audioTrack) {
+          console.warn("Browser microphone safety recording cannot start without a live audio track.");
+          return;
+        }
+        const audioOnlyStream = new MediaStream([audioTrack]);
+        const recorder = new MediaRecorder(audioOnlyStream, {
           mimeType,
-          videoBitsPerSecond: BROWSER_FALLBACK_VIDEO_BITS_PER_SECOND,
           audioBitsPerSecond: BROWSER_FALLBACK_AUDIO_BITS_PER_SECOND,
         });
         browserRecordingChunksRef.current = [];
-        browserRecordingMimeTypeRef.current = mimeType.split(";")[0] ?? "video/webm";
+        browserRecordingMimeTypeRef.current = mimeType.split(";")[0] ?? "audio/webm";
         browserRecordingStartedAtRef.current = new Date().toISOString();
         browserRecorderRef.current = recorder;
         browserRecordingStartedRef.current = true;
@@ -541,7 +575,7 @@ export default function VideoPanel({
       }
 
       const recorder = browserRecorderRef.current;
-      const mimeType = browserRecordingMimeTypeRef.current ?? "video/webm";
+      const mimeType = browserRecordingMimeTypeRef.current ?? "audio/webm";
       const startedAt = browserRecordingStartedAtRef.current;
 
       const upload = new Promise<void>((resolve) => {
@@ -731,10 +765,7 @@ export default function VideoPanel({
         // This prevents the UI microphone meter (which uses a separate stream)
         // from looking healthy while the durable recording is actually silent.
         if (stream.getAudioTracks().length === 0) {
-          const microphoneStream = await navigator.mediaDevices.getUserMedia({
-            video: false,
-            audio: MICROPHONE_CONSTRAINTS,
-          });
+          const microphoneStream = await acquireCandidateMicrophone();
           const microphoneTrack = microphoneStream.getAudioTracks()[0];
           if (!microphoneTrack || microphoneTrack.readyState !== "live") {
             microphoneStream.getTracks().forEach((track) => track.stop());
