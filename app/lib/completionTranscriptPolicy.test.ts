@@ -44,6 +44,21 @@ test("does not treat a partially asked interview as complete", () => {
   );
 });
 
+test("rejects Megha regression: three answers cannot finalize a twelve-question interview", () => {
+  assert.equal(
+    hasCompletionEvidence({
+      expected_questions: 12,
+      session_questions: 3,
+      answer_rows: 3,
+      non_empty_answers: 3,
+      completed_recordings: 2,
+      required_closing_questions: 0,
+      answered_required_closing_questions: 0,
+    }),
+    false
+  );
+});
+
 test("does not finalize while a required closing question is unanswered", () => {
   assert.equal(
     hasCompletionEvidence({

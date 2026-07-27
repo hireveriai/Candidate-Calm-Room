@@ -895,6 +895,7 @@ export default function Page() {
     }
 
     terminationInFlightRef.current = true;
+    clearPendingCompletion();
 
     const payload = getTerminationPayload(terminationType);
 
@@ -917,8 +918,9 @@ export default function Page() {
             const result = await postTerminationPayload(payload);
             clearPendingTermination();
 
+            setInterviewInterrupted(true);
             await endInterview({
-              completed: result.completed,
+              completed: false,
               message:
                 message ??
                 `Interview ended early. Partial evaluation generated with ${result.completion_percentage}% completion and reliability score ${result.reliability_score}.`,
@@ -930,8 +932,9 @@ export default function Page() {
         }
       }
 
+      setInterviewInterrupted(true);
       await endInterview({
-        completed: true,
+        completed: false,
         message:
           message ??
           "Interview ended early. Your partial responses will be finalized when the connection is restored.",
@@ -1420,21 +1423,10 @@ export default function Page() {
     setExitEnding(true);
     setShowExit(false);
 
-    const exitMessage =
-      "Interview ended early. Your completed responses were saved and partial evaluation will continue securely.";
-
-    const finalizeRecording = recordingFinalizerRef.current;
-    void finalizeRecording?.().catch((error) => {
-      console.error("Unable to finalize recording after manual exit:", error);
-    });
-
-    await endInterview({
-      completed: true,
-      message: exitMessage,
-      finalizeRecording: false,
-    });
-
-    void terminateInterview("manual_exit", {
+    // Persist the early-exit state before changing the UI. Previously the UI
+    // entered its completed state first, allowing the completed-page beacon to
+    // race /api/session/terminate and finalize a partial interview.
+    await terminateInterview("manual_exit", {
       message:
         "Interview ended early. Your completed responses were saved and scored as a partial interview.",
     });

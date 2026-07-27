@@ -38,6 +38,7 @@ import { isInvalidCandidateTranscript } from "@/app/lib/transcriptGuards";
 import { canFinalizeWithTranscriptIntegrity } from "@/app/lib/completionTranscriptPolicy";
 import { markInterviewCompletedPendingTranscriptReview } from "@/app/lib/completionPendingReview";
 import { requiresOpeningFollowUp } from "@/app/lib/openingFollowUpPolicy";
+import { getInterviewCompletionEligibility } from "@/app/lib/interviewCompletionEvidence";
 import {
   getNextRequiredClosingQuestion,
   getClosingStage,
@@ -341,6 +342,28 @@ async function completeInterviewWithoutStrandingCandidate(params: {
   reason?: string;
   message?: string;
 }) {
+  const completionEligibility =
+    await getInterviewCompletionEligibility(params.attemptId);
+  if (!completionEligibility.eligible) {
+    logInterviewEvent("error", "question.premature_completion_rejected", {
+      attemptId: params.attemptId,
+      state: "ANSWER_PROCESSING",
+      nextState: "QUESTION_ACTIVE",
+      reason: params.reason ?? null,
+      completionEvidence: completionEligibility.evidence,
+    });
+
+    return Response.json(
+      {
+        error:
+          "The interview still has required questions remaining. Please request the next question again.",
+        code: "INTERVIEW_INCOMPLETE",
+        completionEvidence: completionEligibility.evidence,
+      },
+      { status: 409 }
+    );
+  }
+
   // Persist the completion boundary before responding. This keeps late
   // heartbeat/disconnect watchdogs from classifying a fully answered attempt
   // as abandoned while recording transcription and scoring finish.

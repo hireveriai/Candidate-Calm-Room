@@ -5,6 +5,7 @@ import { finalizeActiveRecordings } from "@/app/lib/livekit/recordingLifecycle";
 import { validateAndRepairCompletionTranscripts } from "@/app/lib/recordingTranscriptRepair";
 import { canFinalizeWithTranscriptIntegrity } from "@/app/lib/completionTranscriptPolicy";
 import { markInterviewCompletedPendingTranscriptReview } from "@/app/lib/completionPendingReview";
+import { getInterviewCompletionEligibility } from "@/app/lib/interviewCompletionEvidence";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -29,6 +30,27 @@ export async function POST(request: Request) {
       attemptId,
       operation: "session.complete",
     });
+
+    const completionEligibility =
+      await getInterviewCompletionEligibility(attemptId);
+    if (!completionEligibility.eligible) {
+      logInterviewEvent("warn", "interview.premature_completion_rejected", {
+        attemptId,
+        state: "QUESTION_ACTIVE",
+        nextState: "QUESTION_ACTIVE",
+        completionEvidence: completionEligibility.evidence,
+      });
+
+      return Response.json(
+        {
+          error:
+            "The interview is not complete. Continue with the remaining questions.",
+          code: "INTERVIEW_INCOMPLETE",
+          completionEvidence: completionEligibility.evidence,
+        },
+        { status: 409 }
+      );
+    }
 
     await finalizeActiveRecordings(attemptId);
     const transcriptIntegrity = await validateAndRepairCompletionTranscripts(attemptId).catch((repairError: unknown) => {
