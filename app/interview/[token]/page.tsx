@@ -19,6 +19,7 @@ import AmbientMic from "@/app/components/calm/system/AmbientMic";
 import ReconnectOverlay from "./ReconnectOverlay";
 
 import {
+  primeSpeechSynthesis,
   speak,
   startRecognition,
   stopRecognition,
@@ -1332,6 +1333,9 @@ export default function Page() {
 
   const enterFullscreen = async () => {
     setInterviewFinished(false);
+    // Preserve the candidate's tap as the browser audio activation gesture.
+    // Awaiting fullscreen first causes mobile Safari/Chrome to suppress TTS.
+    primeSpeechSynthesis();
     try {
       if (
         !document.fullscreenElement &&

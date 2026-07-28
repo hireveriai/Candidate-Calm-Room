@@ -48,6 +48,7 @@ type CompletionEvidenceRow = {
   recordings_with_transcript: number;
   required_closing_questions: number;
   answered_required_closing_questions: number;
+  closing_sequence_complete: boolean;
 };
 
 const MAX_TRANSCRIPT_CHECKPOINT_CHARACTERS = 100_000;
@@ -153,6 +154,25 @@ async function loadCompletionEvidence(attemptId: string) {
             where ans.session_question_id = sq.session_question_id
           )
       )::int as answered_required_closing_questions,
+      (
+        select
+          count(distinct sq.source_context->>'ending_stage') = 2
+          and count(distinct sq.source_context->>'ending_stage') filter (
+            where exists (
+              select 1
+              from public.interview_answers ans
+              where ans.session_question_id = sq.session_question_id
+            )
+          ) = 2
+        from public.session_questions sq
+        where sq.attempt_id = ia.attempt_id
+          and sq.question_kind = 'closing'
+          and sq.source_context->>'required' = 'true'
+          and sq.source_context->>'ending_stage' in (
+            'motivation',
+            'candidate_closing'
+          )
+      )::boolean as closing_sequence_complete,
       (
         select count(*)
         from public.interview_answers ans

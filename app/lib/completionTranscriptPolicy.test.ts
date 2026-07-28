@@ -141,3 +141,21 @@ test("protects the completed attempt after both closing responses are saved", ()
     true
   );
 });
+
+test("completes after both closing answers when a stale expected count exceeds questions actually asked", () => {
+  assert.equal(
+    hasCompletionEvidence({
+      expected_questions: 14,
+      session_questions: 12,
+      answer_rows: 12,
+      non_empty_answers: 11,
+      captured_answer_rows: 12,
+      completed_recordings: 1,
+      recording_evidence_rows: 1,
+      required_closing_questions: 2,
+      answered_required_closing_questions: 2,
+      closing_sequence_complete: true,
+    }),
+    true
+  );
+});

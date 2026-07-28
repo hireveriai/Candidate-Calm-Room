@@ -19,6 +19,7 @@ export type CompletionEvidence = {
   recording_evidence_rows?: number;
   required_closing_questions?: number;
   answered_required_closing_questions?: number;
+  closing_sequence_complete?: boolean;
 };
 
 /**
@@ -30,7 +31,11 @@ export function hasCompletionEvidence(evidence: CompletionEvidence | null) {
     return false;
   }
 
-  const expectedQuestions = Math.max(evidence.expected_questions ?? 0, 1);
+  const closingSequenceComplete =
+    evidence.closing_sequence_complete === true;
+  const expectedQuestions = closingSequenceComplete
+    ? Math.max(evidence.session_questions, 1)
+    : Math.max(evidence.expected_questions ?? 0, 1);
   const askedEnough = evidence.session_questions >= expectedQuestions;
   const capturedAnswerRows = Math.max(
     evidence.captured_answer_rows ?? evidence.non_empty_answers,
