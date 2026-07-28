@@ -321,7 +321,14 @@ export default function Page() {
   const audioContextRef = useRef<AudioContext | null>(null);
   const audioAnimationFrameRef = useRef<number | null>(null);
 
-  const { faceCount, faceDetected, multiFace, attention } =
+  const {
+    faceCount,
+    faceDetected,
+    faceDetectionReady,
+    multiFace,
+    attention,
+    attentionDirection,
+  } =
     useCognitiveSignals({
       videoRef,
       enabled: started && !isTransitioning,
@@ -1461,7 +1468,7 @@ export default function Page() {
   }, [inviteToken, started]);
 
   useEffect(() => {
-    if (!started) return;
+    if (!started || !faceDetectionReady) return;
 
     const handleFullscreenChange = () => {
       if (document.fullscreenElement) return;
@@ -2432,7 +2439,7 @@ export default function Page() {
 
   // 👁️ FACE / ATTENTION EVENTS
   useEffect(() => {
-    if (!started) return;
+    if (!started || !faceDetectionReady) return;
 
     if (multiFace) {
       addEvent({
@@ -2462,10 +2469,10 @@ export default function Page() {
         severity: "low",
       });
     }
-  }, [multiFace, faceDetected, attention, started]);
+  }, [multiFace, faceDetected, faceDetectionReady, attention, started]);
 
   useEffect(() => {
-    if (!started) return;
+    if (!started || !faceDetectionReady) return;
 
     void sendSignal("face_detected", {
       faces: faceCount,
@@ -2473,16 +2480,16 @@ export default function Page() {
       attention,
       multiFace,
     });
-  }, [attention, faceCount, faceDetected, multiFace, sessionQuestionId, started]);
+  }, [attention, faceCount, faceDetected, faceDetectionReady, multiFace, sessionQuestionId, started]);
 
   useEffect(() => {
-    if (!started || faceDetected) return;
+    if (!started || !faceDetectionReady || faceDetected) return;
 
     void sendSignal("no_face", {
       faces: faceCount,
       attention,
     });
-  }, [attention, faceCount, faceDetected, sessionQuestionId, started]);
+  }, [attention, faceCount, faceDetected, faceDetectionReady, sessionQuestionId, started]);
 
   useEffect(() => {
     if (!started || !multiFace) return;
@@ -2504,8 +2511,10 @@ export default function Page() {
     void sendSignal("attention_loss", {
       faces: faceCount,
       attention,
+      direction: attentionDirection,
+      severity: "low",
     });
-  }, [attention, currentQuestionType, faceCount, faceDetected, sessionQuestionId, started]);
+  }, [attention, attentionDirection, currentQuestionType, faceCount, faceDetected, sessionQuestionId, started]);
 
   // 👁️ LONG GAZE DETECTION
   useEffect(() => {
@@ -2523,16 +2532,25 @@ export default function Page() {
       timer = setInterval(() => {
         if (!startTime) return;
 
-        if (Date.now() - startTime >= 30000) {
+        if (Date.now() - startTime >= 15000) {
           addEvent({
             type: "long_gaze_away",
             severity: "medium",
-            meta: { duration: 30000 },
+            meta: { duration: 15000, direction: attentionDirection },
           });
           void sendSignal("long_gaze_away", {
             severity: "medium",
-            durationMs: 30000,
+            durationMs: 15000,
+            direction: attentionDirection,
             detectedAt: new Date().toISOString(),
+          });
+          void sendSignal("external_device_suspected", {
+            severity: "medium",
+            durationMs: 15000,
+            direction: attentionDirection,
+            evidence: "sustained_same_direction_gaze",
+            interpretation:
+              "Review cue only; sustained gaze direction is not proof of an external device.",
           });
 
           setWarning({
@@ -2547,7 +2565,7 @@ export default function Page() {
     }
 
     return () => timer && clearInterval(timer);
-  }, [attention, currentQuestionType, started]);
+  }, [attention, attentionDirection, currentQuestionType, started]);
 
   // 📋 CODE EVENTS
   useEffect(() => {

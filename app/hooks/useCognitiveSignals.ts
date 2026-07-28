@@ -2,6 +2,14 @@
 
 import { useEffect, useState } from "react";
 
+import {
+  classifyAttentionDirection,
+  shouldConfirmAttentionLoss,
+  shouldConfirmAttentionRecovery,
+  shouldConfirmMissingFace,
+  type AttentionDirection,
+} from "@/app/lib/faceAttentionPolicy";
+
 type Props = {
   videoRef: React.RefObject<HTMLVideoElement | null>;
   enabled?: boolean;
@@ -30,8 +38,11 @@ export default function useCognitiveSignals({
 }: Props) {
   const [faceCount, setFaceCount] = useState(0);
   const [faceDetected, setFaceDetected] = useState(false);
+  const [faceDetectionReady, setFaceDetectionReady] = useState(false);
   const [multiFace, setMultiFace] = useState(false);
   const [attention, setAttention] = useState(true);
+  const [attentionDirection, setAttentionDirection] =
+    useState<AttentionDirection>("center");
   const [tabActive, setTabActive] = useState(true);
 
   useEffect(() => {
@@ -42,6 +53,9 @@ export default function useCognitiveSignals({
     let interval: ReturnType<typeof setInterval> | null = null;
     let cancelled = false;
     let detectionInFlight = false;
+    let consecutiveFaceMisses = 0;
+    let consecutiveAwaySamples = 0;
+    let consecutiveCenterSamples = 0;
 
     const detect = async (faceapi: typeof import("face-api.js")) => {
       const video = videoRef.current;
@@ -70,20 +84,64 @@ export default function useCognitiveSignals({
         const count = detections.length;
 
         setFaceCount(count);
-        setFaceDetected(count >= 1);
         setMultiFace(count > 1);
 
         if (count === 1) {
+          consecutiveFaceMisses = 0;
+          setFaceDetected(true);
+          setFaceDetectionReady(true);
           const landmarks = detections[0].landmarks;
           const nose = landmarks.getNose()[3];
-          const leftEye = landmarks.getLeftEye()[0];
-          const rightEye = landmarks.getRightEye()[3];
-          const eyeCenterX = (leftEye.x + rightEye.x) / 2;
-          const deviation = Math.abs(nose.x - eyeCenterX);
+          const leftEye = landmarks.getLeftEye();
+          const rightEye = landmarks.getRightEye();
+          const eyePoints = [...leftEye, ...rightEye];
+          const eyeCenterX =
+            eyePoints.reduce((sum, point) => sum + point.x, 0) /
+            eyePoints.length;
+          const eyeCenterY =
+            eyePoints.reduce((sum, point) => sum + point.y, 0) /
+            eyePoints.length;
+          const direction = classifyAttentionDirection({
+            faceWidth: detections[0].detection.box.width,
+            faceHeight: detections[0].detection.box.height,
+            noseX: nose.x,
+            noseY: nose.y,
+            eyeCenterX,
+            eyeCenterY,
+          });
 
-          setAttention(deviation < 30);
+          if (direction === "center") {
+            consecutiveAwaySamples = 0;
+            consecutiveCenterSamples += 1;
+            if (shouldConfirmAttentionRecovery(consecutiveCenterSamples)) {
+              setAttention(true);
+              setAttentionDirection("center");
+            }
+          } else {
+            consecutiveCenterSamples = 0;
+            consecutiveAwaySamples += 1;
+            if (shouldConfirmAttentionLoss(consecutiveAwaySamples)) {
+              setAttention(false);
+              setAttentionDirection(direction);
+            }
+          }
+        } else if (count === 0) {
+          consecutiveFaceMisses += 1;
+          consecutiveAwaySamples = 0;
+          consecutiveCenterSamples = 0;
+          if (shouldConfirmMissingFace(consecutiveFaceMisses)) {
+            setFaceDetected(false);
+            setFaceDetectionReady(true);
+            setAttention(true);
+            setAttentionDirection("center");
+          }
         } else {
+          // Multiple detections still prove that the camera sees a face.
+          consecutiveFaceMisses = 0;
+          setFaceDetected(true);
+          setFaceDetectionReady(true);
           setAttention(true);
+          setAttentionDirection("center");
         }
       } catch (error) {
         console.error("Face detection error:", error);
@@ -128,8 +186,10 @@ export default function useCognitiveSignals({
   return {
     faceCount: enabled ? faceCount : 0,
     faceDetected: enabled ? faceDetected : false,
+    faceDetectionReady: enabled ? faceDetectionReady : false,
     multiFace: enabled ? multiFace : false,
     attention: enabled ? attention : true,
+    attentionDirection: enabled ? attentionDirection : "center",
     tabActive,
     audioAnomaly: false,
   };
