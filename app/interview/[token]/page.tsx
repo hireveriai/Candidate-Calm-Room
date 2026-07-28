@@ -131,6 +131,7 @@ const RECORDING_SIGNAL_LABELS: Record<string, string> = {
   no_face: "Candidate left frame",
   tab_switch: "Tab switch detected",
   unresponsive: "Extended response pause",
+  audio_intermittently_unavailable: "Audio intermittently unavailable",
 };
 
 const CodeEditorModal = dynamic(
@@ -2972,6 +2973,21 @@ export default function Page() {
                     reason === "track_ended" ? "camera_track_ended" : "camera_acquisition_failed",
                     { cameraFailureReason: reason }
                   );
+                }
+              }}
+              onMicrophoneStatusChange={(ready, reason) => {
+                if (
+                  !ready &&
+                  reason &&
+                  started &&
+                  !interviewFinished &&
+                  !interviewInterrupted
+                ) {
+                  void sendSignal("audio_intermittently_unavailable", {
+                    reason,
+                    severity: "low",
+                    source: "candidate_media_track",
+                  });
                 }
               }}
               onRoomConnectionChange={(state) => {

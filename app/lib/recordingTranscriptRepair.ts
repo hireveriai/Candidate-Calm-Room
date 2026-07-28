@@ -21,6 +21,7 @@ import {
 
 type RepairQuestionRow = {
   answer_id: string;
+  session_question_id: string | null;
   answer_payload: unknown | null;
   question_order: number | null;
   question: string | null;
@@ -196,6 +197,7 @@ async function fetchRepairQuestions(attemptId: string) {
   const rows = await prisma.$queryRaw<RepairQuestionRow[]>`
     select
       ans.answer_id::text,
+      ans.session_question_id::text,
       ans.answer_payload,
       ans.answer_text,
       cs.code_text,
@@ -1095,6 +1097,28 @@ export async function repairPendingAnswersFromRecording(attemptId: string) {
       if (!shouldReplace) {
         continue;
       }
+
+      await tx.$executeRaw`
+        insert into public.interview_signals (attempt_id, type, value)
+        select
+          ${attemptId}::uuid,
+          'transcript_recovered_from_recording',
+          ${JSON.stringify({
+            sessionQuestionId: question.session_question_id,
+            recordingId: recording.recording_id,
+            recoveredWordCount: wordCount(answer),
+            severity: "low",
+            source: "recording_transcript_repair",
+          })}::jsonb
+        where not exists (
+          select 1
+          from public.interview_signals existing
+          where existing.attempt_id = ${attemptId}::uuid
+            and existing.type = 'transcript_recovered_from_recording'
+            and coalesce(existing.value->>'sessionQuestionId', '') =
+              coalesce(${question.session_question_id}, '')
+        )
+      `;
 
       const evaluation = buildRecoveredEvaluation(answer);
       await tx.$executeRaw`

@@ -30,6 +30,10 @@ type Props = {
     ready: boolean,
     reason?: "acquisition_failed" | "track_ended"
   ) => void;
+  onMicrophoneStatusChange?: (
+    ready: boolean,
+    reason?: "acquisition_failed" | "track_ended"
+  ) => void;
   onRoomConnectionChange?: (
     state: "connected" | "reconnecting" | "disconnected"
   ) => void;
@@ -325,6 +329,7 @@ export default function VideoPanel({
   onRecordingStarted,
   onRecordingFinalizerChange,
   onCameraStatusChange,
+  onMicrophoneStatusChange,
   onRoomConnectionChange,
 }: Props) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -332,6 +337,7 @@ export default function VideoPanel({
   const onRecordingStartedRef = useRef(onRecordingStarted);
   const onRecordingFinalizerChangeRef = useRef(onRecordingFinalizerChange);
   const onCameraStatusChangeRef = useRef(onCameraStatusChange);
+  const onMicrophoneStatusChangeRef = useRef(onMicrophoneStatusChange);
   const onRoomConnectionChangeRef = useRef(onRoomConnectionChange);
   const hasConnectedRoomRef = useRef(false);
   const roomRef = useRef<Room | null>(null);
@@ -415,6 +421,10 @@ export default function VideoPanel({
   }, [onCameraStatusChange]);
 
   useEffect(() => {
+    onMicrophoneStatusChangeRef.current = onMicrophoneStatusChange;
+  }, [onMicrophoneStatusChange]);
+
+  useEffect(() => {
     onRoomConnectionChangeRef.current = onRoomConnectionChange;
   }, [onRoomConnectionChange]);
 
@@ -422,9 +432,15 @@ export default function VideoPanel({
     const videoElement = videoRef.current;
     let cancelled = false;
     let videoTrack: MediaStreamTrack | null = null;
+    let audioTrack: MediaStreamTrack | null = null;
     const handleVideoTrackEnded = () => {
       if (!cancelled) {
         onCameraStatusChangeRef.current?.(false, "track_ended");
+      }
+    };
+    const handleAudioTrackEnded = () => {
+      if (!cancelled) {
+        onMicrophoneStatusChangeRef.current?.(false, "track_ended");
       }
     };
 
@@ -439,7 +455,9 @@ export default function VideoPanel({
 
         cameraStreamRef.current = stream;
         videoTrack = stream.getVideoTracks()[0] ?? null;
+        audioTrack = stream.getAudioTracks()[0] ?? null;
         videoTrack?.addEventListener("ended", handleVideoTrackEnded);
+        audioTrack?.addEventListener("ended", handleAudioTrackEnded);
 
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
@@ -455,12 +473,14 @@ export default function VideoPanel({
         }
 
         onCameraStatusChangeRef.current?.(true);
+        onMicrophoneStatusChangeRef.current?.(Boolean(audioTrack));
       } catch (err) {
         if (cancelled) {
           return;
         }
         console.error("Camera error:", err);
         onCameraStatusChangeRef.current?.(false, "acquisition_failed");
+        onMicrophoneStatusChangeRef.current?.(false, "acquisition_failed");
       }
     }
 
@@ -469,6 +489,7 @@ export default function VideoPanel({
     return () => {
       cancelled = true;
       videoTrack?.removeEventListener("ended", handleVideoTrackEnded);
+      audioTrack?.removeEventListener("ended", handleAudioTrackEnded);
       if (videoElement) {
         videoElement.srcObject = null;
       }

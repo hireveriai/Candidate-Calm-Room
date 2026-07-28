@@ -171,7 +171,7 @@ async function loadCandidates(client) {
           select 1
           from public.interview_signals existing
           where existing.attempt_id = ir.attempt_id
-            and existing.type = 'vocal_pressure'
+            and existing.type = 'acoustic_activity'
         )
       order by ir.attempt_id
       limit $1
@@ -247,10 +247,10 @@ async function main() {
         if (APPLY) {
           const inserted = await client.query(`
             insert into public.interview_signals (attempt_id, type, value)
-            select $1::uuid, 'vocal_pressure', $2::jsonb
+            select $1::uuid, 'acoustic_activity', $2::jsonb
             where not exists (
               select 1 from public.interview_signals
-              where attempt_id = $1::uuid and type = 'vocal_pressure'
+              where attempt_id = $1::uuid and type = 'acoustic_activity'
             )
             returning signal_id
           `, [candidate.attempt_id, JSON.stringify(result)]);
