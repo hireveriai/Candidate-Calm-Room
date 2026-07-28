@@ -42,7 +42,9 @@ type CompletionEvidenceRow = {
   session_questions: number;
   answer_rows: number;
   non_empty_answers: number;
+  captured_answer_rows: number;
   completed_recordings: number;
+  recording_evidence_rows: number;
   recordings_with_transcript: number;
   required_closing_questions: number;
   answered_required_closing_questions: number;
@@ -116,6 +118,19 @@ async function loadCompletionEvidence(attemptId: string) {
       )::int as completed_recordings,
       (
         select count(*)
+        from public.interview_recordings ir
+        where ir.attempt_id = ia.attempt_id
+          and lower(coalesce(ir.status, 'recording')) in ('recording', 'completed')
+          and (
+            nullif(
+              trim(coalesce(ir.file_path, ir.audio_url, ir.video_url, '')),
+              ''
+            ) is not null
+            or nullif(trim(coalesce(ir.egress_id, '')), '') is not null
+          )
+      )::int as recording_evidence_rows,
+      (
+        select count(*)
         from public.session_questions sq
         where sq.attempt_id = ia.attempt_id
       )::int as session_questions,
@@ -150,6 +165,22 @@ async function loadCompletionEvidence(attemptId: string) {
           and nullif(trim(coalesce(ans.answer_text, '')), '') is not null
           and lower(trim(ans.answer_text)) <> 'no response provided.'
       )::int as non_empty_answers,
+      (
+        select count(*)
+        from public.interview_answers ans
+        where ans.attempt_id = ia.attempt_id
+          and (
+            (
+              nullif(trim(coalesce(ans.answer_text, '')), '') is not null
+              and lower(trim(ans.answer_text)) <> 'no response provided.'
+            )
+            or (
+              lower(coalesce(ans.answer_payload->>'transcription_pending', 'false')) = 'true'
+              and lower(coalesce(ans.answer_payload->>'voice_activity_detected', 'false')) = 'true'
+              and lower(coalesce(ans.answer_payload->>'media_recorder_supported', 'false')) = 'true'
+            )
+          )
+      )::int as captured_answer_rows,
       (
         select count(*)
         from public.interview_recordings ir
@@ -521,57 +552,59 @@ export async function runInterviewWatchdog() {
       and (
         upper(coalesce(status, '')) <> 'COMPLETED'
         or (
-          upper(coalesce(transcript_status, 'PENDING')) in ('PENDING', 'PARTIAL', 'FAILED')
-          and coalesce(
+          coalesce(
             nullif(termination_metadata #>> '{transcript_integrity,checkedAt}', '')::timestamptz,
             'epoch'::timestamptz
           ) < now() - interval '1 hour'
-        )
-        or exists (
-          select 1
-          from public.interview_answers suspected_answer
-          left join public.interview_code_submissions suspected_code
-            on suspected_code.answer_id = suspected_answer.answer_id
-          where suspected_answer.attempt_id = interview_attempts.attempt_id
-            and suspected_code.answer_id is null
-            and not coalesce(
-              suspected_answer.answer_payload ? 'recording_transcript_verified_at',
-              false
-            )
-            and (
-              nullif(btrim(coalesce(suspected_answer.answer_text, '')), '') is null
-              or (
-                coalesce(
-                  case
-                    when coalesce(suspected_answer.answer_payload->>'duration', '') ~ '^[0-9]+([.][0-9]+)?$'
-                      then (suspected_answer.answer_payload->>'duration')::numeric
-                    else 0
-                  end,
-                  0
-                ) >= 15
+          and (
+            upper(coalesce(transcript_status, 'PENDING')) in ('PENDING', 'PARTIAL', 'FAILED')
+            or exists (
+              select 1
+              from public.interview_answers suspected_answer
+              left join public.interview_code_submissions suspected_code
+                on suspected_code.answer_id = suspected_answer.answer_id
+              where suspected_answer.attempt_id = interview_attempts.attempt_id
+                and suspected_code.answer_id is null
+                and not coalesce(
+                  suspected_answer.answer_payload ? 'recording_transcript_verified_at',
+                  false
+                )
                 and (
-                  lower(btrim(coalesce(suspected_answer.answer_text, '')))
-                    ~ '\\m(and|but|because|so|to|the|a|an|if|when|with|for|of|or)\\M$'
+                  nullif(btrim(coalesce(suspected_answer.answer_text, '')), '') is null
                   or (
-                    case
-                      when coalesce(suspected_answer.answer_payload->>'duration', '') ~ '^[0-9]+([.][0-9]+)?$'
-                        then (suspected_answer.answer_payload->>'duration')::numeric
-                      else 0
-                    end >= 45
-                    and array_length(
-                      regexp_split_to_array(btrim(coalesce(suspected_answer.answer_text, '')), '\\s+'),
-                      1
-                    ) < (
+                    coalesce(
                       case
                         when coalesce(suspected_answer.answer_payload->>'duration', '') ~ '^[0-9]+([.][0-9]+)?$'
                           then (suspected_answer.answer_payload->>'duration')::numeric
                         else 0
-                      end
-                    ) * 0.9
+                      end,
+                      0
+                    ) >= 15
+                    and (
+                      lower(btrim(coalesce(suspected_answer.answer_text, '')))
+                        ~ '\\m(and|but|because|so|to|the|a|an|if|when|with|for|of|or)\\M$'
+                      or (
+                        case
+                          when coalesce(suspected_answer.answer_payload->>'duration', '') ~ '^[0-9]+([.][0-9]+)?$'
+                            then (suspected_answer.answer_payload->>'duration')::numeric
+                          else 0
+                        end >= 45
+                        and array_length(
+                          regexp_split_to_array(btrim(coalesce(suspected_answer.answer_text, '')), '\\s+'),
+                          1
+                        ) < (
+                          case
+                            when coalesce(suspected_answer.answer_payload->>'duration', '') ~ '^[0-9]+([.][0-9]+)?$'
+                              then (suspected_answer.answer_payload->>'duration')::numeric
+                            else 0
+                          end
+                        ) * 0.9
+                      )
+                    )
                   )
                 )
-              )
             )
+          )
         )
       )
       and (

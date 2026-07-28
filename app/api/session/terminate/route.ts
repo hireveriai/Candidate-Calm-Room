@@ -1,9 +1,13 @@
 import { finalizeInterviewAttempt } from "@/app/lib/interviewCompletion";
+import { after } from "next/server";
 import { requireCandidateSession } from "@/app/lib/candidateSession";
 import { assertUuid, logInterviewEvent } from "@/app/lib/interviewReliability";
 import { finalizeActiveRecordings } from "@/app/lib/livekit/recordingLifecycle";
 import { validateAndRepairCompletionTranscripts } from "@/app/lib/recordingTranscriptRepair";
 import { prisma } from "@/app/lib/prisma";
+import { getInterviewCompletionEligibility } from "@/app/lib/interviewCompletionEvidence";
+import { canFinalizeWithTranscriptIntegrity } from "@/app/lib/completionTranscriptPolicy";
+import { markInterviewCompletedPendingTranscriptReview } from "@/app/lib/completionPendingReview";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -91,6 +95,90 @@ export async function POST(request: Request) {
           { status: 409 }
         );
       }
+    }
+
+    const completionEligibility =
+      await getInterviewCompletionEligibility(attemptId);
+    if (completionEligibility.eligible) {
+      await prisma.$executeRaw`
+        update public.interview_attempts
+        set status = 'COMPLETING',
+            current_phase = 'closing',
+            termination_type = 'completed',
+            early_exit = false,
+            last_activity_at = now()
+        where attempt_id = ${attemptId}::uuid
+          and upper(coalesce(status, '')) not in (
+            'COMPLETED', 'TERMINATED', 'ABANDONED', 'EXPIRED',
+            'FINALIZED', 'FAILED', 'TIME_EXPIRED', 'FINALIZING'
+          )
+      `;
+
+      logInterviewEvent("info", "interview.late_termination_converted_to_completion", {
+        attemptId,
+        state: "QUESTION_ACTIVE",
+        nextState: "COMPLETING",
+        terminationType,
+        completionEvidence: completionEligibility.evidence,
+      });
+
+      after(async () => {
+        try {
+          await finalizeActiveRecordings(attemptId);
+          const transcriptIntegrity =
+            await validateAndRepairCompletionTranscripts(attemptId).catch(
+              (repairError: unknown) => {
+                logInterviewEvent(
+                  "error",
+                  "interview.transcript_auto_repair_failed",
+                  {
+                    attemptId,
+                    prismaFailure: repairError,
+                  }
+                );
+                return null;
+              }
+            );
+
+          if (!canFinalizeWithTranscriptIntegrity(transcriptIntegrity)) {
+            await markInterviewCompletedPendingTranscriptReview({
+              attemptId,
+              transcriptIntegrity,
+            });
+            return;
+          }
+
+          await finalizeInterviewAttempt({
+            attemptId,
+            earlyExit: false,
+            terminationType: "completed",
+            currentPhase: "closing",
+          });
+        } catch (completionError) {
+          logInterviewEvent(
+            "error",
+            "interview.late_termination_completion_deferred",
+            {
+              attemptId,
+              state: "COMPLETING",
+              nextState: "FINALIZING",
+              prismaFailure: completionError,
+            }
+          );
+        }
+      });
+
+      return Response.json(
+        {
+          completed: true,
+          early_exit: false,
+          completion_percentage: 1,
+          reliability_score: 100,
+          termination_type: "completed",
+          status: "COMPLETING",
+        },
+        { status: 202 }
+      );
     }
 
     await finalizeActiveRecordings(attemptId);

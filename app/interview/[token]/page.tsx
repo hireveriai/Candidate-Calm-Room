@@ -94,7 +94,7 @@ type TerminationResult = {
     | "RISK";
   reason: string;
   completed: true;
-  early_exit: true;
+  early_exit: boolean;
   completion_percentage: number;
   reliability_score: number;
   termination_type: TerminationType;
@@ -918,12 +918,17 @@ export default function Page() {
             const result = await postTerminationPayload(payload);
             clearPendingTermination();
 
-            setInterviewInterrupted(true);
+            const completedNormally =
+              result.early_exit === false &&
+              result.completion_percentage >= 1;
+            setInterviewInterrupted(!completedNormally);
             await endInterview({
-              completed: false,
+              completed: completedNormally,
               message:
-                message ??
-                `Interview ended early. Partial evaluation generated with ${result.completion_percentage}% completion and reliability score ${result.reliability_score}.`,
+                completedNormally
+                  ? FINAL_COMPLETION_MESSAGE
+                  : message ??
+                    `Interview ended early. Partial evaluation generated with ${result.completion_percentage}% completion and reliability score ${result.reliability_score}.`,
             });
             return;
           } catch {

@@ -25,9 +25,62 @@ test("protects a fully answered candidate while recording transcription is pendi
       session_questions: 10,
       answer_rows: 10,
       non_empty_answers: 8,
+      captured_answer_rows: 10,
       completed_recordings: 1,
+      recording_evidence_rows: 1,
     }),
     true
+  );
+});
+
+test("completes a mobile 12-of-12 interview while recording-backed transcripts are pending", () => {
+  assert.equal(
+    hasCompletionEvidence({
+      expected_questions: 12,
+      session_questions: 12,
+      answer_rows: 12,
+      non_empty_answers: 0,
+      captured_answer_rows: 12,
+      completed_recordings: 0,
+      recording_evidence_rows: 2,
+      required_closing_questions: 2,
+      answered_required_closing_questions: 2,
+    }),
+    true
+  );
+});
+
+test("does not trust pending mobile answer rows without recording evidence", () => {
+  assert.equal(
+    hasCompletionEvidence({
+      expected_questions: 12,
+      session_questions: 12,
+      answer_rows: 12,
+      non_empty_answers: 0,
+      captured_answer_rows: 12,
+      completed_recordings: 0,
+      recording_evidence_rows: 0,
+      required_closing_questions: 2,
+      answered_required_closing_questions: 2,
+    }),
+    false
+  );
+});
+
+test("does not complete when one of twelve mobile answers has no capture evidence", () => {
+  assert.equal(
+    hasCompletionEvidence({
+      expected_questions: 12,
+      session_questions: 12,
+      answer_rows: 12,
+      non_empty_answers: 0,
+      captured_answer_rows: 11,
+      completed_recordings: 0,
+      recording_evidence_rows: 2,
+      required_closing_questions: 2,
+      answered_required_closing_questions: 2,
+    }),
+    false
   );
 });
 
