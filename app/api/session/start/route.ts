@@ -7,6 +7,7 @@ import {
   isAttemptStatusFinalized,
   logInterviewEvent,
 } from "@/app/lib/interviewReliability";
+import { shouldSanitizeReusedEmptyAttempt } from "@/app/lib/sessionStartPolicy";
 import { startRecoveryAttemptFromToken } from "@/app/lib/interviewRecovery";
 import { isAmbiguousDatabaseColumnError } from "@/app/lib/sessionStartDatabaseError";
 
@@ -275,15 +276,33 @@ async function reviveEmptyAttemptFromToken(token: string) {
     const updatedRows = await tx.$queryRaw<Array<{ ends_at: Date | null }>>`
       update public.interview_attempts
       set status = 'started',
+          started_at = timezone('utc', now()),
           ended_at = null,
           ends_at = ${endsAt}::timestamptz,
           recording_status = 'PENDING',
           transcript_status = 'PENDING',
           last_activity_at = timezone('utc', now()),
           termination_type = null,
-          interruption_reason = null
+          termination_detected_at = null,
+          interruption_reason = null,
+          interruption_detected_at = null,
+          disconnect_reason = null,
+          inactivity_seconds = 0,
+          early_exit = false,
+          recovered_successfully = false,
+          last_disconnect_at = null,
+          reconnect_count = 0,
+          termination_metadata = '{}'::jsonb
       where attempt_id = ${row.attempt_id}::uuid
       returning ends_at
+    `;
+
+    await tx.$executeRaw`
+      update public.interviews
+      set status = 'IN_PROGRESS',
+          final_status = null,
+          failure_reason = null
+      where interview_id = ${row.interview_id}::uuid
     `;
 
     logInterviewEvent("warn", "session.start_revived_empty_attempt", {
@@ -302,6 +321,107 @@ async function reviveEmptyAttemptFromToken(token: string) {
       candidate_id: row.candidate_id,
       ends_at: updatedRows[0]?.ends_at ?? endsAt,
     } satisfies SessionStartRow;
+  });
+}
+
+async function sanitizeReusedEmptyAttempt(attemptId: string) {
+  return prisma.$transaction(async (tx: typeof prisma) => {
+    const rows = await tx.$queryRaw<Array<{
+      interview_id: string;
+      duration_minutes: number | null;
+      ends_at: Date | null;
+      stale_terminal_metadata: boolean;
+      answer_count: number;
+      recording_count: number;
+    }>>`
+      select
+        ia.interview_id::text,
+        i.duration_minutes,
+        ia.ends_at,
+        (
+          ia.ended_at is not null
+          or ia.termination_type is not null
+          or ia.termination_detected_at is not null
+          or ia.interruption_reason is not null
+          or ia.interruption_detected_at is not null
+          or ia.disconnect_reason is not null
+          or coalesce(ia.early_exit, false)
+          or upper(coalesce(ia.status, '')) in (
+            'COMPLETED', 'TERMINATED', 'ABANDONED', 'EXPIRED',
+            'FAILED', 'FINALIZED', 'TIME_EXPIRED', 'INTERRUPTED'
+          )
+        ) as stale_terminal_metadata,
+        (
+          select count(*)::int
+          from public.interview_answers ans
+          where ans.attempt_id = ia.attempt_id
+        ) as answer_count,
+        (
+          select count(*)::int
+          from public.interview_recordings rec
+          where rec.attempt_id = ia.attempt_id
+        ) as recording_count
+      from public.interview_attempts ia
+      join public.interviews i on i.interview_id = ia.interview_id
+      where ia.attempt_id = ${attemptId}::uuid
+      limit 1
+      for update of ia
+    `;
+    const row = rows[0];
+
+    if (
+      !row ||
+      !shouldSanitizeReusedEmptyAttempt({
+        answerCount: row.answer_count,
+        recordingCount: row.recording_count,
+        hasStaleTerminalMetadata: row.stale_terminal_metadata,
+      })
+    ) {
+      return row?.ends_at ?? null;
+    }
+
+    const endsAt = new Date(
+      Date.now() + Math.max(row.duration_minutes ?? 30, 1) * 60 * 1000
+    );
+
+    await tx.$executeRaw`
+      update public.interview_attempts
+      set status = 'started',
+          started_at = timezone('utc', now()),
+          ended_at = null,
+          ends_at = ${endsAt}::timestamptz,
+          recording_status = 'PENDING',
+          transcript_status = 'PENDING',
+          last_activity_at = timezone('utc', now()),
+          termination_type = null,
+          termination_detected_at = null,
+          interruption_reason = null,
+          interruption_detected_at = null,
+          disconnect_reason = null,
+          inactivity_seconds = 0,
+          early_exit = false,
+          recovered_successfully = false,
+          last_disconnect_at = null,
+          reconnect_count = 0,
+          termination_metadata = '{}'::jsonb
+      where attempt_id = ${attemptId}::uuid
+    `;
+
+    await tx.$executeRaw`
+      update public.interviews
+      set status = 'IN_PROGRESS',
+          final_status = null,
+          failure_reason = null
+      where interview_id = ${row.interview_id}::uuid
+    `;
+
+    logInterviewEvent("warn", "session.start_sanitized_reused_empty_attempt", {
+      attemptId,
+      interviewId: row.interview_id,
+      timerState: { endsAt },
+    });
+
+    return endsAt;
   });
 }
 
@@ -564,6 +684,13 @@ export async function POST(request: Request) {
 
     const attemptId = attempt.attempt_id;
     const interviewId = attempt.interview_id;
+
+    if (attempt.reused) {
+      const sanitizedEndsAt = await sanitizeReusedEmptyAttempt(attemptId);
+      if (sanitizedEndsAt) {
+        attempt.ends_at = sanitizedEndsAt;
+      }
+    }
 
     const timingRows = await prisma.$queryRaw<AttemptTimingRow[]>`
       select
