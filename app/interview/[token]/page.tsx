@@ -2752,16 +2752,36 @@ export default function Page() {
       interviewFinished ||
       interviewInterrupted ||
       isReconnecting ||
-      showCoding ||
-      isAdvancingRef.current
+      showCoding
     ) {
       return;
     }
 
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let cancelled = false;
+    const finalizeAtTimeLimit = () => {
+      if (cancelled) return;
+
+      // If Next/Skip or silence advancement won the exact timer race, retry
+      // after that transition releases its ref lock. A ref change does not
+      // rerun this effect by itself, which previously stranded the last answer.
+      if (isAdvancingRef.current) {
+        retryTimer = setTimeout(finalizeAtTimeLimit, 500);
+        return;
+      }
+
+      void handleAutoNextRef.current?.({ allowPendingTranscription: true });
+    };
+
     // Preserve the active response before finalizing at the overall time limit.
     // handleAutoNext submits the buffered transcript and then follows the
     // completeAfterFinalAnswer path because sessionTimeEnded is true.
-    void handleAutoNextRef.current?.({ allowPendingTranscription: true });
+    finalizeAtTimeLimit();
+
+    return () => {
+      cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
+    };
   }, [
     attemptId,
     interviewFinished,

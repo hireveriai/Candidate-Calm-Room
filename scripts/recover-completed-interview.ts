@@ -7,6 +7,7 @@ import { finalizeInterviewAttempt } from "../app/lib/interviewCompletion";
 import { assertUuid } from "../app/lib/interviewReliability";
 import { prisma } from "../app/lib/prisma";
 import { validateAndRepairCompletionTranscripts } from "../app/lib/recordingTranscriptRepair";
+import { markInterviewCompletedPendingTranscriptReview } from "../app/lib/completionPendingReview";
 
 type AttemptAuditRow = {
   attempt_id: string;
@@ -16,6 +17,9 @@ type AttemptAuditRow = {
   final_status: string | null;
   transcript_status: string | null;
   answer_count: number;
+  session_question_count: number;
+  required_closing_count: number;
+  answered_required_closing_count: number;
   generating_count: number;
   completed_count: number;
   non_empty_count: number;
@@ -33,6 +37,26 @@ async function loadAttemptAudit(attemptId: string) {
       i.final_status,
       ia.transcript_status,
       count(ans.answer_id)::int as answer_count,
+      (
+        select count(*) from public.session_questions sq
+        where sq.attempt_id = ia.attempt_id
+      )::int as session_question_count,
+      (
+        select count(*) from public.session_questions sq
+        where sq.attempt_id = ia.attempt_id
+          and sq.question_kind = 'closing'
+          and sq.source_context->>'required' = 'true'
+      )::int as required_closing_count,
+      (
+        select count(*) from public.session_questions sq
+        where sq.attempt_id = ia.attempt_id
+          and sq.question_kind = 'closing'
+          and sq.source_context->>'required' = 'true'
+          and exists (
+            select 1 from public.interview_answers closing_answer
+            where closing_answer.session_question_id = sq.session_question_id
+          )
+      )::int as answered_required_closing_count,
       count(ans.answer_id) filter (
         where upper(coalesce(ans.status, '')) = 'GENERATING'
       )::int as generating_count,
@@ -87,6 +111,7 @@ async function main() {
     await validateAndRepairCompletionTranscripts(attemptId);
 
   let finalized = false;
+  let completedPendingTranscriptReview = false;
   if (transcriptIntegrity.remainingIssues === 0) {
     await finalizeInterviewAttempt({
       attemptId,
@@ -96,6 +121,36 @@ async function main() {
       forceRecalculate: transcriptIntegrity.repairedAnswers > 0,
     });
     finalized = true;
+  } else if (
+    before.session_question_count > 0 &&
+    before.answer_count >= before.session_question_count &&
+    before.answered_required_closing_count >= before.required_closing_count
+  ) {
+    await prisma.$executeRaw`
+      update public.interview_attempts
+      set status = 'COMPLETING',
+          termination_type = 'completed',
+          early_exit = false,
+          current_phase = 'closing',
+          last_activity_at = now()
+      where attempt_id = ${attemptId}::uuid
+    `;
+    await markInterviewCompletedPendingTranscriptReview({
+      attemptId,
+      transcriptIntegrity,
+    });
+    await prisma.$executeRaw`
+      update public.interviews
+      set status = 'COMPLETED',
+          final_status = 'TRANSCRIPT_REVIEW_REQUIRED',
+          failure_reason = null
+      where interview_id = (
+        select interview_id
+        from public.interview_attempts
+        where attempt_id = ${attemptId}::uuid
+      )
+    `;
+    completedPendingTranscriptReview = true;
   }
 
   const after = await loadAttemptAudit(attemptId);
@@ -106,6 +161,7 @@ async function main() {
         candidate: before.candidate_name,
         transcriptIntegrity,
         finalized,
+        completedPendingTranscriptReview,
         before,
         after,
       },
@@ -114,7 +170,7 @@ async function main() {
     )
   );
 
-  if (!finalized) {
+  if (!finalized && !completedPendingTranscriptReview) {
     process.exitCode = 2;
   }
 }

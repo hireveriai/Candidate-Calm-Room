@@ -8,6 +8,7 @@ import { prisma } from "@/app/lib/prisma";
 import { getInterviewCompletionEligibility } from "@/app/lib/interviewCompletionEvidence";
 import { canFinalizeWithTranscriptIntegrity } from "@/app/lib/completionTranscriptPolicy";
 import { markInterviewCompletedPendingTranscriptReview } from "@/app/lib/completionPendingReview";
+import { isFinalSessionStatus } from "@/app/lib/interviewSessionReliability";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -179,6 +180,32 @@ export async function POST(request: Request) {
         },
         { status: 202 }
       );
+    }
+
+    const existingAttempts = await prisma.$queryRaw<
+      Array<{ status: string | null; termination_type: string | null }>
+    >`
+      select status, termination_type
+      from public.interview_attempts
+      where attempt_id = ${attemptId}::uuid
+      limit 1
+    `;
+    const existingAttempt = existingAttempts[0];
+    if (isFinalSessionStatus(existingAttempt?.status)) {
+      logInterviewEvent("info", "interview.late_termination_preserved", {
+        attemptId,
+        state: existingAttempt?.status ?? null,
+        nextState: existingAttempt?.status ?? null,
+        terminationType,
+        existingTerminationType: existingAttempt?.termination_type ?? null,
+      });
+
+      return Response.json({
+        completed: false,
+        preserved: true,
+        status: existingAttempt?.status ?? null,
+        termination_type: existingAttempt?.termination_type ?? null,
+      });
     }
 
     await finalizeActiveRecordings(attemptId);
