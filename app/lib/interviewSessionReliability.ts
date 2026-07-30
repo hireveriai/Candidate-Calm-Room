@@ -72,6 +72,11 @@ export function isReconnectLikeStatus(value: string | null | undefined) {
   return normalizeAttemptStatus(value) === "RECONNECTING";
 }
 
+/** Browser page lifecycle events are audit signals until a real failure is confirmed. */
+export function isProvisionalPageLifecycleSource(value: string | null | undefined) {
+  return (value ?? "").trim().toLowerCase() === "browser_pagehide";
+}
+
 export function mapCompletionStatus(params: {
   earlyExit: boolean;
   terminationType: string | null | undefined;

@@ -1551,7 +1551,7 @@ export default function Page() {
       return;
     }
 
-    const handlePageHide = () => {
+    const handlePageHide = (event: PageTransitionEvent) => {
       if (
         terminationInFlightRef.current ||
         exitIntentRef.current ||
@@ -1570,6 +1570,8 @@ export default function Page() {
           transcriptBuffer: transcriptRef.current.trim() || transcript.trim() || null,
           currentPhase: getCurrentPhaseFromState(verisState, showCoding),
           pageLifecycle: "pagehide",
+          bfcachePersisted: event.persisted,
+          browserOnline: navigator.onLine,
         },
       })], { type: "application/json" });
 
@@ -1586,12 +1588,10 @@ export default function Page() {
     };
 
     window.addEventListener("pagehide", handlePageHide);
-    window.addEventListener("beforeunload", handlePageHide);
     window.addEventListener("pageshow", handlePageShow);
 
     return () => {
       window.removeEventListener("pagehide", handlePageHide);
-      window.removeEventListener("beforeunload", handlePageHide);
       window.removeEventListener("pageshow", handlePageShow);
     };
   }, [attemptId, started, transcript, sessionQuestionId, verisState, showCoding]);

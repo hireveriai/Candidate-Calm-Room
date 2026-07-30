@@ -9,6 +9,7 @@ import {
   SESSION_END_BUFFER_SECONDS,
   STALE_ATTEMPT_THRESHOLD_SECONDS,
   isFinalSessionStatus,
+  isProvisionalPageLifecycleSource,
 } from "@/app/lib/interviewSessionReliability";
 import {
   canFinalizeWithTranscriptIntegrity,
@@ -450,6 +451,8 @@ export async function markAttemptReconnecting(params: {
     return { ok: false, skipped: true };
   }
 
+  const provisionalPageLifecycle = isProvisionalPageLifecycleSource(params.source);
+
   const reconnectEvents = Array.isArray(attempt.reconnect_events)
     ? [...attempt.reconnect_events]
     : [];
@@ -482,6 +485,41 @@ export async function markAttemptReconnecting(params: {
       `;
     }
     return { ok: true, duplicate: true };
+  }
+
+  if (provisionalPageLifecycle) {
+    reconnectEvents.push({
+      type: "page_lifecycle_observed",
+      at: new Date().toISOString(),
+      reason: params.reason,
+      source: params.source,
+      metadata: params.metadata ?? {},
+    });
+
+    await prisma.$executeRaw`
+      update public.interview_attempts
+      set reconnect_events = ${JSON.stringify(reconnectEvents)}::jsonb,
+          termination_metadata = case
+            when ${serializedCheckpoint}::jsonb is null then termination_metadata
+            else jsonb_set(
+              coalesce(termination_metadata, '{}'::jsonb),
+              '{live_transcript_checkpoint}',
+              ${serializedCheckpoint}::jsonb,
+              true
+            )
+          end
+      where attempt_id = ${attemptId}::uuid
+        and upper(coalesce(status, '')) not in ('COMPLETED', 'TERMINATED', 'ABANDONED', 'EXPIRED', 'FINALIZED', 'FAILED', 'TIME_EXPIRED')
+    `;
+
+    logInterviewEvent("info", "interview.page_lifecycle_observed", {
+      attemptId,
+      reason: params.reason,
+      state: attempt.status,
+      nextState: attempt.status,
+    });
+
+    return { ok: true, provisional: true };
   }
 
   reconnectEvents.push({

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { shouldSanitizeReusedEmptyAttempt } from "./sessionStartPolicy";
+import { isProvisionalPageLifecycleSource } from "./interviewSessionReliability";
 
 test("sanitizes an empty reused attempt carrying stale timeout metadata", () => {
   assert.equal(
@@ -34,4 +35,9 @@ test("does not restart the timer for a clean empty page refresh", () => {
     }),
     false,
   );
+});
+
+test("treats a browser page lifecycle event as provisional", () => {
+  assert.equal(isProvisionalPageLifecycleSource("browser_pagehide"), true);
+  assert.equal(isProvisionalPageLifecycleSource("browser_offline"), false);
 });
