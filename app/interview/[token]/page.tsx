@@ -159,6 +159,7 @@ const FINAL_COMPLETION_MESSAGE =
 const PENDING_TERMINATION_STORAGE_KEY = "hireveri.pendingTermination";
 const PENDING_COMPLETION_STORAGE_KEY = "hireveri.pendingCompletion";
 const PENDING_RECOVERY_EVENT_STORAGE_KEY = "hireveri.pendingRecoveryEvent";
+const PENDING_RESUME_STORAGE_PREFIX = "hireveri.pendingInterviewResume.";
 const SPEECH_AUDIO_CONSTRAINTS: MediaTrackConstraints = {
   echoCancellation: true,
   noiseSuppression: true,
@@ -231,6 +232,7 @@ export default function Page() {
   const inviteToken = typeof params?.token === "string" ? params.token : "";
   const [candidateName, setCandidateName] = useState("");
   const [entryReady, setEntryReady] = useState(false);
+  const [resumeAvailable, setResumeAvailable] = useState(false);
 
   const [started, setStarted] = useState(false);
   const [interviewFinished, setInterviewFinished] = useState(false);
@@ -261,6 +263,8 @@ export default function Page() {
   const [clarificationsUsed, setClarificationsUsed] = useState(0);
 
   const [audioLevel, setAudioLevel] = useState(0);
+
+  const resumeStorageKey = `${PENDING_RESUME_STORAGE_PREFIX}${inviteToken}`;
 
   const recognitionRef = useRef<VerisSpeechRecognition | null>(null);
   const speechRecognitionErrorRef = useRef<string | null>(null);
@@ -1369,6 +1373,10 @@ export default function Page() {
     finalizeRecording?: boolean;
   } = {}) => {
     exitIntentRef.current = true;
+    if (typeof window !== "undefined") {
+      window.sessionStorage.removeItem(resumeStorageKey);
+      setResumeAvailable(false);
+    }
 
     if (finalizeRecording) {
       try {
@@ -1454,6 +1462,14 @@ export default function Page() {
     void flushPendingCompletion();
     void flushPendingRecoveryEvent();
   }, []);
+
+  useEffect(() => {
+    if (!inviteToken || typeof window === "undefined") {
+      return;
+    }
+
+    setResumeAvailable(window.sessionStorage.getItem(resumeStorageKey) === "1");
+  }, [inviteToken, resumeStorageKey]);
 
   useEffect(() => {
     return () => {
@@ -1732,6 +1748,12 @@ export default function Page() {
       }>("/api/session/start", {
         token: inviteToken,
       });
+
+      // A document reload or mobile browser suspension should be recoverable.
+      // The start and question endpoints are idempotent for an active attempt,
+      // so the candidate can deliberately resume from the precheck screen.
+      window.sessionStorage.setItem(resumeStorageKey, "1");
+      setResumeAvailable(true);
 
       setAttemptId(session.attemptId);
       setInterviewId(session.interviewId);
@@ -2958,7 +2980,7 @@ export default function Page() {
   }
 
   if (!started) {
-    return <PrecheckScreen onStart={enterFullscreen} />;
+    return <PrecheckScreen onStart={enterFullscreen} resumeAvailable={resumeAvailable} />;
   }
 
   return (
