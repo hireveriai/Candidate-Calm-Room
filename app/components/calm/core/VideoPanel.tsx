@@ -243,6 +243,11 @@ function getBrowserRecordingMimeType() {
   );
 }
 
+// Mobile browsers aggressively reclaim long-lived MediaRecorder buffers.
+// Persist short, independently playable segments throughout the interview so
+// transcript recovery never depends on one large end-of-session upload.
+const BROWSER_RECORDING_SEGMENT_MS = 2 * 60 * 1000;
+
 async function uploadBrowserRecording(params: {
   attemptId: string;
   blob: Blob;
@@ -508,6 +513,7 @@ export default function VideoPanel({
     const room = new Room();
     roomRef.current = room;
     let contextTimer: ReturnType<typeof setInterval> | null = null;
+    let browserSegmentTimer: ReturnType<typeof setInterval> | null = null;
     stopRequestedRef.current = false;
     recordingStartedNotifiedRef.current = false;
     serverRecordingEgressIdRef.current = null;
@@ -567,18 +573,30 @@ export default function VideoPanel({
         };
 
         recorder.start(5_000);
+        if (!browserSegmentTimer) {
+          browserSegmentTimer = setInterval(() => {
+            const currentStream = cameraStreamRef.current;
+            if (
+              !currentStream ||
+              cancelled ||
+              stopRequestedRef.current ||
+              browserRecordingUploadRef.current
+            ) {
+              return;
+            }
+
+            void stopBrowserRecordingAndUpload({
+              restartStream: currentStream,
+              restartAttemptId: safeAttemptId,
+            });
+          }, BROWSER_RECORDING_SEGMENT_MS);
+        }
         notifyRecordingStarted();
       } catch (error) {
         browserRecorderRef.current = null;
         browserRecordingStartedRef.current = false;
         console.error("Unable to start browser recording fallback:", error);
       }
-    }
-
-    function discardBrowserRecordingChunks() {
-      browserRecordingChunksRef.current = [];
-      browserRecordingMimeTypeRef.current = null;
-      browserRecordingStartedAtRef.current = null;
     }
 
     async function stopBrowserRecordingAndUpload(options: {
@@ -601,9 +619,21 @@ export default function VideoPanel({
 
       const upload = new Promise<void>((resolve) => {
         const uploadChunks = async () => {
-          const chunks = browserRecordingChunksRef.current;
+          const chunks = [...browserRecordingChunksRef.current];
           browserRecorderRef.current = null;
           browserRecordingStartedRef.current = false;
+          browserRecordingChunksRef.current = [];
+          browserRecordingMimeTypeRef.current = null;
+          browserRecordingStartedAtRef.current = null;
+
+          // Restart before the network upload so no candidate speech is lost
+          // while a segment is being persisted on slower mobile connections.
+          if (options.restartStream && isValidAttemptId(options.restartAttemptId)) {
+            ensureBrowserRecordingStarted(
+              options.restartStream,
+              options.restartAttemptId,
+            );
+          }
 
           if (options.upload === false) {
             resolve();
@@ -611,7 +641,6 @@ export default function VideoPanel({
           }
 
           if (!chunks.length) {
-            discardBrowserRecordingChunks();
             resolve();
             return;
           }
@@ -627,13 +656,6 @@ export default function VideoPanel({
           } catch (error) {
             console.error("Unable to upload browser recording fallback:", error);
           } finally {
-            discardBrowserRecordingChunks();
-            if (options.restartStream && isValidAttemptId(options.restartAttemptId)) {
-              ensureBrowserRecordingStarted(
-                options.restartStream,
-                options.restartAttemptId,
-              );
-            }
             resolve();
           }
         };
@@ -881,6 +903,10 @@ export default function VideoPanel({
       cancelled = true;
       if (contextTimer) {
         clearInterval(contextTimer);
+      }
+      if (browserSegmentTimer) {
+        clearInterval(browserSegmentTimer);
+        browserSegmentTimer = null;
       }
       void ensureRecordingStopped();
       onRecordingFinalizerChangeRef.current?.(null);

@@ -35,6 +35,8 @@ type RepairRecordingRow = {
   recording_id: string;
   file_path: string;
   transcript: string | null;
+  started_at: Date | string | null;
+  ended_at: Date | string | null;
   object_size: bigint | number | string | null;
   duration_seconds: number | string | null;
 };
@@ -233,12 +235,14 @@ async function fetchRepairQuestions(attemptId: string) {
   }));
 }
 
-async function fetchRepairRecordings(attemptId: string) {
+async function fetchRepairRecordings(attemptId: string): Promise<RepairRecordingRow[]> {
   const rows = await prisma.$queryRaw<RepairRecordingRow[]>`
     select
       ir.recording_id::text,
       ir.file_path,
       ir.transcript,
+      ir.started_at,
+      ir.ended_at,
       greatest(
         extract(epoch from (coalesce(ir.ended_at, ir.created_at) - coalesce(ir.started_at, ir.created_at))),
         0
@@ -256,9 +260,10 @@ async function fetchRepairRecordings(attemptId: string) {
         or nullif(btrim(coalesce(ir.transcript, '')), '') is not null
       )
       and coalesce((so.metadata->>'size')::bigint, 0) <= ${MAX_REPAIR_OBJECT_BYTES}
+    order by coalesce(ir.started_at, ir.created_at), ir.recording_id
   `;
 
-  return prioritizeRecordingCandidates(rows);
+  return prioritizeRecordingCandidates<RepairRecordingRow>(rows);
 }
 
 async function claimRepairLease(attemptId: string, recordingId: string) {
@@ -915,7 +920,7 @@ export async function repairPendingAnswersFromRecording(attemptId: string) {
     maxRetries: 1,
   });
   const questions = await fetchRepairQuestions(attemptId);
-  const selectedTranscript = await findFirstUsableRecordingTranscript(
+  let selectedTranscript = await findFirstUsableRecordingTranscript(
     eligibleRecordings,
     async (recording): Promise<RecordingTranscription> => {
       const existingRecordingTranscript = normalizeText(recording.transcript);
@@ -933,6 +938,112 @@ export async function repairPendingAnswersFromRecording(attemptId: string) {
       )) as RecordingTranscription;
     }
   );
+
+  // Browser fallback audio is uploaded in bounded segments so mobile Safari
+  // and Chrome do not need to retain an entire interview in memory. Consume
+  // every usable segment as one ordered transcript during completion repair.
+  const browserSegments = eligibleRecordings
+    .filter((recording) => recording.file_path.toLowerCase().includes("-browser-"))
+    .sort(
+      (left, right) =>
+        new Date(left.started_at ?? 0).getTime() -
+        new Date(right.started_at ?? 0).getTime()
+    );
+  let aggregateBilledAudioSeconds: number | null = null;
+  let usedAggregatedBrowserSegments = false;
+
+  if (browserSegments.length > 1) {
+    const aggregateTexts: string[] = [];
+    const aggregateSegments: NonNullable<RecordingTranscription["segments"]> = [];
+    const aggregateFailures = [...selectedTranscript.failures];
+    let elapsedSeconds = 0;
+    let billedSeconds = 0;
+
+    for (const recording of browserSegments) {
+      try {
+        const persistedTranscript = normalizeText(recording.transcript);
+        const reused = Boolean(
+          persistedTranscript && !isDegenerateRecordingTranscript(persistedTranscript)
+        );
+        const alreadyLoadedTranscription =
+          selectedTranscript.recording?.recording_id === recording.recording_id
+            ? selectedTranscript.transcription
+            : null;
+        const transcription = alreadyLoadedTranscription
+          ? alreadyLoadedTranscription
+          : reused
+          ? ({ text: persistedTranscript, segments: [], duration: 0 } satisfies RecordingTranscription)
+          : ((await transcribeRecording(
+              openai,
+              recording.file_path
+            )) as RecordingTranscription);
+        const segmentText = normalizeText(transcription.text);
+
+        if (!segmentText || isDegenerateRecordingTranscript(segmentText)) {
+          aggregateFailures.push({
+            recordingId: recording.recording_id,
+            filePath: recording.file_path,
+            reason: segmentText ? "degenerate_transcription" : "empty_transcription",
+          });
+          elapsedSeconds += Number(recording.duration_seconds ?? 0);
+          continue;
+        }
+
+        await prisma.$executeRaw`
+          update public.interview_recordings
+          set transcript = ${segmentText}
+          where recording_id = ${recording.recording_id}::uuid
+        `;
+
+        aggregateTexts.push(segmentText);
+        for (const segment of transcription.segments ?? []) {
+          aggregateSegments.push({
+            ...segment,
+            start: elapsedSeconds + Number(segment.start ?? 0),
+            end: elapsedSeconds + Number(segment.end ?? 0),
+          });
+        }
+        if (!reused) {
+          billedSeconds += Number(
+            transcription.usage?.seconds ??
+              transcription.duration ??
+              recording.duration_seconds ??
+              0
+          );
+        }
+        elapsedSeconds += Number(
+          recording.duration_seconds ?? transcription.duration ?? 0
+        );
+      } catch (error) {
+        aggregateFailures.push({
+          recordingId: recording.recording_id,
+          filePath: recording.file_path,
+          reason:
+            error instanceof Error
+              ? `transcription_unavailable:${error.message.slice(0, 180)}`
+              : "transcription_unavailable",
+        });
+        elapsedSeconds += Number(recording.duration_seconds ?? 0);
+      }
+    }
+
+    if (aggregateTexts.length > 1) {
+      const transcriptText = aggregateTexts.join("\n\n");
+      selectedTranscript = {
+        recording: browserSegments[0],
+        transcription: {
+          text: transcriptText,
+          segments: aggregateSegments,
+          duration: elapsedSeconds,
+          usage: { seconds: billedSeconds },
+        },
+        transcriptText,
+        failures: aggregateFailures,
+      };
+      aggregateBilledAudioSeconds = billedSeconds;
+      usedAggregatedBrowserSegments = true;
+    }
+  }
 
   for (const failure of selectedTranscript.failures) {
     console.warn("Recording transcription source rejected", {
@@ -979,17 +1090,19 @@ export async function repairPendingAnswersFromRecording(attemptId: string) {
   // Persist the costly Whisper result before optional answer alignment. If a
   // later step fails, every retry reuses this transcript instead of uploading
   // and billing the full recording again.
-  await prisma.$executeRaw`
-    update public.interview_recordings
-    set transcript = ${transcriptText}
-    where recording_id = ${recording.recording_id}::uuid
-  `;
+  if (!usedAggregatedBrowserSegments) {
+    await prisma.$executeRaw`
+      update public.interview_recordings
+      set transcript = ${transcriptText}
+      where recording_id = ${recording.recording_id}::uuid
+    `;
+  }
 
-  const billedAudioSeconds = reuseExistingTranscript
+  const billedAudioSeconds = aggregateBilledAudioSeconds ?? (reuseExistingTranscript
     ? 0
     : Number(transcription.usage?.seconds
       ?? transcription.duration
-      ?? 0);
+      ?? 0));
 
   let alignmentUnavailable = false;
   let alignedAnswers: AlignedAnswer[] = [];
@@ -1016,6 +1129,9 @@ export async function repairPendingAnswersFromRecording(attemptId: string) {
   }
 
   try {
+    if (usedAggregatedBrowserSegments) {
+      throw new Error("question_window_alignment_not_applicable_to_segmented_recording");
+    }
     await recoverAnswersFromQuestionWindows({
       openai,
       attemptId,
@@ -1024,11 +1140,18 @@ export async function repairPendingAnswersFromRecording(attemptId: string) {
       answersByOrder,
     });
   } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message === "question_window_alignment_not_applicable_to_segmented_recording"
+    ) {
+      // Whole-transcript alignment above is authoritative for segmented audio.
+    } else {
     console.error("Question-window transcript recovery failed", {
       attemptId,
       recordingId: recording.recording_id,
       error,
     });
+    }
   }
 
   const segments = (transcription.segments ?? []).map((segment, index) => ({
