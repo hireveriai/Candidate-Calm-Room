@@ -77,6 +77,18 @@ export function isProvisionalPageLifecycleSource(value: string | null | undefine
   return (value ?? "").trim().toLowerCase() === "browser_pagehide";
 }
 
+/**
+ * Media tracks and realtime rooms are intentionally stopped while the final
+ * answer and recording are being committed. Those shutdown events must not
+ * downgrade a successfully answered interview to interrupted.
+ */
+export function shouldSuppressReliabilityInterruption(params: {
+  completionInFlight: boolean;
+  interviewFinished?: boolean;
+}) {
+  return params.completionInFlight || params.interviewFinished === true;
+}
+
 export function mapCompletionStatus(params: {
   earlyExit: boolean;
   terminationType: string | null | undefined;

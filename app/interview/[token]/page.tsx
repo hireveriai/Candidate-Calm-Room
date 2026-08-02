@@ -43,6 +43,7 @@ import {
   HEARTBEAT_TIMEOUT_MS,
   MAX_RECONNECT_ATTEMPTS,
   RECONNECT_BACKOFF_MS,
+  shouldSuppressReliabilityInterruption,
 } from "@/app/lib/interviewSessionReliability";
 import { isInvalidCandidateTranscript } from "@/app/lib/transcriptGuards";
 import {
@@ -709,6 +710,23 @@ export default function Page() {
     }
   };
 
+  const beginCompletionBarrier = () => {
+    if (completionInFlightRef.current) {
+      return false;
+    }
+
+    completionInFlightRef.current = true;
+    clearTimeout(disconnectTimeoutRef.current);
+    clearTimeout(inactivityTimeoutRef.current);
+    clearHeartbeatLoop();
+    clearReconnectSchedulers();
+    reconnectInFlightRef.current = false;
+    reconnectModeRef.current = false;
+    setIsReconnecting(false);
+    setReconnectReason("");
+    return true;
+  };
+
   const recordReconnectState = async (
     reason: string,
     metadata: Record<string, unknown> = {}
@@ -734,7 +752,13 @@ export default function Page() {
   }: {
     reconnecting?: boolean;
   } = {}) => {
-    if (!attemptId || !interviewId || interviewFinished || interviewInterrupted) {
+    if (
+      !attemptId ||
+      !interviewId ||
+      interviewFinished ||
+      interviewInterrupted ||
+      completionInFlightRef.current
+    ) {
       return;
     }
 
@@ -970,11 +994,10 @@ export default function Page() {
   const completeInterview = async (
     message = FINAL_COMPLETION_MESSAGE
   ) => {
-    if (completionInFlightRef.current) {
+    if (!beginCompletionBarrier()) {
       return;
     }
-
-    completionInFlightRef.current = true;
+    let completionRendered = false;
 
     const payload = attemptId
       ? {
@@ -1004,8 +1027,11 @@ export default function Page() {
         message,
         finalizeRecording: false,
       });
+      completionRendered = true;
     } finally {
-      completionInFlightRef.current = false;
+      if (!completionRendered) {
+        completionInFlightRef.current = false;
+      }
     }
   };
 
@@ -1014,7 +1040,14 @@ export default function Page() {
     reason: string,
     options: { useBeacon?: boolean } = {}
   ) => {
-    if (!attemptId || terminationInFlightRef.current) {
+    if (
+      !attemptId ||
+      terminationInFlightRef.current ||
+      shouldSuppressReliabilityInterruption({
+        completionInFlight: completionInFlightRef.current,
+        interviewFinished,
+      })
+    ) {
       return;
     }
 
@@ -1091,6 +1124,7 @@ export default function Page() {
       reconnectInFlightRef.current ||
       interviewFinished ||
       interviewInterrupted ||
+      completionInFlightRef.current ||
       !attemptId
     ) {
       return;
@@ -1110,6 +1144,11 @@ export default function Page() {
       await flushPendingTermination();
       await flushPendingCompletion();
       await sendHeartbeat({ reconnecting: true });
+
+      if (completionInFlightRef.current) {
+        reconnectInFlightRef.current = false;
+        return;
+      }
 
       setVideoReconnectKey((current) => current + 1);
       setCameraReady(false);
@@ -1180,6 +1219,7 @@ export default function Page() {
       interviewFinished ||
       interviewInterrupted ||
       terminationInFlightRef.current ||
+      completionInFlightRef.current ||
       isReconnecting ||
       reconnectModeRef.current
     ) {
@@ -1235,7 +1275,13 @@ export default function Page() {
   const resetInactivityTimeout = () => {
     clearTimeout(inactivityTimeoutRef.current);
 
-    if (!started || showCoding || terminationInFlightRef.current || isReconnecting) {
+    if (
+      !started ||
+      showCoding ||
+      terminationInFlightRef.current ||
+      completionInFlightRef.current ||
+      isReconnecting
+    ) {
       return;
     }
 
@@ -2024,22 +2070,34 @@ export default function Page() {
     });
 
     if (data.complete || !data.question || !data.session_question_id) {
-      try {
-        await recordingFinalizerRef.current?.();
-      } catch (error) {
-        console.error("Unable to finalize recording before interview completion:", error);
+      if (!beginCompletionBarrier()) {
+        return;
       }
 
-      setVerisState("speaking");
-      await Promise.race([
-        speak(FINAL_VERIS_CLOSING_LINE),
-        new Promise((resolve) => setTimeout(resolve, 8000)),
-      ]);
-      await endInterview({
-        completed: true,
-        message: FINAL_COMPLETION_MESSAGE,
-        finalizeRecording: false,
-      });
+      let completionRendered = false;
+      try {
+        try {
+          await recordingFinalizerRef.current?.();
+        } catch (error) {
+          console.error("Unable to finalize recording before interview completion:", error);
+        }
+
+        setVerisState("speaking");
+        await Promise.race([
+          speak(FINAL_VERIS_CLOSING_LINE),
+          new Promise((resolve) => setTimeout(resolve, 8000)),
+        ]);
+        await endInterview({
+          completed: true,
+          message: FINAL_COMPLETION_MESSAGE,
+          finalizeRecording: false,
+        });
+        completionRendered = true;
+      } finally {
+        if (!completionRendered) {
+          completionInFlightRef.current = false;
+        }
+      }
       return;
     }
 
@@ -2052,38 +2110,46 @@ export default function Page() {
   };
 
   const completeAfterFinalAnswer = async () => {
-    if (!attemptId) {
+    if (!attemptId || !beginCompletionBarrier()) {
       return;
     }
 
+    let completionRendered = false;
     try {
-      await recordingFinalizerRef.current?.();
-    } catch (error) {
-      console.error("Unable to finalize recording before interview completion:", error);
+      try {
+        await recordingFinalizerRef.current?.();
+      } catch (error) {
+        console.error("Unable to finalize recording before interview completion:", error);
+      }
+
+      const completionPayload = {
+        attemptId,
+        currentPhase: "closing",
+      } satisfies CompletionPayload;
+
+      try {
+        await postCompletionPayload(completionPayload);
+        clearPendingCompletion();
+      } catch {
+        persistPendingCompletion(completionPayload);
+      }
+
+      setVerisState("speaking");
+      await Promise.race([
+        speak(FINAL_VERIS_CLOSING_LINE),
+        new Promise((resolve) => setTimeout(resolve, 8000)),
+      ]);
+      await endInterview({
+        completed: true,
+        message: FINAL_COMPLETION_MESSAGE,
+        finalizeRecording: false,
+      });
+      completionRendered = true;
+    } finally {
+      if (!completionRendered) {
+        completionInFlightRef.current = false;
+      }
     }
-
-    const completionPayload = {
-      attemptId,
-      currentPhase: "closing",
-    } satisfies CompletionPayload;
-
-    try {
-      await postCompletionPayload(completionPayload);
-      clearPendingCompletion();
-    } catch {
-      persistPendingCompletion(completionPayload);
-    }
-
-    setVerisState("speaking");
-    await Promise.race([
-      speak(FINAL_VERIS_CLOSING_LINE),
-      new Promise((resolve) => setTimeout(resolve, 8000)),
-    ]);
-    await endInterview({
-      completed: true,
-      message: FINAL_COMPLETION_MESSAGE,
-      finalizeRecording: false,
-    });
   };
 
   const handleCodingSubmit = async (payload: {

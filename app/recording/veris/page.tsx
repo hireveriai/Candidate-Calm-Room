@@ -488,7 +488,7 @@ export default function VerisRecordingView() {
               />
               <div className="min-w-0">
                 <p className="text-[10px] font-medium uppercase tracking-[0.18em] text-slate-500">
-                  Fraud timeline signal
+                  Integrity timeline signal
                 </p>
                 <p
                   className={`mt-1 truncate text-sm font-medium ${currentSeverity.text}`}
@@ -604,7 +604,7 @@ export default function VerisRecordingView() {
           <div className="min-h-0 overflow-hidden border-t border-white/10 pt-5">
             <div className="flex items-center justify-between">
               <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-slate-500">
-                Fraud detection timeline
+                Integrity review timeline
               </p>
               <span className="font-mono text-[11px] text-slate-500">
                 {latestSignals.length} live
