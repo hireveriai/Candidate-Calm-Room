@@ -12,7 +12,11 @@ import {
   logInterviewEvent,
   retryWithFallback,
 } from "@/app/lib/interviewReliability";
-import { syncWarRoomActionsToCalm } from "@/app/lib/warRoomSync";
+import {
+  claimPendingRecruiterProbe,
+  markRecruiterProbeQuestion,
+  syncWarRoomActionsToCalm,
+} from "@/app/lib/warRoomSync";
 import { buildDeterministicInterviewBudget } from "@/app/lib/interviewBudget";
 import {
   buildAskedQuestionState,
@@ -1539,7 +1543,86 @@ export async function POST(request: Request) {
         skillName: followUpSkillBeingTested,
       });
 
-      if (!completion.canFitCoreQuestion && !completion.allowFollowUp) {
+      // A recruiter's "Probe Deeper" click in the war room takes priority
+      // over the automatic core/follow-up cascade below, but only once
+      // there is genuinely enough time budget left to ask and answer one
+      // more question (completion.allowFollowUp) and the prior answer
+      // isn't mid-transcription. If those gates aren't met yet, the probe
+      // is left unconsumed and will be retried on the next call.
+      const pendingRecruiterProbe =
+        completion.allowFollowUp && !pendingTranscription
+          ? await claimPendingRecruiterProbe(attemptId)
+          : null;
+
+      if (pendingRecruiterProbe) {
+        let recruiterProbeQuestion = pendingRecruiterProbe.note?.trim() || "";
+
+        if (!recruiterProbeQuestion) {
+          try {
+            generatedFollowUp = await generateAiFollowUpQuestion({
+              lastQuestion: latestQuestion?.content,
+              lastAnswer: effectiveLastAnswer,
+              answerSummary,
+              jobRole: attempt.job_title,
+              skillBeingTested: followUpSkillBeingTested,
+              skillType: followUpSkillType,
+              skillScore,
+              clarityScore,
+              confidenceScore,
+              fraudScore,
+            });
+          } catch (error) {
+            console.error("AI recruiter-probe follow-up generation failed:", error);
+          }
+
+          recruiterProbeQuestion =
+            generatedFollowUp?.followUpQuestion ??
+            buildFollowUpQuestion(effectiveLastAnswer);
+        }
+
+        const createdQuestions = await prisma.$queryRaw<CreatedSessionQuestionRow[]>`
+            insert into public.session_questions (
+              attempt_id,
+              question_id,
+              content,
+              source,
+              question_kind,
+              question_order,
+              recruiter_override
+            )
+            values (
+              ${attemptId}::uuid,
+              ${null}::uuid,
+              ${recruiterProbeQuestion}::text,
+              ${"recruiter"}::text,
+              ${"follow_up"}::text,
+              ${askedTotal + 1}::integer,
+              ${true}::boolean
+            )
+            returning
+              session_question_id,
+              question_id,
+              content,
+              source,
+              asked_at,
+              question_kind
+          `;
+        createdQuestion = createdQuestions[0] ?? null;
+        createdQuestionType = "follow_up";
+
+        if (createdQuestion?.session_question_id) {
+          await markRecruiterProbeQuestion(
+            pendingRecruiterProbe.actionId,
+            createdQuestion.session_question_id,
+          );
+        }
+
+        logInterviewEvent("info", "war_room.probe_fulfilled", {
+          attemptId,
+          actionId: pendingRecruiterProbe.actionId,
+          sessionQuestionId: createdQuestion?.session_question_id ?? null,
+        });
+      } else if (!completion.canFitCoreQuestion && !completion.allowFollowUp) {
         sessionQuestion = {
           session_question_id: null,
           question_id: null,

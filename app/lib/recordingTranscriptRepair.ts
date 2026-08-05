@@ -651,6 +651,101 @@ async function recoverAnswersFromQuestionWindows(params: {
   }
 }
 
+type SegmentQuestionWindow = {
+  question_order: number;
+  question: string;
+  asked_at: Date;
+  window_end: Date;
+};
+
+// Browser-fallback recordings are many short files, not one continuous
+// stream, so the question-order timestamp only tells us where a question
+// falls in wall-clock time, not which byte offset of which file. This
+// resolves that against the per-segment elapsed timeline built while the
+// segments were aggregated above.
+async function fetchSegmentQuestionWindows(attemptId: string) {
+  return prisma.$queryRaw<SegmentQuestionWindow[]>`
+    with ordered_questions as (
+      select
+        sq.question_order,
+        sq.content as question,
+        sq.asked_at,
+        lead(sq.asked_at) over (
+          order by sq.question_order asc, sq.asked_at asc
+        ) as next_asked_at
+      from public.session_questions sq
+      where sq.attempt_id = ${attemptId}::uuid
+    )
+    select
+      oq.question_order,
+      oq.question,
+      oq.asked_at,
+      coalesce(oq.next_asked_at, ia.ended_at, now()) as window_end
+    from ordered_questions oq
+    join public.interview_attempts ia on ia.attempt_id = ${attemptId}::uuid
+    order by oq.question_order
+  `;
+}
+
+// A single batched alignment call across the whole interview pressures the
+// model to compress every answer to fit one JSON response, which silently
+// drops most of what the candidate said. Instead, resolve each question to
+// only the recording segments whose wall-clock span overlaps that question's
+// window, so alignment runs per-question against a small, focused excerpt.
+function buildSegmentWindowTranscripts(params: {
+  referenceStart: Date;
+  timeline: Array<{
+    recordingId: string;
+    startSeconds: number;
+    endSeconds: number;
+    text: string;
+  }>;
+  questionWindows: SegmentQuestionWindow[];
+}) {
+  const referenceMs = params.referenceStart.getTime();
+  const result = new Map<number, string>();
+
+  for (const window of params.questionWindows) {
+    const startSeconds = (new Date(window.asked_at).getTime() - referenceMs) / 1000;
+    const endSeconds = (new Date(window.window_end).getTime() - referenceMs) / 1000;
+
+    const overlapping = params.timeline
+      .filter(
+        (segment) =>
+          segment.endSeconds > startSeconds && segment.startSeconds < endSeconds
+      )
+      .sort((left, right) => left.startSeconds - right.startSeconds);
+
+    if (overlapping.length > 0) {
+      result.set(
+        window.question_order,
+        overlapping.map((segment) => segment.text).join("\n\n")
+      );
+      continue;
+    }
+
+    // Very short questions can fall entirely inside one segment without a
+    // strict overlap match; fall back to the closest segment by midpoint so
+    // short answers are not silently skipped.
+    const midpoint = (startSeconds + endSeconds) / 2;
+    let closest: (typeof params.timeline)[number] | null = null;
+    let closestDistance = Number.POSITIVE_INFINITY;
+    for (const segment of params.timeline) {
+      const segmentMidpoint = (segment.startSeconds + segment.endSeconds) / 2;
+      const distance = Math.abs(segmentMidpoint - midpoint);
+      if (distance < closestDistance) {
+        closestDistance = distance;
+        closest = segment;
+      }
+    }
+    if (closest) {
+      result.set(window.question_order, closest.text);
+    }
+  }
+
+  return result;
+}
+
 async function alignAnswers(openai: OpenAI, questions: RepairQuestionRow[], transcript: string) {
   const response = await openai.chat.completions.create({
     model: "gpt-4o-mini",
@@ -665,6 +760,8 @@ async function alignAnswers(openai: OpenAI, questions: RepairQuestionRow[], tran
           "Use only words and meaning supported by the transcript.",
           "Exclude interviewer questions from candidate answers.",
           "Return only the candidate's direct response to that one question; never copy later questions or answers into it.",
+          "The \"answer\" field must be the candidate's FULL response reproduced verbatim (word-for-word) from the transcript.",
+          "Do not summarize, paraphrase, condense, or shorten the candidate's answer. Include every sentence the candidate spoke that is part of this answer, even if it is long or repetitive.",
           "If the transcript is repetitive, corrupted, or does not contain a clearly attributable answer, use exactly \"No response provided.\"",
           "If the candidate did not substantively answer a question, use exactly \"No response provided.\"",
         ].join("\n"),
@@ -857,7 +954,10 @@ function skillWeightedScore(clarity: number, depth: number, confidence: number) 
   return clarity * 0.35 + depth * 0.45 + confidence * 0.2;
 }
 
-export async function repairPendingAnswersFromRecording(attemptId: string) {
+export async function repairPendingAnswersFromRecording(
+  attemptId: string,
+  options?: { force?: boolean }
+) {
   const codeRepair = await repairCodingAnswersFromSubmissions(attemptId);
 
   const spokenRows = await prisma.$queryRaw<RepairQuestionRow[]>`
@@ -877,7 +977,8 @@ export async function repairPendingAnswersFromRecording(attemptId: string) {
     where ans.attempt_id = ${attemptId}::uuid
       and cs.answer_id is null
   `;
-  const hasAnswerNeedingRecordingCheck = spokenRows.some(needsRecordingRepair);
+  const hasAnswerNeedingRecordingCheck =
+    options?.force || spokenRows.some(needsRecordingRepair);
 
   if (!hasAnswerNeedingRecordingCheck) {
     return codeRepair.repaired > 0
@@ -952,6 +1053,13 @@ export async function repairPendingAnswersFromRecording(attemptId: string) {
   let aggregateBilledAudioSeconds: number | null = null;
   let usedAggregatedBrowserSegments = false;
 
+  const browserSegmentTimeline: Array<{
+    recordingId: string;
+    startSeconds: number;
+    endSeconds: number;
+    text: string;
+  }> = [];
+
   if (browserSegments.length > 1) {
     const aggregateTexts: string[] = [];
     const aggregateSegments: NonNullable<RecordingTranscription["segments"]> = [];
@@ -1003,6 +1111,15 @@ export async function repairPendingAnswersFromRecording(attemptId: string) {
             end: elapsedSeconds + Number(segment.end ?? 0),
           });
         }
+        const segmentDurationSeconds = Number(
+          recording.duration_seconds ?? transcription.duration ?? 0
+        );
+        browserSegmentTimeline.push({
+          recordingId: recording.recording_id,
+          startSeconds: elapsedSeconds,
+          endSeconds: elapsedSeconds + segmentDurationSeconds,
+          text: segmentText,
+        });
         if (!reused) {
           billedSeconds += Number(
             transcription.usage?.seconds ??
@@ -1105,26 +1222,66 @@ export async function repairPendingAnswersFromRecording(attemptId: string) {
       ?? 0));
 
   let alignmentUnavailable = false;
-  let alignedAnswers: AlignedAnswer[] = [];
-  try {
-    alignedAnswers = await alignAnswers(openai, questions, transcriptText);
-  } catch (error) {
-    // The recording transcript is still durable evidence even when the optional
-    // AI alignment service is out of quota or temporarily unavailable. Keep the
-    // transcript, finish the lifecycle, and leave missing answers for review.
-    alignmentUnavailable = true;
-    console.error("Recording answer alignment is temporarily unavailable", {
-      attemptId,
-      recordingId: recording.recording_id,
-      error,
-    });
-  }
   const answersByOrder = new Map<number, string>();
 
-  for (const aligned of alignedAnswers) {
-    const order = Number(aligned.question_order);
-    if (Number.isFinite(order)) {
-      answersByOrder.set(order, normalizeText(aligned.answer) || "No response provided.");
+  if (usedAggregatedBrowserSegments) {
+    // A single call asking the model for all 12 answers at once pressures it
+    // to compress each one to fit a short JSON response. Resolve each
+    // question to only the segments that overlap its time window and align
+    // them individually so nothing gets summarized away.
+    try {
+      const questionWindows = await fetchSegmentQuestionWindows(attemptId);
+      const referenceStart = new Date(browserSegments[0].started_at ?? Date.now());
+      const windowTranscripts = buildSegmentWindowTranscripts({
+        referenceStart,
+        timeline: browserSegmentTimeline,
+        questionWindows,
+      });
+
+      for (const question of questions) {
+        const windowTranscript = windowTranscripts.get(Number(question.question_order));
+        if (!windowTranscript) continue;
+        try {
+          const aligned = await alignAnswers(openai, [question], windowTranscript);
+          const answer = normalizeText(aligned[0]?.answer);
+          if (answer) {
+            answersByOrder.set(Number(question.question_order), answer);
+          }
+        } catch (error) {
+          console.error("Per-question windowed alignment failed", {
+            attemptId,
+            questionOrder: question.question_order,
+            error,
+          });
+        }
+      }
+    } catch (error) {
+      alignmentUnavailable = true;
+      console.error("Segment-windowed answer alignment is temporarily unavailable", {
+        attemptId,
+        recordingId: recording.recording_id,
+        error,
+      });
+    }
+  } else {
+    try {
+      const alignedAnswers = await alignAnswers(openai, questions, transcriptText);
+      for (const aligned of alignedAnswers) {
+        const order = Number(aligned.question_order);
+        if (Number.isFinite(order)) {
+          answersByOrder.set(order, normalizeText(aligned.answer) || "No response provided.");
+        }
+      }
+    } catch (error) {
+      // The recording transcript is still durable evidence even when the optional
+      // AI alignment service is out of quota or temporarily unavailable. Keep the
+      // transcript, finish the lifecycle, and leave missing answers for review.
+      alignmentUnavailable = true;
+      console.error("Recording answer alignment is temporarily unavailable", {
+        attemptId,
+        recordingId: recording.recording_id,
+        error,
+      });
     }
   }
 

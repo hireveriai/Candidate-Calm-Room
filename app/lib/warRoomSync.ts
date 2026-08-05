@@ -102,3 +102,73 @@ export async function syncWarRoomActionsToCalm(params: {
     createdAt: new Date(action.created_at).toISOString(),
   }));
 }
+
+type PendingRecruiterProbeRow = {
+  action_id: string;
+  note: string | null;
+};
+
+export type PendingRecruiterProbe = {
+  actionId: string;
+  note: string | null;
+};
+
+/**
+ * Atomically claims the oldest un-fulfilled "Probe Deeper" action for an
+ * attempt so the next question generated for the candidate can honor it.
+ * The UPDATE ... WHERE action_id = (SELECT ... FOR UPDATE SKIP LOCKED)
+ * shape claims and marks the row consumed in a single statement, so two
+ * concurrent next-question calls can never both claim the same action.
+ */
+export async function claimPendingRecruiterProbe(
+  attemptId: string,
+): Promise<PendingRecruiterProbe | null> {
+  const attempt = assertUuid(attemptId, "attemptId");
+
+  const rows = await prisma.$queryRaw<PendingRecruiterProbeRow[]>`
+    update public.war_room_actions
+    set consumed_at = now()
+    where action_id = (
+      select action_id
+      from public.war_room_actions
+      where attempt_id = ${attempt}::uuid
+        and action_type = 'follow_up'
+        and consumed_at is null
+      order by created_at asc
+      limit 1
+      for update skip locked
+    )
+    returning action_id, note
+  `;
+
+  const claimed = rows[0];
+
+  if (!claimed) {
+    return null;
+  }
+
+  logInterviewEvent("info", "war_room.probe_claimed", {
+    attemptId: attempt,
+    actionId: claimed.action_id,
+  });
+
+  return { actionId: claimed.action_id, note: claimed.note };
+}
+
+/**
+ * Records which session question fulfilled a recruiter's probe request, for
+ * the war-room audit trail.
+ */
+export async function markRecruiterProbeQuestion(
+  actionId: string,
+  sessionQuestionId: string,
+): Promise<void> {
+  const action = assertUuid(actionId, "actionId");
+  const sessionQuestion = assertUuid(sessionQuestionId, "sessionQuestionId");
+
+  await prisma.$executeRaw`
+    update public.war_room_actions
+    set consumed_session_question_id = ${sessionQuestion}::uuid
+    where action_id = ${action}::uuid
+  `;
+}
