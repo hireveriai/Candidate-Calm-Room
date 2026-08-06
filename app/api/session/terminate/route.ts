@@ -183,28 +183,47 @@ export async function POST(request: Request) {
     }
 
     const existingAttempts = await prisma.$queryRaw<
-      Array<{ status: string | null; termination_type: string | null }>
+      Array<{
+        status: string | null;
+        termination_type: string | null;
+        completion_percentage: number | string | null;
+        reliability_score: number | string | null;
+      }>
     >`
-      select status, termination_type
+      select status, termination_type, completion_percentage, reliability_score
       from public.interview_attempts
       where attempt_id = ${attemptId}::uuid
       limit 1
     `;
     const existingAttempt = existingAttempts[0];
     if (isFinalSessionStatus(existingAttempt?.status)) {
+      // A late/retried terminate call (common on mobile, where a network
+      // blip triggers this after the interview already finished server-side)
+      // must not report a successfully completed attempt as interrupted just
+      // because this particular request did not perform the finalization.
+      const normalizedStatus = (existingAttempt?.status ?? "").toUpperCase();
+      const alreadyCompletedSuccessfully =
+        normalizedStatus === "COMPLETED" || normalizedStatus === "FINALIZED";
+
       logInterviewEvent("info", "interview.late_termination_preserved", {
         attemptId,
         state: existingAttempt?.status ?? null,
         nextState: existingAttempt?.status ?? null,
         terminationType,
         existingTerminationType: existingAttempt?.termination_type ?? null,
+        alreadyCompletedSuccessfully,
       });
 
       return Response.json({
-        completed: false,
+        completed: alreadyCompletedSuccessfully,
         preserved: true,
         status: existingAttempt?.status ?? null,
         termination_type: existingAttempt?.termination_type ?? null,
+        early_exit: !alreadyCompletedSuccessfully,
+        completion_percentage: alreadyCompletedSuccessfully
+          ? 1
+          : Number(existingAttempt?.completion_percentage ?? 0),
+        reliability_score: Number(existingAttempt?.reliability_score ?? 0),
       });
     }
 
