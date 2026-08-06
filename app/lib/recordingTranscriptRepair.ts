@@ -18,6 +18,14 @@ import {
   isReusableRecordingTranscript,
   prioritizeRecordingCandidates,
 } from "@/app/lib/recordingRepairPolicy";
+import {
+  classifyInterviewQuestion,
+  normalizeInterviewQuestionType,
+} from "@/app/lib/interviewQuestionTypes";
+import {
+  deriveSkillType,
+  evaluateAnswerWithAi,
+} from "@/app/lib/answerEvaluation";
 
 type RepairQuestionRow = {
   answer_id: string;
@@ -29,6 +37,10 @@ type RepairQuestionRow = {
   code_text: string | null;
   language: string | null;
   status: string | null;
+  source_type?: string | null;
+  skill_name?: string | null;
+  job_title?: string | null;
+  question_type?: string | null;
 };
 
 type RepairRecordingRow = {
@@ -206,12 +218,18 @@ async function fetchRepairQuestions(attemptId: string) {
       cs.language,
       ans.status,
       coalesce(sq.question_order, iq.question_order) as question_order,
-      coalesce(sq.content, iq.question_text, q.question_text) as question
+      coalesce(sq.content, iq.question_text, q.question_text) as question,
+      iq.source_type,
+      sm.skill_name,
+      jp.job_title,
+      coalesce(iq.question_type, sq.question_kind) as question_type
     from public.interview_answers ans
     left join public.session_questions sq
       on sq.session_question_id = ans.session_question_id
       or (sq.attempt_id = ans.attempt_id and sq.question_id = ans.question_id)
     left join public.interview_attempts att on att.attempt_id = ans.attempt_id
+    left join public.interviews i on i.interview_id = att.interview_id
+    left join public.job_positions jp on jp.job_id = i.job_id
     left join public.interview_questions iq
       on iq.interview_id = att.interview_id
       and (
@@ -222,6 +240,10 @@ async function fetchRepairQuestions(attemptId: string) {
       )
     left join public.questions q
       on q.question_id = coalesce(ans.question_id, sq.question_id, iq.question_id)
+    left join public.question_skill_map qsm
+      on qsm.question_id = ans.question_id
+    left join public.skill_master sm
+      on sm.skill_id = coalesce(iq.target_skill_id, qsm.skill_id)
     left join public.interview_code_submissions cs
       on cs.answer_id = ans.answer_id
     where ans.attempt_id = ${attemptId}::uuid
@@ -926,7 +948,12 @@ async function rejectQuestionEchoAnswers(attemptId: string) {
   return invalidRows.length;
 }
 
-function buildRecoveredEvaluation(answer: string) {
+// Last-resort scoring when real AI evaluation is unavailable (no API key, or
+// the call failed). The recruiter-facing "feedback" text here must read like
+// genuine feedback on the answer's content, never a description of how the
+// transcript was obtained — that internal detail belongs in evaluation_json,
+// not in a field the recruiter dashboard renders as "VERIS Feedback".
+function buildHeuristicRecoveredEvaluation(answer: string) {
   const words = normalizeText(answer).split(/\s+/).filter(Boolean).length;
   const hasSpecificity = /\b\d+(\.\d+)?%?\b|team|customer|process|project|metric|budget|sla|crm|sap|report|compliance|risk/i.test(answer);
   const clarity = words >= 60 ? 0.72 : words >= 35 ? 0.64 : words >= 18 ? 0.52 : 0.38;
@@ -941,13 +968,74 @@ function buildRecoveredEvaluation(answer: string) {
     depth_score: depth,
     confidence_score: confidence,
     fraud_score: 0.08,
-    feedback: "Auto-recovered from finalized interview recording because live speech recognition did not capture this answer.",
+    feedback:
+      "Automated scoring estimate based on the candidate's recorded answer. Detailed AI feedback was unavailable for this response.",
     evaluation_json: {
-      mode: "recording_auto_repair",
+      mode: "recording_auto_repair_heuristic",
       word_count: words,
       has_specificity: hasSpecificity,
     },
   };
+}
+
+// Recovered answers must be judged on their actual content by the same AI
+// evaluator used for normally captured answers, not a word-count heuristic
+// with a placeholder message describing the recovery mechanism.
+async function evaluateRecoveredAnswer(question: RepairQuestionRow, answer: string) {
+  try {
+    const resolvedQuestionType = normalizeInterviewQuestionType(
+      question.question_type,
+      classifyInterviewQuestion(
+        question.question ?? "",
+        question.job_title ?? undefined,
+        question.skill_name ? [question.skill_name] : []
+      ).questionType
+    );
+    const skillType = deriveSkillType(
+      question.source_type,
+      question.skill_name,
+      resolvedQuestionType
+    );
+
+    const aiEvaluation = await evaluateAnswerWithAi({
+      jobRole: question.job_title ?? null,
+      skillName: question.skill_name ?? null,
+      skillType,
+      questionText: question.question,
+      transcript: answer,
+      rawTranscript: null,
+      focusMetrics: null,
+      behaviorSignals: [],
+      questionType: resolvedQuestionType,
+    });
+
+    if (aiEvaluation) {
+      return {
+        score: Math.round(aiEvaluation.skill_score * 100),
+        skill_score: aiEvaluation.skill_score,
+        clarity_score: aiEvaluation.clarity_score,
+        depth_score: aiEvaluation.depth_score,
+        confidence_score: aiEvaluation.confidence_score,
+        fraud_score: aiEvaluation.fraud_score,
+        feedback: aiEvaluation.reasoning,
+        evaluation_json: {
+          ...(typeof aiEvaluation.evaluation_json === "object" &&
+          aiEvaluation.evaluation_json &&
+          !Array.isArray(aiEvaluation.evaluation_json)
+            ? aiEvaluation.evaluation_json
+            : {}),
+          mode: "recording_auto_repair_ai",
+        },
+      };
+    }
+  } catch (error) {
+    console.error("Recovered-answer AI evaluation failed, using heuristic fallback", {
+      answerId: question.answer_id,
+      error,
+    });
+  }
+
+  return buildHeuristicRecoveredEvaluation(answer);
 }
 
 function skillWeightedScore(clarity: number, depth: number, confidence: number) {
@@ -1318,6 +1406,32 @@ export async function repairPendingAnswersFromRecording(
     transcript: normalizeText(segment.text),
   }));
 
+  // Run AI evaluation for recovered answers before opening the transaction so
+  // the network round-trips to OpenAI do not hold the DB transaction open.
+  const recoveredEvaluationsByOrder = new Map<
+    number,
+    Awaited<ReturnType<typeof evaluateRecoveredAnswer>>
+  >();
+  for (const question of questions) {
+    if (question.code_text) continue;
+    const answer = answersByOrder.get(Number(question.question_order));
+    if (
+      !answer ||
+      isNoResponse(answer) ||
+      isUnsafeAlignedAnswer(answer) ||
+      isInvalidCandidateTranscript({ transcript: answer, questionText: question.question })
+    ) {
+      continue;
+    }
+    if (!isRecoveredAnswerMateriallyBetter(question.answer_text, answer)) {
+      continue;
+    }
+    recoveredEvaluationsByOrder.set(
+      Number(question.question_order),
+      await evaluateRecoveredAnswer(question, answer)
+    );
+  }
+
   let repaired = 0;
   await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     for (const question of questions) {
@@ -1400,7 +1514,9 @@ export async function repairPendingAnswersFromRecording(
         )
       `;
 
-      const evaluation = buildRecoveredEvaluation(answer);
+      const evaluation =
+        recoveredEvaluationsByOrder.get(Number(question.question_order)) ??
+        buildHeuristicRecoveredEvaluation(answer);
       await tx.$executeRaw`
         delete from public.interview_answer_evaluations
         where answer_id = ${question.answer_id}::uuid
