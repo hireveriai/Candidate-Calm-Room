@@ -7,7 +7,6 @@ import {
   CheckCircle2,
   FileStack,
   Landmark,
-  LoaderCircle,
   ShieldCheck,
   XCircle,
 } from "lucide-react";
@@ -44,7 +43,6 @@ export default function IdentityVerificationModal({
   const cameraInput = useRef<HTMLInputElement>(null);
   const uploadInput = useRef<HTMLInputElement>(null);
   const [verification, setVerification] = useState(initialVerification);
-  const [digilockerState, setDigilockerState] = useState<RequestState>("idle");
   const [scanState, setScanState] = useState<RequestState>("idle");
   const [uploadState, setUploadState] = useState<RequestState>("idle");
   const [documentType, setDocumentType] =
@@ -68,21 +66,6 @@ export default function IdentityVerificationModal({
       verification: IdentityVerificationSummary;
       allowContinue?: boolean;
     };
-  }
-
-  async function connectDigiLocker() {
-    setDigilockerState("pending");
-    setMessage("");
-    try {
-      const payload = await decide("connect_digilocker");
-      setDigilockerState(
-        payload.verification.digilockerConnected ? "connected" : "failed"
-      );
-      if (payload.verification.digilockerConnected) onContinue(payload.verification);
-    } catch (error) {
-      setDigilockerState("failed");
-      setMessage(error instanceof Error ? error.message : "DigiLocker connection failed");
-    }
   }
 
   async function uploadFiles(files: File[], type: VerificationDocumentType) {
@@ -177,14 +160,13 @@ export default function IdentityVerificationModal({
           <OptionCard
             icon={<Landmark className="h-5 w-5" />}
             title="DigiLocker"
-            badge="Recommended"
             description="Securely fetch Aadhaar, PAN, Degree or Experience documents."
-            state={digilockerState}
+            state="idle"
           >
-            <button className="primary-button" onClick={connectDigiLocker}>
-              {digilockerState === "pending" && <LoaderCircle className="h-4 w-4 animate-spin" />}
+            <button className="primary-button opacity-40" disabled title="DigiLocker verification is temporarily unavailable">
               Connect DigiLocker
             </button>
+            <p className="text-xs text-slate-500">Temporarily unavailable. Please use Scan or Upload instead.</p>
           </OptionCard>
 
           <OptionCard
