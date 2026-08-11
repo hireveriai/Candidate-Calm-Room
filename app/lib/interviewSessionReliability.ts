@@ -5,6 +5,15 @@ export const MAX_RECONNECT_ATTEMPTS = RECONNECT_BACKOFF_MS.length;
 export const RECONNECT_GRACE_WINDOW_SECONDS = 180;
 export const STALE_ATTEMPT_THRESHOLD_SECONDS = 300;
 export const SESSION_END_BUFFER_SECONDS = 600;
+// Each disconnect episode is capped at MAX_RECONNECT_ATTEMPTS consecutive
+// retries client-side, but nothing previously capped the total NUMBER of
+// episodes across a session -- a connection that briefly recovers just long
+// enough to reset the heartbeat clock each time can flap indefinitely
+// without ever looking "stale" to the watchdog. This is a session-wide
+// backstop: once a session has racked up this many disconnect episodes, its
+// connection is unrecoverable and the watchdog should close it immediately
+// rather than waiting for the heartbeat to go quiet.
+export const MAX_SESSION_RECONNECT_EVENTS = 20;
 
 export const SESSION_FINAL_STATUSES = [
   "COMPLETED",

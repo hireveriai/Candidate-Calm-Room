@@ -5,6 +5,7 @@ import { finalizeActiveRecordings } from "@/app/lib/livekit/recordingLifecycle";
 import { validateAndRepairCompletionTranscripts } from "@/app/lib/recordingTranscriptRepair";
 import {
   HEARTBEAT_INTERVAL_MS,
+  MAX_SESSION_RECONNECT_EVENTS,
   RECONNECT_GRACE_WINDOW_SECONDS,
   SESSION_END_BUFFER_SECONDS,
   STALE_ATTEMPT_THRESHOLD_SECONDS,
@@ -570,7 +571,7 @@ export async function runInterviewWatchdog() {
       last_disconnect_at: Date | null;
       reconnect_count: number | null;
       ends_at: Date | null;
-      close_reason: "STALE_HEARTBEAT" | "SESSION_TIME_EXPIRED";
+      close_reason: "STALE_HEARTBEAT" | "SESSION_TIME_EXPIRED" | "EXCESSIVE_RECONNECTS";
     }[]
   >`
     select
@@ -585,6 +586,8 @@ export async function runInterviewWatchdog() {
         when ends_at is not null
           and ends_at < now() - (${SESSION_END_BUFFER_SECONDS} * interval '1 second')
           then 'SESSION_TIME_EXPIRED'
+        when coalesce(reconnect_count, 0) >= ${MAX_SESSION_RECONNECT_EVENTS}
+          then 'EXCESSIVE_RECONNECTS'
         else 'STALE_HEARTBEAT'
       end as close_reason
     from public.interview_attempts
@@ -688,6 +691,16 @@ export async function runInterviewWatchdog() {
         )
         or (
           coalesce(last_activity_at, started_at) < now() - (${STALE_ATTEMPT_THRESHOLD_SECONDS} * interval '1 second')
+        )
+        or (
+          -- A connection that keeps recovering just long enough to reset the
+          -- heartbeat clock never looks "stale" by last_activity_at alone.
+          -- Require the reconnect churn to be recent, not just cumulative,
+          -- so a session that had a rocky start but has since stabilized is
+          -- not force-closed.
+          coalesce(reconnect_count, 0) >= ${MAX_SESSION_RECONNECT_EVENTS}
+          and last_disconnect_at is not null
+          and last_disconnect_at > now() - interval '3 minutes'
         )
       )
     order by
@@ -835,7 +848,11 @@ export async function runInterviewWatchdog() {
     const terminationType =
       row.close_reason === "SESSION_TIME_EXPIRED" ? "timeout" : "watchdog_timeout";
     const disconnectReason =
-      row.close_reason === "SESSION_TIME_EXPIRED" ? "session_time_expired" : "heartbeat_timeout";
+      row.close_reason === "SESSION_TIME_EXPIRED"
+        ? "session_time_expired"
+        : row.close_reason === "EXCESSIVE_RECONNECTS"
+          ? "excessive_reconnects"
+          : "heartbeat_timeout";
 
     const updatedRows = await prisma.$transaction(async (tx: typeof prisma) => {
       const result = await tx.$executeRaw`

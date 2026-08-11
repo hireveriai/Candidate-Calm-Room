@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 
 import CalmLayout from "@/app/components/calm/core/CalmLayout";
@@ -157,6 +157,8 @@ const FINAL_VERIS_CLOSING_LINE =
   "Thank you for your time. Your interview is now complete.";
 const FINAL_COMPLETION_MESSAGE =
   "Thank you for your time. Your responses have been recorded. You may now close this window.";
+const SILENT_MICROPHONE_WARNING_MESSAGE =
+  "We can't detect any sound from your microphone. Please check that the correct microphone is selected in your browser or system audio settings, then try speaking again.";
 const PENDING_TERMINATION_STORAGE_KEY = "hireveri.pendingTermination";
 const PENDING_COMPLETION_STORAGE_KEY = "hireveri.pendingCompletion";
 const PENDING_RECOVERY_EVENT_STORAGE_KEY = "hireveri.pendingRecoveryEvent";
@@ -346,6 +348,26 @@ export default function Page() {
     message: "",
     visible: false,
   });
+
+  const handleSilentMicrophoneDetected = useCallback(() => {
+    // A track can be "granted" with no thrown error while still delivering
+    // silence (OS bound the permission to a muted or wrong input device).
+    // Without this, the candidate gets no indication anything is wrong
+    // until the interview times out with nothing recorded.
+    setWarning({
+      type: "hard",
+      message: SILENT_MICROPHONE_WARNING_MESSAGE,
+      visible: true,
+    });
+  }, []);
+
+  const handleMicrophoneAudioDetected = useCallback(() => {
+    setWarning((previous) =>
+      previous.message === SILENT_MICROPHONE_WARNING_MESSAGE
+        ? { ...previous, visible: false }
+        : previous
+    );
+  }, []);
 
   const [, setTabViolations] = useState(0);
   const [showCoding, setShowCoding] = useState(false);
@@ -3149,6 +3171,8 @@ export default function Page() {
               attemptId={attemptId}
               videoRef={videoRef}
               resetKey={videoReconnectKey}
+              onSilentMicrophoneDetected={handleSilentMicrophoneDetected}
+              onMicrophoneAudioDetected={handleMicrophoneAudioDetected}
             />
 
             <SystemIndicators
