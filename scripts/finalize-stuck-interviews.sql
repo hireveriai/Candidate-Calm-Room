@@ -129,14 +129,17 @@ closed_interviews as (
   )
 ),
 updated_interviews as (
-  -- status must mirror the real outcome (ABANDONED/TIME_EXPIRED), not a
-  -- hardcoded 'COMPLETED' -- the recruiter dashboard's status derivation
-  -- checks status === 'COMPLETED' before it ever looks at the attempt's
-  -- actual outcome, so a wrong value here hides genuine failures (no
-  -- recording, no score, no answers) behind a "Completed" badge.
+  -- status AND final_status must both mirror the real outcome
+  -- (ABANDONED/TIME_EXPIRED) and must always match each other. Never
+  -- hardcode status, and never COALESCE final_status against a stale prior
+  -- value (e.g. 'INTERRUPTED' left over from an earlier watchdog pass) --
+  -- that silently produces a status/final_status mismatch, which is exactly
+  -- what the recruiter dashboard's status badge reads first, hiding a
+  -- genuine failure (no recording, no score, no answers) behind whatever
+  -- stale label survives.
   update public.interviews i
   set status = ci.final_status,
-      final_status = coalesce(i.final_status, ci.final_status)
+      final_status = ci.final_status
   from closed_interviews ci
   where i.interview_id = ci.interview_id
   returning i.interview_id, i.status, i.final_status
