@@ -13,7 +13,18 @@ import {
 type Props = {
   videoRef: React.RefObject<HTMLVideoElement | null>;
   enabled?: boolean;
+  onFaceDetectionStalled?: () => void;
 };
+
+// face_detected and no_face both require faceDetectionReady, which is only
+// ever set from inside detect() below -- so if the video element never
+// reaches readyState 4 (e.g. a getUserMedia stream that resolves but never
+// actually delivers frames), detect() bails out every 2s forever and
+// faceDetectionReady never becomes true. That produces zero signals of any
+// kind for the whole interview, with no warning to the candidate -- the
+// same class of blind spot as a live-but-silent microphone track, just for
+// video. Face detection models load in well under this window normally.
+const FACE_DETECTION_STALL_MS = 20_000;
 
 let faceApiReadyPromise: Promise<typeof import("face-api.js")> | null = null;
 
@@ -35,6 +46,7 @@ function loadFaceApi() {
 export default function useCognitiveSignals({
   videoRef,
   enabled = false,
+  onFaceDetectionStalled,
 }: Props) {
   const [faceCount, setFaceCount] = useState(0);
   const [faceDetected, setFaceDetected] = useState(false);
@@ -182,6 +194,16 @@ export default function useCognitiveSignals({
     return () =>
       document.removeEventListener("visibilitychange", handleVisibilityChange);
   }, []);
+
+  useEffect(() => {
+    if (!enabled || faceDetectionReady) return undefined;
+
+    const timer = setTimeout(() => {
+      onFaceDetectionStalled?.();
+    }, FACE_DETECTION_STALL_MS);
+
+    return () => clearTimeout(timer);
+  }, [enabled, faceDetectionReady, onFaceDetectionStalled]);
 
   return {
     faceCount: enabled ? faceCount : 0,

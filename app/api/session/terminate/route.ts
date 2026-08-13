@@ -228,12 +228,38 @@ export async function POST(request: Request) {
     }
 
     await finalizeActiveRecordings(attemptId);
-    await validateAndRepairCompletionTranscripts(attemptId).catch((repairError: unknown) => {
-      logInterviewEvent("error", "interview.transcript_auto_repair_failed", {
+    const transcriptIntegrity = await validateAndRepairCompletionTranscripts(attemptId).catch(
+      (repairError: unknown) => {
+        logInterviewEvent("error", "interview.transcript_auto_repair_failed", {
+          attemptId,
+          prismaFailure: repairError,
+        });
+        return null;
+      }
+    );
+
+    // This path handles manual exits, tab closes, and other early
+    // terminations. Previously it discarded the transcript-integrity result
+    // and always finalized as a scored COMPLETED interview -- including
+    // cases with zero real answers (e.g. a total camera/mic capture
+    // failure), which showed recruiters a false "Completed" with no
+    // recording, no transcript, and no score behind it. Route those to the
+    // same pending-review state the watchdog already uses instead of
+    // silently finalizing as a success.
+    if (!canFinalizeWithTranscriptIntegrity(transcriptIntegrity)) {
+      await markInterviewCompletedPendingTranscriptReview({
         attemptId,
-        prismaFailure: repairError,
+        transcriptIntegrity,
       });
-    });
+      return Response.json({
+        completed: false,
+        early_exit: true,
+        completion_percentage: 0,
+        reliability_score: 0,
+        termination_type: terminationType,
+        status: "TRANSCRIPT_REVIEW_REQUIRED",
+      });
+    }
 
     const result = await finalizeInterviewAttempt({
       attemptId,

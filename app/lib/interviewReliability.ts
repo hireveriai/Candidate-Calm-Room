@@ -116,6 +116,21 @@ export function isAttemptStatusFinalized(value: string | null | undefined) {
   ].includes(normalized);
 }
 
+// "Finalized" only means the attempt's lifecycle has ended -- it does not
+// mean it ended successfully. ABANDONED/FAILED/EXPIRED/TIME_EXPIRED/
+// TERMINATED are all terminal, but none of them are a completed interview.
+// Code that decides whether it's safe to treat an already-finalized attempt
+// as "already completed, nothing more to do" must use this narrower check,
+// not isAttemptStatusFinalized -- otherwise a later call on a genuinely
+// abandoned attempt (a retry, a race, a background job) silently stamps the
+// parent interview as COMPLETED regardless of the real outcome.
+export function isAttemptStatusSuccessfullyFinalized(
+  value: string | null | undefined
+) {
+  const normalized = (value ?? "").trim().toUpperCase();
+  return normalized === "COMPLETED" || normalized === "FINALIZED";
+}
+
 export function canTransitionInterviewState(
   current: string | null | undefined,
   next: InterviewState

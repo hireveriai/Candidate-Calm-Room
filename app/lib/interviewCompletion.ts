@@ -5,6 +5,7 @@ import {
   assertUuid,
   canTransitionInterviewState,
   isAttemptStatusFinalized,
+  isAttemptStatusSuccessfullyFinalized,
   logInterviewEvent,
   normalizeInterviewState,
 } from "@/app/lib/interviewReliability";
@@ -865,6 +866,41 @@ export async function finalizeInterviewAttempt(params: {
     const existingMetadata = parseTerminationMetadata(
       lockedAttempt.termination_metadata
     );
+    const normalizedLockedStatus = (lockedAttempt.status ?? "").trim().toUpperCase();
+
+    if (
+      isAttemptStatusFinalized(lockedAttempt.status) &&
+      !isAttemptStatusSuccessfullyFinalized(lockedAttempt.status)
+    ) {
+      // This attempt already reached a genuine failure outcome (set by the
+      // watchdog, a prior terminate call, etc.). A later call here -- a
+      // retry, a race with a background job -- must never overwrite that
+      // with a false "completed" result just because the attempt is in
+      // *some* terminal state. Sync the parent interview to the real
+      // outcome instead of silently claiming success.
+      logInterviewEvent("warn", "interview.completion_skipped_already_failed", {
+        attemptId,
+        interviewId: lockedAttempt.interview_id,
+        orgId: lockedAttempt.organization_id,
+        candidateId: lockedAttempt.candidate_id,
+        state: lockedAttempt.status,
+        nextState: lockedAttempt.status,
+      });
+
+      await tx.$executeRaw`
+        update public.interviews
+        set status = ${normalizedLockedStatus}::text,
+            final_status = ${normalizedLockedStatus}::text
+        where interview_id = ${lockedAttempt.interview_id}::uuid
+          and (
+            status is distinct from ${normalizedLockedStatus}::text
+            or final_status is distinct from ${normalizedLockedStatus}::text
+          )
+      `;
+
+      return loadPersistedCompletionResult(tx, attemptId);
+    }
+
     const repairingLegacyFinalization =
       isAttemptStatusFinalized(lockedAttempt.status) &&
       (

@@ -16,6 +16,7 @@ import InterviewEntryGate from "@/components/interview/InterviewEntryGate";
 
 import WarningOverlay from "@/app/components/calm/system/WarningOverlay";
 import AmbientMic from "@/app/components/calm/system/AmbientMic";
+import BrowserDiagnosticsLogger from "@/app/components/calm/system/BrowserDiagnosticsLogger";
 import ReconnectOverlay from "./ReconnectOverlay";
 
 import {
@@ -159,6 +160,8 @@ const FINAL_COMPLETION_MESSAGE =
   "Thank you for your time. Your responses have been recorded. You may now close this window.";
 const SILENT_MICROPHONE_WARNING_MESSAGE =
   "We can't detect any sound from your microphone. Please check that the correct microphone is selected in your browser or system audio settings, then try speaking again.";
+const FACE_DETECTION_STALLED_WARNING_MESSAGE =
+  "We can't detect your camera feed. Please check that the correct camera is selected and not in use by another app, then refresh this page.";
 const PENDING_TERMINATION_STORAGE_KEY = "hireveri.pendingTermination";
 const PENDING_COMPLETION_STORAGE_KEY = "hireveri.pendingCompletion";
 const PENDING_RECOVERY_EVENT_STORAGE_KEY = "hireveri.pendingRecoveryEvent";
@@ -339,6 +342,32 @@ export default function Page() {
     useCognitiveSignals({
       videoRef,
       enabled: started && !isTransitioning,
+      onFaceDetectionStalled: () => {
+        // faceDetectionReady never became true -- the video element never
+        // reached a state face-api could read frames from, so neither
+        // face_detected nor no_face has fired at all for this candidate.
+        // Without this, a broken camera feed produces zero signal and zero
+        // warning, identical to the silent-microphone blind spot.
+        setWarning({
+          type: "hard",
+          message: FACE_DETECTION_STALLED_WARNING_MESSAGE,
+          visible: true,
+        });
+        if (attemptId) {
+          void fetch("/api/session/signal", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              attemptId,
+              type: "face_detection_stalled",
+              value: { severity: "high", source: "browser_face_detection_monitor" },
+            }),
+            keepalive: true,
+          }).catch(() => {
+            // Diagnostic reporting must never interrupt the interview.
+          });
+        }
+      },
     });
 
   const { events, addEvent } = useEventTimeline();
@@ -3173,6 +3202,10 @@ export default function Page() {
               resetKey={videoReconnectKey}
               onSilentMicrophoneDetected={handleSilentMicrophoneDetected}
               onMicrophoneAudioDetected={handleMicrophoneAudioDetected}
+            />
+            <BrowserDiagnosticsLogger
+              active={started && !interviewFinished}
+              attemptId={attemptId}
             />
 
             <SystemIndicators
