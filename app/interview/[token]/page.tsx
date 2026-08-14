@@ -7,6 +7,7 @@ import { useParams } from "next/navigation";
 import CalmLayout from "@/app/components/calm/core/CalmLayout";
 import CalmHeader from "@/app/components/calm/core/CalmHeader";
 import VideoPanel from "@/app/components/calm/core/VideoPanel";
+import type { VideoPanelHandle } from "@/app/components/calm/core/VideoPanel";
 import QuestionRenderer from "@/app/components/calm/core/QuestionRenderer";
 import SystemIndicators from "@/app/components/calm/core/SystemIndicators";
 import InterviewControls from "@/app/components/calm/core/InterviewControls";
@@ -20,7 +21,9 @@ import BrowserDiagnosticsLogger from "@/app/components/calm/system/BrowserDiagno
 import ReconnectOverlay from "./ReconnectOverlay";
 
 import {
-  primeSpeechSynthesis,
+  primeVerisAudio,
+  registerVerisAudioSink,
+  setVerisAttemptId,
   speak,
   startRecognition,
   stopRecognition,
@@ -330,6 +333,13 @@ export default function Page() {
   const audioStreamRef = useRef<MediaStream | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const audioAnimationFrameRef = useRef<number | null>(null);
+
+  // Shared with VideoPanel's recording mixer so VERIS's cloud TTS voice is
+  // captured directly in recordings, not just left to leak into the mic.
+  // Created/resumed synchronously inside the "Start Interview" gesture (see
+  // enterFullscreen below) so it stays unlocked on iOS Safari.
+  const verisAudioContextRef = useRef<AudioContext | null>(null);
+  const videoPanelRef = useRef<VideoPanelHandle>(null);
 
   const {
     faceCount,
@@ -1443,7 +1453,14 @@ export default function Page() {
     setInterviewFinished(false);
     // Preserve the candidate's tap as the browser audio activation gesture.
     // Awaiting fullscreen first causes mobile Safari/Chrome to suppress TTS.
-    primeSpeechSynthesis();
+    if (!verisAudioContextRef.current) {
+      const AudioContextCtor =
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext?: typeof AudioContext })
+          .webkitAudioContext;
+      verisAudioContextRef.current = AudioContextCtor ? new AudioContextCtor() : null;
+    }
+    primeVerisAudio(verisAudioContextRef.current);
     try {
       if (
         !document.fullscreenElement &&
@@ -1459,6 +1476,24 @@ export default function Page() {
     }
     setStarted(true);
   };
+
+  // Lets verisVoice.ts's speak() route VERIS's synthesized audio into
+  // VideoPanel's recording mixer, without verisVoice.ts needing to know
+  // about React refs or LiveKit.
+  useEffect(() => {
+    registerVerisAudioSink(async (bytes) => {
+      if (!videoPanelRef.current) {
+        throw new Error("VideoPanel is not mounted yet");
+      }
+      await videoPanelRef.current.playVerisAudio(bytes);
+    });
+
+    return () => registerVerisAudioSink(null);
+  }, []);
+
+  useEffect(() => {
+    setVerisAttemptId(attemptId || null);
+  }, [attemptId]);
 
   const endInterview = async ({
     completed = false,
@@ -3128,6 +3163,8 @@ export default function Page() {
         <main className="relative z-[1] mx-auto grid w-full max-w-[1440px] flex-1 grid-cols-1 gap-4 px-4 py-4 sm:px-6 lg:min-h-0 lg:grid-cols-[minmax(0,1.7fr)_minmax(340px,0.85fr)] lg:gap-5 lg:px-8 lg:py-5">
           <div className="flex min-w-0 flex-col justify-center">
             <VideoPanel
+              ref={videoPanelRef}
+              sharedAudioContext={verisAudioContextRef.current}
               attemptId={attemptId}
               candidateName={candidateName}
               timeLeft={timeLeft}

@@ -1,8 +1,25 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+} from "react";
 import { Room, Track } from "livekit-client";
 import type { RefObject } from "react";
+
+export type VideoPanelHandle = {
+  /**
+   * Plays VERIS's synthesized speech audibly to the candidate and, when the
+   * recording mixer is ready, fans the same buffer into the mixed
+   * mic+VERIS track that gets published to LiveKit and recorded locally -
+   * so recordings capture VERIS's voice directly instead of relying on it
+   * leaking acoustically into the candidate's microphone.
+   */
+  playVerisAudio: (bytes: ArrayBuffer) => Promise<void>;
+};
 
 type RecordingSignal = {
   id: string;
@@ -37,6 +54,13 @@ type Props = {
   onRoomConnectionChange?: (
     state: "connected" | "reconnecting" | "disconnected"
   ) => void;
+  /**
+   * An AudioContext created and resumed synchronously inside the candidate's
+   * "Start Interview" gesture (see app/interview/[token]/page.tsx). Reusing
+   * it here - rather than creating a fresh context after several awaited
+   * steps - is what keeps VERIS's audio reliably unlocked on iOS Safari.
+   */
+  sharedAudioContext?: AudioContext | null;
 };
 
 type StartRecordingResponse = {
@@ -320,23 +344,48 @@ async function uploadBrowserRecording(params: {
   }
 }
 
-export default function VideoPanel({
-  attemptId,
-  candidateName = "",
-  timeLeft,
-  reconnectKey = 0,
-  sessionQuestionId = "",
-  questionText = "",
-  transcript = "",
-  verisState = "idle",
-  recordingSignal = null,
-  onVideoReady,
-  onRecordingStarted,
-  onRecordingFinalizerChange,
-  onCameraStatusChange,
-  onMicrophoneStatusChange,
-  onRoomConnectionChange,
-}: Props) {
+// Fallback path when VERIS speaks before the recording mixer exists yet
+// (e.g. very early in the session). The candidate still hears VERIS; this
+// utterance just isn't captured in the recording.
+function playViaPlainElement(bytes: ArrayBuffer): Promise<void> {
+  const blobUrl = URL.createObjectURL(new Blob([bytes], { type: "audio/mpeg" }));
+  const el = new Audio(blobUrl);
+
+  return new Promise((resolve) => {
+    const cleanup = () => {
+      URL.revokeObjectURL(blobUrl);
+      resolve();
+    };
+    el.onended = cleanup;
+    el.onerror = cleanup;
+    el.play().catch((error) => {
+      console.warn("Plain VERIS audio playback failed.", error);
+      cleanup();
+    });
+  });
+}
+
+const VideoPanel = forwardRef<VideoPanelHandle, Props>(function VideoPanel(
+  {
+    attemptId,
+    candidateName = "",
+    timeLeft,
+    reconnectKey = 0,
+    sessionQuestionId = "",
+    questionText = "",
+    transcript = "",
+    verisState = "idle",
+    recordingSignal = null,
+    onVideoReady,
+    onRecordingStarted,
+    onRecordingFinalizerChange,
+    onCameraStatusChange,
+    onMicrophoneStatusChange,
+    onRoomConnectionChange,
+    sharedAudioContext = null,
+  }: Props,
+  ref
+) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const onVideoReadyRef = useRef(onVideoReady);
   const onRecordingStartedRef = useRef(onRecordingStarted);
@@ -348,6 +397,12 @@ export default function VideoPanel({
   const roomRef = useRef<Room | null>(null);
   const cameraStreamRef = useRef<MediaStream | null>(null);
   const stopRequestedRef = useRef(false);
+  // VERIS audio recording mixer: combines the candidate's mic with VERIS's
+  // synthesized speech into one track, so recordings capture VERIS directly
+  // instead of relying on it leaking into the mic acoustically.
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const micSourceNodeRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const mixDestinationRef = useRef<MediaStreamAudioDestinationNode | null>(null);
   const browserRecorderRef = useRef<MediaRecorder | null>(null);
   const browserRecordingChunksRef = useRef<Blob[]>([]);
   const browserRecordingMimeTypeRef = useRef<string | null>(null);
@@ -357,6 +412,64 @@ export default function VideoPanel({
   const recordingStartedNotifiedRef = useRef(false);
   const serverRecordingEgressIdRef = useRef<string | null>(null);
   const serverRecordingStartedRef = useRef(false);
+
+  const playVerisAudio = useCallback(
+    async (bytes: ArrayBuffer): Promise<void> => {
+      const ctx = audioContextRef.current ?? sharedAudioContext ?? null;
+
+      if (!ctx) {
+        await playViaPlainElement(bytes);
+        return;
+      }
+
+      if (ctx.state === "suspended") {
+        try {
+          await ctx.resume();
+        } catch {
+          // decodeAudioData/start below will surface a clearer failure if
+          // the context truly can't be used.
+        }
+      }
+
+      let audioBuffer: AudioBuffer;
+      try {
+        audioBuffer = await ctx.decodeAudioData(bytes.slice(0));
+      } catch (error) {
+        console.warn(
+          "Unable to decode VERIS audio; falling back to plain playback.",
+          error
+        );
+        await playViaPlainElement(bytes);
+        return;
+      }
+
+      const source = ctx.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(ctx.destination); // candidate hears VERIS live
+
+      if (mixDestinationRef.current) {
+        source.connect(mixDestinationRef.current); // captured in the recording
+      } else {
+        console.warn(
+          "VERIS audio mixer is not ready yet; this utterance will not be captured in the recording."
+        );
+      }
+
+      await new Promise<void>((resolve) => {
+        source.onended = () => resolve();
+        try {
+          source.start();
+        } catch (error) {
+          console.warn("Unable to start VERIS audio playback.", error);
+          resolve();
+        }
+      });
+    },
+    [sharedAudioContext]
+  );
+
+  useImperativeHandle(ref, () => ({ playVerisAudio }), [playVerisAudio]);
+
   const recordingContextRef = useRef({
     questionId: sessionQuestionId,
     questionText,
@@ -528,7 +641,53 @@ export default function VideoPanel({
       onRecordingStartedRef.current?.(Date.now());
     }
 
-    function ensureBrowserRecordingStarted(stream: MediaStream, safeAttemptId: string) {
+    // Combines the candidate's mic track with VERIS's synthesized speech
+    // (see playVerisAudio) into a single track. Reconnects hand this a fresh
+    // mic track, so the source node is rebuilt each call while the
+    // AudioContext and destination node (and therefore the mixed track's
+    // identity) are reused whenever possible.
+    function ensureAudioMixer(micTrack: MediaStreamTrack): MediaStreamTrack | null {
+      try {
+        let ctx = audioContextRef.current;
+        if (!ctx) {
+          const AudioContextCtor =
+            window.AudioContext ||
+            (window as unknown as { webkitAudioContext?: typeof AudioContext })
+              .webkitAudioContext;
+          ctx = sharedAudioContext ?? (AudioContextCtor ? new AudioContextCtor() : null);
+          audioContextRef.current = ctx;
+        }
+        if (!ctx) {
+          return null;
+        }
+        if (ctx.state === "suspended") {
+          void ctx.resume();
+        }
+
+        micSourceNodeRef.current?.disconnect();
+        const micSource = ctx.createMediaStreamSource(new MediaStream([micTrack]));
+        micSourceNodeRef.current = micSource;
+
+        if (!mixDestinationRef.current) {
+          mixDestinationRef.current = ctx.createMediaStreamDestination();
+        }
+        micSource.connect(mixDestinationRef.current);
+
+        const [mixedTrack] = mixDestinationRef.current.stream.getAudioTracks();
+        return mixedTrack ?? null;
+      } catch (error) {
+        console.warn(
+          "Unable to build VERIS audio mixer; publishing raw microphone only.",
+          error
+        );
+        return null;
+      }
+    }
+
+    function ensureBrowserRecordingStarted(
+      audioTrack: MediaStreamTrack,
+      safeAttemptId: string
+    ) {
       if (
         browserRecordingStartedRef.current ||
         browserRecorderRef.current ||
@@ -543,14 +702,12 @@ export default function VideoPanel({
         return;
       }
 
+      if (audioTrack.readyState !== "live") {
+        console.warn("Browser microphone safety recording cannot start without a live audio track.");
+        return;
+      }
+
       try {
-        const audioTrack = stream
-          .getAudioTracks()
-          .find((track) => track.readyState === "live" && track.enabled);
-        if (!audioTrack) {
-          console.warn("Browser microphone safety recording cannot start without a live audio track.");
-          return;
-        }
         const audioOnlyStream = new MediaStream([audioTrack]);
         const recorder = new MediaRecorder(audioOnlyStream, {
           mimeType,
@@ -585,8 +742,15 @@ export default function VideoPanel({
               return;
             }
 
+            const liveMicTrack = currentStream
+              .getAudioTracks()
+              .find((track) => track.readyState === "live" && track.enabled);
+            const restartTrack = liveMicTrack
+              ? ensureAudioMixer(liveMicTrack) ?? liveMicTrack
+              : undefined;
+
             void stopBrowserRecordingAndUpload({
-              restartStream: currentStream,
+              restartTrack,
               restartAttemptId: safeAttemptId,
             });
           }, BROWSER_RECORDING_SEGMENT_MS);
@@ -600,7 +764,7 @@ export default function VideoPanel({
     }
 
     async function stopBrowserRecordingAndUpload(options: {
-      restartStream?: MediaStream;
+      restartTrack?: MediaStreamTrack;
       restartAttemptId?: string;
       upload?: boolean;
     } = {}) {
@@ -628,9 +792,9 @@ export default function VideoPanel({
 
           // Restart before the network upload so no candidate speech is lost
           // while a segment is being persisted on slower mobile connections.
-          if (options.restartStream && isValidAttemptId(options.restartAttemptId)) {
+          if (options.restartTrack && isValidAttemptId(options.restartAttemptId)) {
             ensureBrowserRecordingStarted(
-              options.restartStream,
+              options.restartTrack,
               options.restartAttemptId,
             );
           }
@@ -818,7 +982,15 @@ export default function VideoPanel({
         }
 
         cameraStreamRef.current = stream;
-        ensureBrowserRecordingStarted(stream, safeAttemptId);
+
+        const [rawMicTrack] = stream.getAudioTracks();
+        const recordedAudioTrack = rawMicTrack
+          ? ensureAudioMixer(rawMicTrack) ?? rawMicTrack
+          : null;
+
+        if (recordedAudioTrack) {
+          ensureBrowserRecordingStarted(recordedAudioTrack, safeAttemptId);
+        }
 
         const [liveKitUrl, token] = await Promise.all([
           fetchLiveKitBrowserUrl(),
@@ -844,9 +1016,8 @@ export default function VideoPanel({
           source: Track.Source.Camera,
         });
 
-        const [audioTrack] = stream.getAudioTracks();
-        if (audioTrack) {
-          await room.localParticipant.publishTrack(audioTrack, {
+        if (recordedAudioTrack) {
+          await room.localParticipant.publishTrack(recordedAudioTrack, {
             source: Track.Source.Microphone,
           });
         } else {
@@ -913,8 +1084,19 @@ export default function VideoPanel({
       hasConnectedRoomRef.current = false;
       room.disconnect();
       roomRef.current = null;
+
+      micSourceNodeRef.current?.disconnect();
+      micSourceNodeRef.current = null;
+      mixDestinationRef.current?.disconnect();
+      mixDestinationRef.current = null;
+      // Never close an AudioContext owned by page.tsx - only one this
+      // component created itself when no sharedAudioContext was supplied.
+      if (!sharedAudioContext && audioContextRef.current) {
+        void audioContextRef.current.close().catch(() => {});
+      }
+      audioContextRef.current = null;
     };
-  }, [attemptId, reconnectKey]);
+  }, [attemptId, reconnectKey, sharedAudioContext]);
 
   return (
     <section className="overflow-hidden rounded-[20px] border border-white/[0.11] bg-[#0c121d] shadow-[0_24px_70px_rgba(0,0,0,0.3)]">
@@ -963,4 +1145,6 @@ export default function VideoPanel({
       </div>
     </section>
   );
-}
+});
+
+export default VideoPanel;
