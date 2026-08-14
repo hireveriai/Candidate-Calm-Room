@@ -210,7 +210,7 @@ export function speak(text: string): Promise<void> {
     const finish = () => {
       if (settled) return;
       settled = true;
-      window.clearTimeout(watchdog);
+      window.clearTimeout(fetchWatchdog);
       resolve();
     };
 
@@ -221,17 +221,21 @@ export function speak(text: string): Promise<void> {
       void speakWithBrowserSynthesis(text).finally(finish);
     };
 
-    const estimatedSpeechMs = Math.max(8_000, text.trim().split(/\s+/).length * 650);
-    // Shorter than the browser-synthesis watchdog above: this one only needs
-    // to cover the network round trip before handing off to that fallback,
-    // which has its own watchdog for the actual spoken duration.
-    const watchdog = window.setTimeout(() => {
-      console.warn("VERIS TTS stalled; falling back to browser speech synthesis.");
+    // Only guards the network request to /api/tts - NOT playback. Playback
+    // is awaited to natural completion below (source.onended / el.onended),
+    // which for a real question can easily take well past this many seconds
+    // on its own. Racing the whole call against one short timer made the
+    // browser-voice fallback fire *while the cloud voice was still
+    // legitimately speaking*, so both were audible at once.
+    const FETCH_TIMEOUT_MS = 10_000;
+    const fetchWatchdog = window.setTimeout(() => {
+      console.warn("VERIS TTS request stalled; falling back to browser speech synthesis.");
       runFallback();
-    }, Math.min(12_000, estimatedSpeechMs));
+    }, FETCH_TIMEOUT_MS);
 
     fetchVerisSpeechBytes(text, controller.signal)
       .then(async (bytes) => {
+        window.clearTimeout(fetchWatchdog);
         if (settled || fallbackStarted) return;
 
         try {
@@ -251,6 +255,7 @@ export function speak(text: string): Promise<void> {
         }
       })
       .catch((error) => {
+        window.clearTimeout(fetchWatchdog);
         if (settled || fallbackStarted) return;
         if (error instanceof DOMException && error.name === "AbortError") {
           // The watchdog already started the fallback for this call.
