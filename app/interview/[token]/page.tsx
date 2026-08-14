@@ -1634,7 +1634,7 @@ export default function Page() {
     return () => {
       document.removeEventListener("fullscreenchange", handleFullscreenChange);
     };
-  }, [started]);
+  }, [started, faceDetectionReady]);
 
   useEffect(() => {
     resetInactivityTimeout();
