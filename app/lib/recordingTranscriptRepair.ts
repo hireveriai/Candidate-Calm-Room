@@ -112,7 +112,29 @@ const MAX_REPAIR_AUDIO_SECONDS = 75 * 60;
 const MAX_REPAIR_FAILURES = 5;
 const TRANSCRIPTION_LEASE_MINUTES = 10;
 
-type RepairLeaseOutcome = "completed" | "failed" | "partial";
+/**
+ * `incomplete` means the run made real progress and stopped on its own time
+ * budget with work still to do. It is not a failure: it must not consume a
+ * retry or trigger backoff, or a long interview would exhaust
+ * MAX_REPAIR_FAILURES before it ever finished.
+ */
+type RepairLeaseOutcome = "completed" | "failed" | "partial" | "incomplete";
+
+/**
+ * How long one invocation may spend aligning and evaluating answers.
+ *
+ * The watchdog route caps at maxDuration = 300s and budgets 240s for its own
+ * loop. A segmented recording costs one OpenAI alignment call per question
+ * plus one evaluation call per recovered answer -- roughly twenty sequential
+ * round-trips on a 30-minute interview, which overran the limit and got the
+ * process killed mid-run. A killed process throws nothing, so the lease was
+ * never released and the same interview re-stuck on every pass.
+ *
+ * Staying inside this budget and persisting what is done makes the repair
+ * resumable: answers already recovered stop being pending, so each pass has
+ * strictly less to do than the last.
+ */
+const REPAIR_TIME_BUDGET_MS = 150_000;
 
 function normalizeText(value: unknown) {
   return String(value ?? "").replace(/\s+/g, " ").trim();
@@ -336,7 +358,9 @@ async function releaseRepairLease(params: {
   billedAudioSeconds?: number | null;
   error?: unknown;
 }) {
-  const failed = params.outcome !== "completed";
+  // `incomplete` is progress, not a fault: it leaves failure_count and the
+  // retry backoff untouched so the next pass can carry straight on.
+  const failed = params.outcome !== "completed" && params.outcome !== "incomplete";
   const errorMessage = params.error instanceof Error
     ? params.error.message.slice(0, 500)
     : params.error
@@ -1359,6 +1383,13 @@ async function runRepairPendingAnswersFromRecording(
 
   let alignmentUnavailable = false;
   const answersByOrder = new Map<number, string>();
+  // Questions this invocation actually reached. Anything past the time budget
+  // must not be recorded as "no usable answer", or an untouched question would
+  // look permanently examined.
+  const attemptedOrders = new Set<number>();
+  let budgetReached = false;
+  const repairDeadline = Date.now() + REPAIR_TIME_BUDGET_MS;
+  const outOfTime = () => Date.now() >= repairDeadline;
 
   if (usedAggregatedBrowserSegments) {
     // A single call asking the model for all 12 answers at once pressures it
@@ -1377,6 +1408,21 @@ async function runRepairPendingAnswersFromRecording(
       for (const question of questions) {
         const windowTranscript = windowTranscripts.get(Number(question.question_order));
         if (!windowTranscript) continue;
+
+        // One OpenAI round-trip per question. Stop while there is still time
+        // to persist what has been recovered; the next pass resumes with the
+        // questions that are still pending.
+        if (outOfTime()) {
+          budgetReached = true;
+          console.warn("Repair time budget reached during alignment; resuming next pass", {
+            attemptId,
+            alignedSoFar: answersByOrder.size,
+            remaining: questions.length - attemptedOrders.size,
+          });
+          break;
+        }
+
+        attemptedOrders.add(Number(question.question_order));
         try {
           const aligned = await alignAnswers(openai, [question], windowTranscript);
           const answer = normalizeText(aligned[0]?.answer);
@@ -1401,6 +1447,10 @@ async function runRepairPendingAnswersFromRecording(
     }
   } else {
     try {
+      // A single call covers every question here, so all of them are examined.
+      for (const question of questions) {
+        attemptedOrders.add(Number(question.question_order));
+      }
       const alignedAnswers = await alignAnswers(openai, questions, transcriptText);
       for (const aligned of alignedAnswers) {
         const order = Number(aligned.question_order);
@@ -1474,6 +1524,19 @@ async function runRepairPendingAnswersFromRecording(
     if (!isRecoveredAnswerMateriallyBetter(question.answer_text, answer)) {
       continue;
     }
+
+    // Another OpenAI round-trip each. The recovered answer text is worth more
+    // than its score, so when time runs out the answer is still persisted
+    // below and only its evaluation waits for the next pass.
+    if (outOfTime()) {
+      budgetReached = true;
+      console.warn("Repair time budget reached during evaluation; resuming next pass", {
+        attemptId,
+        evaluated: recoveredEvaluationsByOrder.size,
+      });
+      break;
+    }
+
     recoveredEvaluationsByOrder.set(
       Number(question.question_order),
       await evaluateRecoveredAnswer(question, answer)
@@ -1497,7 +1560,10 @@ async function runRepairPendingAnswersFromRecording(
           questionText: question.question,
         })
       ) {
-        if (!alignmentUnavailable) {
+        // Only questions this pass actually reached may be marked examined.
+        // Marking one the time budget cut off would retire it as hopeless
+        // without ever having looked at it.
+        if (!alignmentUnavailable && attemptedOrders.has(Number(question.question_order))) {
           await tx.$executeRaw`
             update public.interview_answers
             set answer_payload = ${mergePayload(question.answer_payload, {
@@ -1638,23 +1704,33 @@ async function runRepairPendingAnswersFromRecording(
     attemptId,
     token: leaseToken,
     recordingId: recording.recording_id,
-    outcome: alignmentUnavailable ? "partial" : "completed",
+    outcome: alignmentUnavailable
+      ? "partial"
+      : budgetReached
+        ? "incomplete"
+        : "completed",
     rawTranscriptPersisted: true,
     billedAudioSeconds,
     error: alignmentUnavailable
       ? "Answer alignment unavailable"
-      : selectedTranscript.failures.length > 0
-        ? `Recovered after source fallback: ${selectedTranscript.failures
-            .map((failure) => `${failure.recordingId}:${failure.reason}`)
-            .join("; ")
-            .slice(0, 420)}`
-        : null,
+      : budgetReached
+        ? "Repair time budget reached; remaining answers resume on the next pass"
+        : selectedTranscript.failures.length > 0
+          ? `Recovered after source fallback: ${selectedTranscript.failures
+              .map((failure) => `${failure.recordingId}:${failure.reason}`)
+              .join("; ")
+              .slice(0, 420)}`
+          : null,
   });
 
   return {
     repaired: repaired + codeRepair.repaired,
     recordingId: recording.recording_id,
-    ...(alignmentUnavailable ? { skipped: "recording_alignment_unavailable" } : {}),
+    ...(alignmentUnavailable
+      ? { skipped: "recording_alignment_unavailable" }
+      : budgetReached
+        ? { skipped: "repair_time_budget_reached" }
+        : {}),
   };
 }
 

@@ -616,7 +616,17 @@ export async function runInterviewWatchdog() {
           coalesce(
             nullif(termination_metadata #>> '{transcript_integrity,checkedAt}', '')::timestamptz,
             'epoch'::timestamptz
-          ) < now() - interval '1 hour'
+          ) < now() - (
+            case
+              -- A repair that stopped on its own time budget has work queued
+              -- and every pass leaves strictly less to do, so it resumes on
+              -- the next sweep instead of waiting out the full hour that
+              -- exists to stop fruitless repairs from cycling.
+              when termination_metadata #>> '{transcription_repair,status}' = 'incomplete'
+                then interval '2 minutes'
+              else interval '1 hour'
+            end
+          )
           and (
             upper(coalesce(transcript_status, 'PENDING')) in ('PENDING', 'PARTIAL', 'FAILED')
             or exists (
