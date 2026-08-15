@@ -45,7 +45,6 @@ type SpeechRecognitionWindow = Window &
 
 let recognition: VerisSpeechRecognition | null = null;
 let stopRequested = false;
-let speechSynthesisPrimed = false;
 
 type VerisAudioSink = (bytes: ArrayBuffer) => Promise<void>;
 
@@ -129,155 +128,82 @@ function playViaFallbackAudioElement(bytes: ArrayBuffer): Promise<void> {
   });
 }
 
+const TTS_ATTEMPTS = 2;
+const TTS_FETCH_TIMEOUT_MS = 10_000;
+
 /**
- * Last-resort path if OpenAI TTS is unreachable for this utterance: the
- * original browser-local speech synthesis behavior, kept intact so the
- * interview never goes silent just because the cloud voice is unavailable.
+ * Speaks `text` as VERIS in exactly one voice: the pinned cloud voice.
+ *
+ * Fetches "shimmer" from /api/tts and plays it through whichever sink is
+ * registered (VideoPanel's recording mixer if available, otherwise a plain
+ * <audio> element so the candidate still hears VERIS even before the mixer is
+ * ready). A stalled or failed request is retried once, because that is
+ * usually a cold start rather than a real outage.
+ *
+ * There used to be a window.speechSynthesis fallback here so the interview
+ * could never go silent. It picked a voice by language alone, with no gender
+ * preference, so it played whatever en-* voice the candidate's OS listed
+ * first -- frequently a male voice on Windows. One stalled TTS request was
+ * therefore enough to drop a second, different-sounding interviewer into the
+ * middle of a session, and into the recording.
+ *
+ * So if the pinned voice still cannot be played, this resolves without
+ * speaking rather than substituting another voice. Never reintroduce a
+ * non-/api/tts speech path here: the question is already rendered on screen
+ * (see QuestionRenderer), so silence costs the candidate far less than a
+ * second interviewer voice costs the recording.
  */
-function speakWithBrowserSynthesis(text: string): Promise<void> {
-  return new Promise((resolve) => {
-    if (!window.speechSynthesis) {
-      console.warn("TTS not supported");
-      resolve();
+export async function speak(text: string): Promise<void> {
+  for (let attempt = 1; attempt <= TTS_ATTEMPTS; attempt += 1) {
+    const controller = new AbortController();
+    // Guards only the network request, never playback. Playback is awaited to
+    // natural completion below, and for a real question that legitimately runs
+    // well past this timer.
+    const fetchWatchdog = window.setTimeout(() => controller.abort(), TTS_FETCH_TIMEOUT_MS);
+
+    try {
+      const bytes = await fetchVerisSpeechBytes(text, controller.signal);
+      window.clearTimeout(fetchWatchdog);
+
+      if (verisAudioSink) {
+        await verisAudioSink(bytes);
+      } else {
+        await playViaFallbackAudioElement(bytes);
+      }
+
+      return;
+    } catch (error) {
+      window.clearTimeout(fetchWatchdog);
+
+      if (attempt < TTS_ATTEMPTS) {
+        // A stalled request is usually a cold start or transient latency, not
+        // a real outage. Retrying keeps the candidate on the pinned voice
+        // instead of losing the audio for this question.
+        console.warn(`VERIS TTS attempt ${attempt} failed; retrying.`, error);
+        continue;
+      }
+
+      // Deliberately silent: speaking this question in some other voice is
+      // worse than not speaking it. The question stays on screen.
+      console.warn(
+        "VERIS could not play this question in its own voice; continuing without audio for it.",
+        error
+      );
       return;
     }
-
-    const utterance = new SpeechSynthesisUtterance(text);
-    const voices = window.speechSynthesis.getVoices();
-    const preferredVoice =
-      voices.find((voice) => /^en-IN$/i.test(voice.lang)) ??
-      voices.find((voice) => /^en-(US|GB)$/i.test(voice.lang)) ??
-      voices.find((voice) => /^en\b/i.test(voice.lang));
-    if (preferredVoice) {
-      utterance.voice = preferredVoice;
-      utterance.lang = preferredVoice.lang;
-    } else {
-      utterance.lang = "en-US";
-    }
-
-    utterance.rate = 1;
-    utterance.pitch = 1;
-    utterance.volume = 1;
-
-    let settled = false;
-    const finish = () => {
-      if (settled) return;
-      settled = true;
-      window.clearTimeout(watchdog);
-      resolve();
-    };
-    const estimatedSpeechMs = Math.max(8_000, text.trim().split(/\s+/).length * 650);
-    const watchdog = window.setTimeout(() => {
-      console.warn("Speech synthesis stalled; continuing the interview.");
-      window.speechSynthesis.cancel();
-      finish();
-    }, Math.min(30_000, estimatedSpeechMs));
-
-    utterance.onend = finish;
-    utterance.onerror = (event) => {
-      console.warn("Speech synthesis could not play the VERIS question.", {
-        error: event.error,
-        primed: speechSynthesisPrimed,
-        userAgent: navigator.userAgent,
-      });
-      finish();
-    };
-
-    window.speechSynthesis.cancel(); // prevent overlap
-    window.speechSynthesis.resume();
-    window.speechSynthesis.speak(utterance);
-  });
-}
-
-/**
- * Speaks `text` as VERIS using the pinned cloud voice. Signature is
- * intentionally identical to the old browser-only implementation so callers
- * never need to change.
- *
- * Order of preference: fetch the pinned "shimmer" voice from /api/tts, then
- * play it through whichever sink is registered (VideoPanel's recording
- * mixer if available, otherwise a plain <audio> element so the candidate
- * still hears VERIS even before the mixer is ready). If the fetch or
- * playback fails outright, fall back to the original browser
- * speechSynthesis behavior so the interview can never go silent.
- */
-export function speak(text: string): Promise<void> {
-  return new Promise((resolve) => {
-    let settled = false;
-    let fallbackStarted = false;
-    const controller = new AbortController();
-
-    const finish = () => {
-      if (settled) return;
-      settled = true;
-      window.clearTimeout(fetchWatchdog);
-      resolve();
-    };
-
-    const runFallback = () => {
-      if (fallbackStarted) return;
-      fallbackStarted = true;
-      controller.abort();
-      void speakWithBrowserSynthesis(text).finally(finish);
-    };
-
-    // Only guards the network request to /api/tts - NOT playback. Playback
-    // is awaited to natural completion below (source.onended / el.onended),
-    // which for a real question can easily take well past this many seconds
-    // on its own. Racing the whole call against one short timer made the
-    // browser-voice fallback fire *while the cloud voice was still
-    // legitimately speaking*, so both were audible at once.
-    const FETCH_TIMEOUT_MS = 10_000;
-    const fetchWatchdog = window.setTimeout(() => {
-      console.warn("VERIS TTS request stalled; falling back to browser speech synthesis.");
-      runFallback();
-    }, FETCH_TIMEOUT_MS);
-
-    fetchVerisSpeechBytes(text, controller.signal)
-      .then(async (bytes) => {
-        window.clearTimeout(fetchWatchdog);
-        if (settled || fallbackStarted) return;
-
-        try {
-          if (verisAudioSink) {
-            await verisAudioSink(bytes);
-          } else {
-            await playViaFallbackAudioElement(bytes);
-          }
-          finish();
-        } catch (playbackError) {
-          if (settled || fallbackStarted) return;
-          console.warn(
-            "VERIS audio playback failed; falling back to browser speech synthesis.",
-            playbackError
-          );
-          runFallback();
-        }
-      })
-      .catch((error) => {
-        window.clearTimeout(fetchWatchdog);
-        if (settled || fallbackStarted) return;
-        if (error instanceof DOMException && error.name === "AbortError") {
-          // The watchdog already started the fallback for this call.
-          return;
-        }
-        console.warn(
-          "VERIS TTS request failed; falling back to browser speech synthesis.",
-          error
-        );
-        runFallback();
-      });
-  });
+  }
 }
 
 /**
  * Mobile browsers require audio output to be unlocked directly inside a user
  * gesture. This must run before fullscreen or network awaits. Unlocks every
- * playback primitive VERIS might use this session: the shared AudioContext
- * (cloud TTS + recording mix, if provided), the fallback <audio> element
- * (cloud TTS when no mixer is registered yet), and window.speechSynthesis
- * (last-resort fallback if OpenAI TTS is unavailable for the whole
- * interview).
+ * playback primitive VERIS uses this session: the shared AudioContext (cloud
+ * TTS + recording mix, if provided) and the fallback <audio> element (cloud
+ * TTS when no mixer is registered yet).
+ *
+ * window.speechSynthesis is deliberately not unlocked here. VERIS no longer
+ * speaks through it, and priming it used to emit a short utterance in the
+ * device's own voice.
  */
 export function primeVerisAudio(sharedContext?: AudioContext | null): boolean {
   let unlocked = false;
@@ -285,25 +211,6 @@ export function primeVerisAudio(sharedContext?: AudioContext | null): boolean {
   if (sharedContext && sharedContext.state === "suspended") {
     void sharedContext.resume();
     unlocked = true;
-  }
-
-  if (
-    typeof window !== "undefined" &&
-    window.speechSynthesis &&
-    typeof SpeechSynthesisUtterance !== "undefined"
-  ) {
-    try {
-      window.speechSynthesis.cancel();
-      window.speechSynthesis.resume();
-      const unlock = new SpeechSynthesisUtterance(".");
-      unlock.volume = 0.01;
-      unlock.rate = 10;
-      window.speechSynthesis.speak(unlock);
-      speechSynthesisPrimed = true;
-      unlocked = true;
-    } catch (error) {
-      console.warn("Unable to unlock VERIS speech synthesis fallback.", error);
-    }
   }
 
   try {

@@ -190,27 +190,11 @@ export default function VerisRecordingView() {
     ? severityClass(context.signal.severity)
     : null;
 
-  useEffect(() => {
-    if (
-      context.verisState !== "speaking" ||
-      !context.questionText.trim() ||
-      !window.speechSynthesis
-    ) {
-      return;
-    }
-
-    const utterance = new SpeechSynthesisUtterance(context.questionText);
-    utterance.rate = 1;
-    utterance.pitch = 1;
-    utterance.volume = 1;
-
-    window.speechSynthesis.cancel();
-    window.speechSynthesis.speak(utterance);
-
-    return () => {
-      window.speechSynthesis.cancel();
-    };
-  }, [context.questionText, context.verisState]);
+  // This view deliberately does not speak. It used to read each question via
+  // window.speechSynthesis with no voice selected at all, so it played the
+  // device's default voice -- a second, different-sounding interviewer
+  // alongside VERIS's pinned cloud voice. VERIS speaks in one voice, sourced
+  // only from /api/tts (see app/services/verisVoice.ts).
 
   useEffect(() => {
     const searchParams = new URLSearchParams(window.location.search);
