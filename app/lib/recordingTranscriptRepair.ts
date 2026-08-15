@@ -1175,6 +1175,17 @@ async function runRepairPendingAnswersFromRecording(
 
   onLeaseClaimed(leaseToken);
 
+  // Every phase below is bounded by one shared deadline, because each of them
+  // can outlast the route on a long interview: transcribing N segments, then
+  // one alignment call per question, then one evaluation per recovered answer.
+  const repairDeadline = Date.now() + REPAIR_TIME_BUDGET_MS;
+  const outOfTime = () => Date.now() >= repairDeadline;
+  let budgetReached = false;
+  // Set when segment transcription stops early. The aggregated transcript is
+  // then only part of the interview, and aligning questions against it would
+  // attribute answers to the wrong time windows, so alignment waits.
+  let aggregationIncomplete = false;
+
   const openai = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY,
     timeout: 120_000,
@@ -1228,6 +1239,20 @@ async function runRepairPendingAnswersFromRecording(
     let billedSeconds = 0;
 
     for (const recording of browserSegments) {
+      // Each un-transcribed segment is a Whisper upload. Stopping here is
+      // cheap to resume: every segment transcript is persisted below as soon
+      // as it is produced, so the next pass reuses it instead of paying twice.
+      if (outOfTime()) {
+        budgetReached = true;
+        aggregationIncomplete = true;
+        console.warn("Repair time budget reached during segment transcription", {
+          attemptId,
+          transcribedThisPass: aggregateTexts.length,
+          totalSegments: browserSegments.length,
+        });
+        break;
+      }
+
       try {
         const persistedTranscript = normalizeText(recording.transcript);
         const reused = Boolean(
@@ -1387,11 +1412,14 @@ async function runRepairPendingAnswersFromRecording(
   // must not be recorded as "no usable answer", or an untouched question would
   // look permanently examined.
   const attemptedOrders = new Set<number>();
-  let budgetReached = false;
-  const repairDeadline = Date.now() + REPAIR_TIME_BUDGET_MS;
-  const outOfTime = () => Date.now() >= repairDeadline;
 
-  if (usedAggregatedBrowserSegments) {
+  if (aggregationIncomplete) {
+    // Only part of the interview has been transcribed this pass. Aligning now
+    // would map answers onto the wrong time windows, so the segment
+    // transcripts persisted above are this pass's contribution and alignment
+    // resumes once the full recording is transcribed.
+    console.warn("Skipping alignment until every segment is transcribed", { attemptId });
+  } else if (usedAggregatedBrowserSegments) {
     // A single call asking the model for all 12 answers at once pressures it
     // to compress each one to fit a short JSON response. Resolve each
     // question to only the segments that overlap its time window and align
