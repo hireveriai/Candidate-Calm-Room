@@ -1616,7 +1616,7 @@ export default function Page() {
   }, [inviteToken, started]);
 
   useEffect(() => {
-    if (!started || !faceDetectionReady) return;
+    if (!started) return;
 
     const handleFullscreenChange = () => {
       if (document.fullscreenElement) return;
@@ -1634,7 +1634,7 @@ export default function Page() {
     return () => {
       document.removeEventListener("fullscreenchange", handleFullscreenChange);
     };
-  }, [started, faceDetectionReady]);
+  }, [started]);
 
   useEffect(() => {
     resetInactivityTimeout();
