@@ -12,6 +12,9 @@ import QuestionRenderer from "@/app/components/calm/core/QuestionRenderer";
 import SystemIndicators from "@/app/components/calm/core/SystemIndicators";
 import InterviewControls from "@/app/components/calm/core/InterviewControls";
 import PrecheckScreen from "@/app/components/calm/flow/PrecheckScreen";
+import SessionClosedScreen, {
+  type EndedOutcome,
+} from "@/app/components/calm/flow/SessionClosedScreen";
 import ExitModal from "@/app/components/calm/flow/ExitModal";
 import InterviewEntryGate from "@/components/interview/InterviewEntryGate";
 
@@ -251,6 +254,15 @@ export default function Page() {
   );
   const [showExit, setShowExit] = useState(false);
   const [exitEnding, setExitEnding] = useState(false);
+  // Why the session ended, so the closing screen can say the right thing. A
+  // candidate who chose to finish should not be told their interview was
+  // interrupted and that a recovery may be issued.
+  const [endedOutcome, setEndedOutcome] = useState<EndedOutcome | null>(null);
+  // True while the closing screen is shown but termination and the recording
+  // upload are still finishing. VideoPanel must stay mounted for that window:
+  // its unmount clears the recording finalizer and drops the upload to
+  // fire-and-forget, which a candidate closing the tab would then cut short.
+  const [closingInFlight, setClosingInFlight] = useState(false);
 
   const [verisState, setVerisState] = useState<VerisState>("idle");
   const [currentQuestion, setCurrentQuestion] = useState("");
@@ -1146,6 +1158,7 @@ export default function Page() {
     }
 
     setInterviewInterrupted(true);
+    setEndedOutcome((current) => current ?? "interrupted");
     await endInterview({
       completed: false,
       message:
@@ -1580,13 +1593,33 @@ export default function Page() {
     setExitEnding(true);
     setShowExit(false);
 
-    // Persist the early-exit state before changing the UI. Previously the UI
-    // entered its completed state first, allowing the completed-page beacon to
-    // race /api/session/terminate and finalize a partial interview.
-    await terminateInterview("manual_exit", {
+    // Start persistence first: terminateInterview builds its payload
+    // synchronously from live state before its first await, so kicking it off
+    // here still captures the session exactly as it was at the tap.
+    //
+    // This deliberately does NOT set interviewFinished, so the completion
+    // beacon stays disarmed and cannot race /api/session/terminate into
+    // finalizing a partial interview as a complete one. That race is why this
+    // used to block the UI on the whole round-trip.
+    const termination = terminateInterview("manual_exit", {
       message:
         "Interview ended early. Your completed responses were saved and scored as a partial interview.",
     });
+
+    // Close the session on screen straight away. Waiting for the terminate
+    // request and the recording upload left the candidate staring at
+    // "Ending..." for 10-15 seconds after they had already left. The work
+    // continues behind the closing screen rather than in front of it.
+    setClosingInFlight(true);
+    setEndedOutcome("ended_by_candidate");
+    stopAll();
+    stopAudioAnalysis();
+
+    try {
+      await termination;
+    } finally {
+      setClosingInFlight(false);
+    }
   };
 
   useEffect(() => {
@@ -2588,10 +2621,17 @@ export default function Page() {
             });
 
             setTimeout(() => {
-              void terminateInterview("tab_close", {
+              const termination = terminateInterview("tab_close", {
                 message:
                   "Interview ended after repeated tab switches. A partial evaluation has been generated.",
               });
+              // This is an enforced ending, not a fault, so the closing screen
+              // must explain the rule rather than offer a recovery.
+              setClosingInFlight(true);
+              setEndedOutcome("ended_tab_switch");
+              stopAll();
+              stopAudioAnalysis();
+              void termination.finally(() => setClosingInFlight(false));
             }, 2000);
           } else {
             setWarning({
@@ -3104,22 +3144,8 @@ export default function Page() {
     );
   }
 
-  if (interviewInterrupted) {
-    return (
-      <div className="flex h-screen w-screen flex-col items-center justify-center bg-[#0B0F1A] px-6 text-white">
-        <div className="max-w-xl text-center">
-          <p className="mb-4 text-xs uppercase tracking-[0.28em] text-cyan-300/70">
-            Session Interrupted
-          </p>
-          <h1 className="mb-4 text-3xl font-medium tracking-[0.04em]">
-            Your interview was interrupted.
-          </h1>
-          <p className="text-sm leading-7 text-white/72 md:text-base">
-            A recovery attempt may be issued by recruiter.
-          </p>
-        </div>
-      </div>
-    );
+  if ((endedOutcome || interviewInterrupted) && !closingInFlight) {
+    return <SessionClosedScreen outcome={endedOutcome ?? "interrupted"} />;
   }
 
   if (!entryReady) {
@@ -3137,6 +3163,15 @@ export default function Page() {
 
   return (
     <>
+      {endedOutcome && (
+        // Shown the instant the session ends, while termination and the
+        // recording upload finish underneath. The interview tree stays mounted
+        // behind this so VideoPanel can complete the upload; it is replaced by
+        // the standalone closing screen once that work settles.
+        <div className="fixed inset-0 z-[100]">
+          <SessionClosedScreen outcome={endedOutcome} />
+        </div>
+      )}
       <CalmLayout>
         <CalmHeader />
 
