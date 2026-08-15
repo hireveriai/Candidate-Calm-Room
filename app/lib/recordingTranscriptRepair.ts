@@ -1042,9 +1042,55 @@ function skillWeightedScore(clarity: number, depth: number, confidence: number) 
   return clarity * 0.35 + depth * 0.45 + confidence * 0.2;
 }
 
+/**
+ * Releases a lease this process is still holding after an unexpected throw.
+ *
+ * The lease is only released at the explicit success and failure exits, so any
+ * error raised between claiming it and reaching one of those left the attempt
+ * pinned as `processing` until `locked_until` expired. Completion runs once, so
+ * an attempt whose repair crashed mid-run was never retried -- it simply
+ * finished as PARTIAL with the recoverable answers still missing.
+ */
+async function releaseCrashedRepairLease(attemptId: string, token: string, error: unknown) {
+  try {
+    await releaseRepairLease({
+      attemptId,
+      token,
+      recordingId: "",
+      outcome: "failed",
+      rawTranscriptPersisted: false,
+      error,
+    });
+  } catch (releaseError) {
+    console.error("Unable to release a crashed transcript repair lease", {
+      attemptId,
+      error: releaseError,
+    });
+  }
+}
+
 export async function repairPendingAnswersFromRecording(
   attemptId: string,
   options?: { force?: boolean }
+) {
+  let activeLeaseToken: string | null = null;
+
+  try {
+    return await runRepairPendingAnswersFromRecording(attemptId, options, (token) => {
+      activeLeaseToken = token;
+    });
+  } catch (error) {
+    if (activeLeaseToken) {
+      await releaseCrashedRepairLease(attemptId, activeLeaseToken, error);
+    }
+    throw error;
+  }
+}
+
+async function runRepairPendingAnswersFromRecording(
+  attemptId: string,
+  options: { force?: boolean } | undefined,
+  onLeaseClaimed: (token: string) => void
 ) {
   const codeRepair = await repairCodingAnswersFromSubmissions(attemptId);
 
@@ -1102,6 +1148,8 @@ export async function repairPendingAnswersFromRecording(
   if (!leaseToken) {
     return { repaired: codeRepair.repaired, skipped: "repair_already_running_or_backing_off" };
   }
+
+  onLeaseClaimed(leaseToken);
 
   const openai = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY,
