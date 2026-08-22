@@ -40,8 +40,8 @@ loadEnvFile(path.join(repoRoot, ".env"));
 loadEnvFile(path.join(repoRoot, ".env.local"));
 
 const reportPath = path.join(repoRoot, "production-validation-report.json");
-const defaultPort = Number(process.env.VERISNOVA_VALIDATION_PORT || 3114);
-const baseUrl = process.env.VERISNOVA_BASE_URL || `http://127.0.0.1:${defaultPort}`;
+const defaultPort = Number(process.env.HIREVERI_VALIDATION_PORT || 3114);
+const baseUrl = process.env.HIREVERI_BASE_URL || `http://127.0.0.1:${defaultPort}`;
 const logPath = path.join(repoRoot, `production-validation-${defaultPort}.log`);
 const seedPath = path.join(repoRoot, "codex-e2e-seed.json");
 
@@ -69,7 +69,7 @@ async function fetchJson(url, init) {
 }
 
 function runBuild() {
-  if (process.env.VERISNOVA_SKIP_BUILD === "1") {
+  if (process.env.HIREVERI_SKIP_BUILD === "1") {
     return;
   }
 
@@ -104,7 +104,7 @@ async function waitForHealth(url, timeoutMs = 120000) {
 }
 
 function startServer() {
-  if (process.env.VERISNOVA_SKIP_START === "1") {
+  if (process.env.HIREVERI_SKIP_START === "1") {
     return null;
   }
 

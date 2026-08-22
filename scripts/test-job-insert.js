@@ -23,7 +23,7 @@ for (const file of [".env", ".env.local"]) {
 const raw = process.env.DATABASE_URL.trim().replace(/^["']|["']$/g, "");
 const url = new URL(raw);
 if (
-  process.env.VERISNOVA_USE_DIRECT_DB === "1" &&
+  process.env.HIREVERI_USE_DIRECT_DB === "1" &&
   url.hostname.includes("pooler.supabase.com") &&
   url.username.startsWith("postgres.")
 ) {
