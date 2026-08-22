@@ -1,6 +1,10 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "nextjs",
+  "//regions": "Supabase runs in ap-south-1 (Mumbai). Without this, functions default to iad1 (Washington DC) and every query crosses the planet twice - measured at ~1.3s for a single DB-backed request versus ~0.24s for a static asset. bom1 colocates them.",
+  "regions": [
+    "bom1"
+  ],
   "crons": [
     {
       "path": "/api/interview/watchdog",
