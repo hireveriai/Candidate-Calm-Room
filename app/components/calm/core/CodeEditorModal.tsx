@@ -91,7 +91,7 @@ export default function CodeEditorModal({
 
     const handleCopy = () => {
       window.dispatchEvent(
-        new CustomEvent("hireveri-event", {
+        new CustomEvent("verisnova-event", {
           detail: { type: "coding_copy" },
         })
       );
@@ -99,7 +99,7 @@ export default function CodeEditorModal({
 
     const handlePaste = () => {
       window.dispatchEvent(
-        new CustomEvent("hireveri-event", {
+        new CustomEvent("verisnova-event", {
           detail: { type: "coding_paste" },
         })
       );
@@ -120,7 +120,7 @@ export default function CodeEditorModal({
 
     if (diff > 20) {
       window.dispatchEvent(
-        new CustomEvent("hireveri-event", {
+        new CustomEvent("verisnova-event", {
           detail: { type: "coding_paste" },
         })
       );

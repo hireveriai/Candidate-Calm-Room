@@ -7,7 +7,7 @@ const repoRoot = path.resolve(__dirname, "..");
 const reportPath = path.join(repoRoot, "FULL_INTERVIEW_STABILITY_REPORT.md");
 const jsonPath = path.join(repoRoot, "full-interview-stability-result.json");
 const progressPath = path.join(repoRoot, "full-interview-stability-progress.log");
-const defaultBaseUrl = process.env.HIREVERI_BASE_URL || "http://127.0.0.1:3116";
+const defaultBaseUrl = process.env.VERISNOVA_BASE_URL || "http://127.0.0.1:3116";
 
 function progress(message) {
   const line = `[${new Date().toISOString()}] ${message}`;
@@ -47,7 +47,7 @@ function buildPgConnectionConfig(rawConnectionString) {
 
   const url = new URL(raw);
   if (
-    process.env.HIREVERI_USE_DIRECT_DB === "1" &&
+    process.env.VERISNOVA_USE_DIRECT_DB === "1" &&
     url.hostname.includes("pooler.supabase.com") &&
     url.username.startsWith("postgres.")
   ) {
@@ -82,8 +82,8 @@ function buildPgConnectionConfig(rawConnectionString) {
     connectionString: url.toString(),
     ...(ssl === undefined ? {} : { ssl }),
     connectionTimeoutMillis: 10000,
-    query_timeout: Number(process.env.HIREVERI_DB_QUERY_TIMEOUT_MS || 30000),
-    statement_timeout: Number(process.env.HIREVERI_DB_STATEMENT_TIMEOUT_MS || 25000),
+    query_timeout: Number(process.env.VERISNOVA_DB_QUERY_TIMEOUT_MS || 30000),
+    statement_timeout: Number(process.env.VERISNOVA_DB_STATEMENT_TIMEOUT_MS || 25000),
   };
 }
 
@@ -198,7 +198,7 @@ function markdownList(items) {
 }
 
 async function seedDatabase(client) {
-  if (process.env.HIREVERI_CREATE_FRESH !== "1") {
+  if (process.env.VERISNOVA_CREATE_FRESH !== "1") {
     const existingSeedPath = path.join(repoRoot, "codex-e2e-seed.json");
     if (fs.existsSync(existingSeedPath)) {
       const existingSeed = JSON.parse(fs.readFileSync(existingSeedPath, "utf8"));

@@ -4,7 +4,7 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 export const metadata: Metadata = {
-  title: "Interview Session • HireVeri",
+  title: "Interview Session • VerisNova",
 };
 
 export default function InterviewLayout({

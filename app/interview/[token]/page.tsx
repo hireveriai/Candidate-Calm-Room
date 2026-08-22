@@ -168,10 +168,10 @@ const SILENT_MICROPHONE_WARNING_MESSAGE =
   "We can't detect any sound from your microphone. Please check that the correct microphone is selected in your browser or system audio settings, then try speaking again.";
 const FACE_DETECTION_STALLED_WARNING_MESSAGE =
   "We can't detect your camera feed. Please check that the correct camera is selected and not in use by another app, then refresh this page.";
-const PENDING_TERMINATION_STORAGE_KEY = "hireveri.pendingTermination";
-const PENDING_COMPLETION_STORAGE_KEY = "hireveri.pendingCompletion";
-const PENDING_RECOVERY_EVENT_STORAGE_KEY = "hireveri.pendingRecoveryEvent";
-const PENDING_RESUME_STORAGE_PREFIX = "hireveri.pendingInterviewResume.";
+const PENDING_TERMINATION_STORAGE_KEY = "verisnova.pendingTermination";
+const PENDING_COMPLETION_STORAGE_KEY = "verisnova.pendingCompletion";
+const PENDING_RECOVERY_EVENT_STORAGE_KEY = "verisnova.pendingRecoveryEvent";
+const PENDING_RESUME_STORAGE_PREFIX = "verisnova.pendingInterviewResume.";
 const SPEECH_AUDIO_CONSTRAINTS: MediaTrackConstraints = {
   echoCancellation: true,
   noiseSuppression: true,
@@ -475,8 +475,8 @@ export default function Page() {
     const firstName = extractFirstName(candidateName);
 
     document.title = firstName
-      ? `${firstName} • Interview Session | HireVeri`
-      : "Interview Session • HireVeri";
+      ? `${firstName} • Interview Session | VerisNova`
+      : "Interview Session • VerisNova";
   }, [candidateName, interviewFinished, started, verisState]);
 
   const persistPendingTermination = (payload: TerminationPayload) => {
@@ -2793,8 +2793,8 @@ export default function Page() {
       });
     };
 
-    window.addEventListener("hireveri-event", handler);
-    return () => window.removeEventListener("hireveri-event", handler);
+    window.addEventListener("verisnova-event", handler);
+    return () => window.removeEventListener("verisnova-event", handler);
   }, []);
 
   useEffect(() => {

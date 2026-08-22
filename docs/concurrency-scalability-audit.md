@@ -1,10 +1,10 @@
-# HireVeri Concurrency, Scalability, And Multi-Session Audit
+# VerisNova Concurrency, Scalability, And Multi-Session Audit
 
 Generated: 2026-05-21
 
 Scope reviewed:
-- Candidate calm room: `hireveri-calm`
-- Recruiter app and backend: `hireveri-recruiter`
+- Candidate calm room: `verisnova-calm`
+- Recruiter app and backend: `verisnova-recruiter`
 - Shared PostgreSQL/Supabase schema, Prisma, raw SQL, LiveKit recording/token paths
 
 This audit is a code and schema review with existing stability-test coverage inspection. I did not run 20/50/100 live candidate load tests in this pass because there is no already-running, production-like multi-service target with seeded credentials and LiveKit capacity exposed in the workspace.
@@ -31,7 +31,7 @@ Major risks before production launch:
 ### Critical: LiveKit publisher token is unauthenticated and room-forgeable
 
 Impacted file:
-- `hireveri-calm/app/api/livekit/token/route.ts`
+- `verisnova-calm/app/api/livekit/token/route.ts`
 
 Evidence:
 - The route accepts `room`, `userId`, and `role` from query params and mints a LiveKit publisher token directly.
@@ -50,14 +50,14 @@ Recommended fix:
 ### Critical: Calm room candidate APIs are bearerless after session start
 
 Impacted files:
-- `hireveri-calm/app/api/session/answer/route.ts`
-- `hireveri-calm/app/api/session/complete/route.ts`
-- `hireveri-calm/app/api/session/terminate/route.ts`
-- `hireveri-calm/app/api/session/signal/route.ts`
-- `hireveri-calm/app/api/interview/heartbeat/route.ts`
-- `hireveri-calm/app/api/interview/reconnect-state/route.ts`
-- `hireveri-calm/app/api/livekit/start-recording/route.ts`
-- `hireveri-calm/app/api/livekit/stop-recording/route.ts`
+- `verisnova-calm/app/api/session/answer/route.ts`
+- `verisnova-calm/app/api/session/complete/route.ts`
+- `verisnova-calm/app/api/session/terminate/route.ts`
+- `verisnova-calm/app/api/session/signal/route.ts`
+- `verisnova-calm/app/api/interview/heartbeat/route.ts`
+- `verisnova-calm/app/api/interview/reconnect-state/route.ts`
+- `verisnova-calm/app/api/livekit/start-recording/route.ts`
+- `verisnova-calm/app/api/livekit/stop-recording/route.ts`
 
 Evidence:
 - Endpoints primarily validate UUID shape and DB existence. `/api/session/answer` does verify `attemptId`, `candidateId`, and `questionId` against `sessionQuestionId`, which is good, but the route still has no signed session proof.
@@ -75,7 +75,7 @@ Recommended fix:
 ### High: Fallback session-start path has duplicate attempt race
 
 Impacted file:
-- `hireveri-calm/app/api/session/start/route.ts`
+- `verisnova-calm/app/api/session/start/route.ts`
 
 Evidence:
 - Preferred path calls `public.start_interview_session(token)`, whose migration uses `FOR UPDATE`.
@@ -95,7 +95,7 @@ Recommended fix:
 ### High: Answer save is select-then-insert instead of atomic upsert
 
 Impacted file:
-- `hireveri-calm/app/lib/calmAnswerPipeline.ts`
+- `verisnova-calm/app/lib/calmAnswerPipeline.ts`
 
 Evidence:
 - `ensureGeneratingAnswer()` first selects an existing answer by `session_question_id`, then inserts a new row if none exists.
@@ -112,9 +112,9 @@ Recommended fix:
 ### High: DB pool defaults cap throughput
 
 Impacted files:
-- `hireveri-calm/app/lib/prisma.ts`
-- `hireveri-recruiter/lib/server/prisma.ts`
-- `hireveri-recruiter/lib/server/pg.ts`
+- `verisnova-calm/app/lib/prisma.ts`
+- `verisnova-recruiter/lib/server/prisma.ts`
+- `verisnova-recruiter/lib/server/pg.ts`
 
 Evidence:
 - Calm room defaults `PG_POOL_MAX` to `1`.
@@ -135,7 +135,7 @@ Recommended fix:
 ### High: Finalization transaction performs multiple aggregate reads/writes under one row lock
 
 Impacted file:
-- `hireveri-calm/app/lib/interviewCompletion.ts`
+- `verisnova-calm/app/lib/interviewCompletion.ts`
 
 Evidence:
 - `finalizeInterviewAttempt()` locks the attempt row with `FOR UPDATE`, then performs aggregates, retry sleeps, and multiple writes inside one Prisma transaction.
@@ -154,8 +154,8 @@ Recommended fix:
 ### Medium: Recruiter middleware allows any bearer-looking token through to routes
 
 Impacted files:
-- `hireveri-recruiter/middleware.ts`
-- `hireveri-recruiter/lib/server/auth-context.ts`
+- `verisnova-recruiter/middleware.ts`
+- `verisnova-recruiter/lib/server/auth-context.ts`
 
 Evidence:
 - Middleware only checks that a bearer header or auth-looking cookie exists.
@@ -172,7 +172,7 @@ Recommended fix:
 ### Medium: Report cache is in-memory per server instance
 
 Impacted file:
-- `hireveri-recruiter/lib/server/services/reports.service.ts`
+- `verisnova-recruiter/lib/server/services/reports.service.ts`
 
 Evidence:
 - `reportsCache = new Map()` with 5-second TTL, keyed by organization.
@@ -188,9 +188,9 @@ Recommended fix:
 ### Medium: Application websocket layer is effectively absent
 
 Impacted areas:
-- `hireveri-calm/app/interview/[token]/page.tsx`
-- `hireveri-calm/app/components/calm/core/VideoPanel.tsx`
-- `hireveri-calm/app/api/session/signal/route.ts`
+- `verisnova-calm/app/interview/[token]/page.tsx`
+- `verisnova-calm/app/components/calm/core/VideoPanel.tsx`
+- `verisnova-calm/app/api/session/signal/route.ts`
 
 Evidence:
 - Webcam/audio streaming uses LiveKit.
@@ -206,7 +206,7 @@ Recommended fix:
 ### Medium: Client recovery/termination state uses shared localStorage keys
 
 Impacted file:
-- `hireveri-calm/app/interview/[token]/page.tsx`
+- `verisnova-calm/app/interview/[token]/page.tsx`
 
 Evidence:
 - Pending termination/completion/recovery payloads are stored in `window.localStorage`.
@@ -220,11 +220,11 @@ Recommended fix:
 ### Medium: Expensive report/dashboard queries need indexes
 
 Impacted files:
-- `hireveri-recruiter/lib/server/services/reports.service.ts`
-- `hireveri-recruiter/app/api/dashboard/*`
+- `verisnova-recruiter/lib/server/services/reports.service.ts`
+- `verisnova-recruiter/app/api/dashboard/*`
 - shared schema tables
 
-Recommended indexes are in `hireveri-calm/scripts/concurrency_hardening_indexes.sql`.
+Recommended indexes are in `verisnova-calm/scripts/concurrency_hardening_indexes.sql`.
 
 ### Positive Findings
 

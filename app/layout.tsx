@@ -4,7 +4,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Interview Room",
-  description: "HireVeri interview room",
+  description: "VerisNova interview room",
 };
 
 const GA_MEASUREMENT_ID = "G-N6GNKTH5LY";

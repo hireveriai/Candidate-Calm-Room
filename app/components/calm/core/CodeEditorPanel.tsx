@@ -60,7 +60,7 @@ export default function CodeEditorModal({ open, question, onClose }: Props) {
   useEffect(() => {
     const handlePaste = () => {
       window.dispatchEvent(
-        new CustomEvent("hireveri-event", {
+        new CustomEvent("verisnova-event", {
           detail: { type: "DIRECT_PASTE" },
         })
       );
@@ -83,7 +83,7 @@ export default function CodeEditorModal({ open, question, onClose }: Props) {
     // 🚨 LARGE INSERT (PASTE)
     if (diff > 20) {
       window.dispatchEvent(
-        new CustomEvent("hireveri-event", {
+        new CustomEvent("verisnova-event", {
           detail: { type: "CODE_PASTE" },
         })
       );
@@ -92,7 +92,7 @@ export default function CodeEditorModal({ open, question, onClose }: Props) {
     // 🚨 FAST INPUT
     if (diff > 10 && now - lastTypeTime.current < 100) {
       window.dispatchEvent(
-        new CustomEvent("hireveri-event", {
+        new CustomEvent("verisnova-event", {
           detail: { type: "FAST_TYPING" },
         })
       );

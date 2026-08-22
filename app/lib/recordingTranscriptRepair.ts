@@ -481,8 +481,8 @@ async function transcribeRecording(openai: OpenAI, filePath: string) {
   if (buffer.byteLength > MAX_TRANSCRIPTION_UPLOAD_BYTES) {
     const token = randomUUID();
     const sourceExtension = extname(filePath).split("?")[0] || ".webm";
-    const inputPath = join(tmpdir(), `hireveri-transcript-${token}${sourceExtension}`);
-    const outputPath = join(tmpdir(), `hireveri-transcript-${token}.mp3`);
+    const inputPath = join(tmpdir(), `verisnova-transcript-${token}${sourceExtension}`);
+    const outputPath = join(tmpdir(), `verisnova-transcript-${token}.mp3`);
 
     try {
       await fs.writeFile(inputPath, buffer);
@@ -585,7 +585,7 @@ async function transcribeQuestionWindow(
 ) {
   const outputPath = join(
     tmpdir(),
-    `hireveri-question-window-${randomUUID()}.mp3`
+    `verisnova-question-window-${randomUUID()}.mp3`
   );
 
   try {
@@ -668,7 +668,7 @@ async function recoverAnswersFromQuestionWindows(params: {
     extname(params.recording.file_path).split("?")[0] || ".webm";
   const sourcePath = join(
     tmpdir(),
-    `hireveri-window-source-${randomUUID()}${sourceExtension}`
+    `verisnova-window-source-${randomUUID()}${sourceExtension}`
   );
   await fs.writeFile(sourcePath, sourceBuffer);
 
