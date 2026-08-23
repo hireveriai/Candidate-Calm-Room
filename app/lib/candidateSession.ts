@@ -39,18 +39,49 @@ function base64UrlDecode(value: string) {
   return Buffer.from(normalized, "base64").toString("utf8");
 }
 
-function getCandidateSessionSecret() {
-  const secret =
-    process.env.CANDIDATE_SESSION_SECRET ||
-    process.env.JWT_SECRET ||
-    process.env.NEXTAUTH_SECRET ||
-    process.env.LIVEKIT_API_SECRET;
+let warnedAboutSecretSource = false;
 
-  if (!secret) {
+/**
+ * Resolution order is unchanged - reordering it would re-sign tokens with a
+ * different key and invalidate every live candidate session.
+ *
+ * The fallback chain is silently environment-dependent, which has already
+ * caused an outage: the old deployment had no JWT_SECRET and so signed with
+ * LIVEKIT_API_SECRET, while the new one defines JWT_SECRET and signs with
+ * that. Same code, same candidate, different key - sessions minted by one
+ * fail verification on the other, and the symptom is oblique (the question
+ * renders, but TTS 401s and the interview is silent).
+ *
+ * Set CANDIDATE_SESSION_SECRET explicitly so the key never depends on which
+ * other variable happens to exist. Until then, log which source was used.
+ */
+function getCandidateSessionSecret() {
+  const sources: ReadonlyArray<readonly [string, string | undefined]> = [
+    ["CANDIDATE_SESSION_SECRET", process.env.CANDIDATE_SESSION_SECRET],
+    ["JWT_SECRET", process.env.JWT_SECRET],
+    ["NEXTAUTH_SECRET", process.env.NEXTAUTH_SECRET],
+    ["LIVEKIT_API_SECRET", process.env.LIVEKIT_API_SECRET],
+  ];
+
+  const resolved = sources.find(([, value]) => Boolean(value));
+
+  if (!resolved) {
     throw new Error("CANDIDATE_SESSION_SECRET is required for candidate session security");
   }
 
-  return secret;
+  const [name, secret] = resolved;
+
+  if (name !== "CANDIDATE_SESSION_SECRET" && !warnedAboutSecretSource) {
+    warnedAboutSecretSource = true;
+    console.warn(
+      `[candidateSession] CANDIDATE_SESSION_SECRET is not set; signing candidate ` +
+        `sessions with ${name} instead. Adding or removing that variable silently ` +
+        `rotates the key and invalidates existing sessions. Set ` +
+        `CANDIDATE_SESSION_SECRET explicitly.`
+    );
+  }
+
+  return secret as string;
 }
 
 function signPayload(payload: string) {
