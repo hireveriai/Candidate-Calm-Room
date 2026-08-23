@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Camera } from "lucide-react";
 
 import {
   classifyMediaError,
@@ -223,18 +224,33 @@ export default function DeviceCheck({
   const failureCopy = describeFailure(failure);
   const meterWidth = Math.min(100, Math.round((level / 0.15) * 100));
 
+  const previewLive = phase === "verifying" || phase === "passed";
+
   return (
-    <div className="w-full max-w-md rounded-2xl border border-white/10 bg-white/[0.03] p-5">
+    <div className="w-full">
       <video
         ref={videoRef}
         muted
         playsInline
         autoPlay
-        className={`mb-4 w-full rounded-xl bg-black/60 ${
-          phase === "verifying" || phase === "passed" ? "block" : "hidden"
+        className={`mb-5 w-full rounded-2xl border border-slate-200 bg-slate-100 shadow-sm ${
+          previewLive ? "block" : "hidden"
         }`}
         style={{ aspectRatio: "4 / 3", objectFit: "cover", transform: "scaleX(-1)" }}
       />
+      {!previewLive && (
+        <div
+          className="mb-5 flex w-full flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-slate-200 bg-slate-50 text-slate-400"
+          style={{ aspectRatio: "4 / 3" }}
+        >
+          <span className="flex h-12 w-12 items-center justify-center rounded-xl border border-slate-200 bg-white text-cyan-600 shadow-sm">
+            <Camera className="h-6 w-6" strokeWidth={1.75} />
+          </span>
+          <p className="px-6 text-center text-xs leading-5 text-slate-400">
+            Your camera preview appears here once the check begins.
+          </p>
+        </div>
+      )}
       <canvas
         ref={canvasRef}
         width={SAMPLE_WIDTH}
@@ -244,13 +260,13 @@ export default function DeviceCheck({
 
       {phase === "idle" && (
         <>
-          <p className="mb-4 text-sm leading-6 text-white/70">
+          <p className="mb-5 text-sm leading-6 text-slate-500">
             We need to confirm your camera and microphone are working before you
             begin. This does not use up your interview attempt.
           </p>
           <button
             onClick={startCheck}
-            className="w-full rounded-lg bg-cyan-500 px-6 py-3 font-medium text-black transition-colors hover:bg-cyan-400"
+            className="w-full rounded-xl bg-gradient-to-r from-cyan-500 to-teal-500 px-6 py-3.5 text-sm font-semibold text-white shadow-[0_18px_40px_-22px_rgba(8,145,178,0.95)] transition hover:from-cyan-600 hover:to-teal-600 sm:text-base"
           >
             Check camera &amp; microphone
           </button>
@@ -258,7 +274,7 @@ export default function DeviceCheck({
       )}
 
       {phase === "requesting" && (
-        <p className="text-sm text-white/70">
+        <p className="text-sm leading-6 text-slate-500">
           Waiting for you to allow camera and microphone access&hellip;
         </p>
       )}
@@ -273,16 +289,16 @@ export default function DeviceCheck({
           />
 
           {!micOk && (
-            <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+            <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
               <div
-                className="h-full rounded-full bg-cyan-400 transition-[width] duration-100"
+                className="h-full rounded-full bg-gradient-to-r from-cyan-500 to-teal-500 transition-[width] duration-100"
                 style={{ width: `${meterWidth}%` }}
               />
             </div>
           )}
 
           {phase === "passed" && (
-            <p className="pt-1 text-sm text-emerald-300">
+            <p className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-700">
               Camera and microphone confirmed. You can begin.
             </p>
           )}
@@ -291,15 +307,15 @@ export default function DeviceCheck({
 
       {phase === "failed" && (
         <div className="space-y-3">
-          <p className="text-sm font-medium text-amber-300">{failureCopy.title}</p>
-          <p className="text-sm leading-6 text-white/70">{failureCopy.instruction}</p>
-          <p className="text-xs text-white/45">
+          <p className="text-sm font-semibold text-amber-700">{failureCopy.title}</p>
+          <p className="text-sm leading-6 text-slate-600">{failureCopy.instruction}</p>
+          <p className="text-xs leading-5 text-slate-400">
             Your interview attempt has not been used. You can fix this and run the
             check again on this same link.
           </p>
           <button
             onClick={startCheck}
-            className="w-full rounded-lg border border-white/20 px-6 py-3 font-medium text-white transition-colors hover:bg-white/10"
+            className="w-full rounded-xl border border-slate-300 px-6 py-3 text-sm font-semibold text-slate-800 transition-colors hover:border-slate-400 hover:bg-slate-50 sm:text-base"
           >
             Run the check again
           </button>
@@ -319,9 +335,18 @@ function StatusRow({
   pendingText: string;
 }) {
   return (
-    <div className="flex items-center justify-between text-sm">
-      <span className="text-white/80">{label}</span>
-      <span className={ok ? "text-emerald-300" : "text-white/50"}>
+    <div className="flex items-center justify-between gap-4 rounded-xl border border-slate-200 bg-slate-50/70 px-4 py-3 text-sm">
+      <span className="font-medium text-slate-700">{label}</span>
+      <span
+        className={
+          ok
+            ? "inline-flex items-center gap-1.5 font-semibold text-emerald-600"
+            : "text-right text-slate-400"
+        }
+      >
+        {ok && (
+          <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" aria-hidden />
+        )}
         {ok ? "Working" : pendingText}
       </span>
     </div>
