@@ -112,54 +112,54 @@ export default function InterviewEntryGate({ token, onReadyForPrecheck }: Props)
 
   return (
     <>
-      <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-white px-5 py-12 text-slate-900 sm:px-6">
+      <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-gradient-to-b from-sky-50 via-white to-cyan-50/70 px-4 py-6 text-slate-900 sm:px-6">
         <div
           aria-hidden
-          className="pointer-events-none absolute inset-0 bg-[radial-gradient(90rem_45rem_at_50%_-20%,rgba(6,182,212,0.10),transparent_60%),radial-gradient(60rem_35rem_at_100%_110%,rgba(15,23,42,0.06),transparent_65%)]"
+          className="pointer-events-none absolute inset-0 bg-[radial-gradient(70rem_35rem_at_50%_-15%,rgba(14,165,233,0.16),transparent_60%),radial-gradient(55rem_30rem_at_100%_110%,rgba(20,184,166,0.14),transparent_65%)]"
         />
 
-        <section className="relative w-full max-w-3xl rounded-[28px] border border-slate-200/80 bg-white/95 p-8 shadow-[0_30px_80px_-40px_rgba(15,23,42,0.45)] backdrop-blur-sm sm:p-12">
+        <section className="relative w-full max-w-3xl rounded-[24px] border border-sky-100 bg-white/90 p-6 shadow-[0_24px_60px_-32px_rgba(12,74,110,0.45)] ring-1 ring-white/70 backdrop-blur-sm sm:p-9">
           <div className="flex flex-col items-center text-center">
-            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-cyan-500 to-teal-500 text-white shadow-[0_12px_30px_-12px_rgba(8,145,178,0.85)]">
-              <ShieldCheck className="h-7 w-7" strokeWidth={1.75} />
+            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-sky-500 to-teal-500 text-white shadow-[0_12px_26px_-12px_rgba(14,165,233,0.95)]">
+              <ShieldCheck className="h-6 w-6" strokeWidth={1.75} />
             </div>
 
-            <p className="mt-7 text-[11px] font-semibold uppercase tracking-[0.32em] text-cyan-700">
+            <p className="mt-4 text-[10px] font-semibold uppercase tracking-[0.32em] text-sky-700">
               Secure interview access
             </p>
 
-            <h1 className="mt-4 text-3xl font-semibold tracking-tight text-slate-900 sm:text-4xl">
+            <h1 className="mt-2 text-2xl font-semibold tracking-tight text-slate-900 sm:text-[32px]">
               Ready to start your interview?
             </h1>
 
-            <p className="mt-4 max-w-lg text-sm leading-7 text-slate-500 sm:text-base">
+            <p className="mt-2 max-w-lg text-sm leading-6 text-slate-500">
               We&rsquo;ll confirm your interview context, then guide you through a
               brief device precheck.
             </p>
           </div>
 
-          <div className="mt-10 grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2">
             {ASSURANCES.map(({ icon: Icon, title, body }) => (
               <div
                 key={title}
-                className="flex h-full items-start gap-4 rounded-2xl border border-slate-200 bg-slate-50/70 p-5 transition-colors hover:border-cyan-200 hover:bg-cyan-50/50"
+                className="flex h-full items-start gap-3 rounded-2xl border border-sky-100 bg-gradient-to-br from-sky-50 to-cyan-50/60 p-4 shadow-[0_10px_24px_-20px_rgba(12,74,110,0.7)] transition hover:border-sky-200 hover:from-sky-100/80 hover:to-cyan-100/60"
               >
-                <span className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-cyan-100 bg-white text-cyan-600 shadow-sm">
-                  <Icon className="h-5 w-5" strokeWidth={1.75} />
+                <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white text-sky-600 shadow-sm ring-1 ring-sky-100">
+                  <Icon className="h-[18px] w-[18px]" strokeWidth={1.75} />
                 </span>
                 <div className="text-left">
                   <p className="text-sm font-semibold text-slate-900">{title}</p>
-                  <p className="mt-1 text-[13px] leading-6 text-slate-500">{body}</p>
+                  <p className="mt-0.5 text-[13px] leading-5 text-slate-500">{body}</p>
                 </div>
               </div>
             ))}
           </div>
 
-          <div className="mt-10 flex flex-col items-center">
+          <div className="mt-6 flex flex-col items-center">
             <button
               onClick={start}
               disabled={loading || !token}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-slate-900 px-7 py-3.5 text-sm font-semibold text-white shadow-[0_18px_40px_-20px_rgba(15,23,42,0.9)] transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-45 sm:w-auto sm:text-base"
+              className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-sky-600 to-teal-600 px-7 py-3 text-sm font-semibold text-white shadow-[0_16px_34px_-18px_rgba(2,132,199,0.95)] transition hover:from-sky-700 hover:to-teal-700 disabled:cursor-not-allowed disabled:opacity-45 sm:w-auto sm:text-base"
             >
               {loading ? (
                 <LoaderCircle className="h-4 w-4 animate-spin" />
@@ -170,7 +170,7 @@ export default function InterviewEntryGate({ token, onReadyForPrecheck }: Props)
             </button>
 
             {error && (
-              <p className="mt-5 w-full rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-center text-sm leading-6 text-rose-700">
+              <p className="mt-4 w-full rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-center text-sm leading-6 text-rose-700">
                 {error}
               </p>
             )}

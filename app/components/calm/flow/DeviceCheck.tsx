@@ -233,18 +233,15 @@ export default function DeviceCheck({
         muted
         playsInline
         autoPlay
-        className={`mb-5 w-full rounded-2xl border border-slate-200 bg-slate-100 shadow-sm ${
+        className={`mb-4 h-[clamp(150px,30vh,280px)] w-full rounded-2xl border border-sky-100 bg-sky-50 shadow-sm ${
           previewLive ? "block" : "hidden"
         }`}
-        style={{ aspectRatio: "4 / 3", objectFit: "cover", transform: "scaleX(-1)" }}
+        style={{ objectFit: "cover", transform: "scaleX(-1)" }}
       />
       {!previewLive && (
-        <div
-          className="mb-5 flex w-full flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-slate-200 bg-slate-50 text-slate-400"
-          style={{ aspectRatio: "4 / 3" }}
-        >
-          <span className="flex h-12 w-12 items-center justify-center rounded-xl border border-slate-200 bg-white text-cyan-600 shadow-sm">
-            <Camera className="h-6 w-6" strokeWidth={1.75} />
+        <div className="mb-4 flex h-[clamp(150px,30vh,280px)] w-full flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-sky-200 bg-gradient-to-br from-sky-50 to-cyan-50/60 text-slate-400">
+          <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-white text-sky-600 shadow-sm ring-1 ring-sky-100">
+            <Camera className="h-5 w-5" strokeWidth={1.75} />
           </span>
           <p className="px-6 text-center text-xs leading-5 text-slate-400">
             Your camera preview appears here once the check begins.
@@ -260,13 +257,13 @@ export default function DeviceCheck({
 
       {phase === "idle" && (
         <>
-          <p className="mb-5 text-sm leading-6 text-slate-500">
+          <p className="mb-4 text-sm leading-6 text-slate-500">
             We need to confirm your camera and microphone are working before you
             begin. This does not use up your interview attempt.
           </p>
           <button
             onClick={startCheck}
-            className="w-full rounded-xl bg-gradient-to-r from-cyan-500 to-teal-500 px-6 py-3.5 text-sm font-semibold text-white shadow-[0_18px_40px_-22px_rgba(8,145,178,0.95)] transition hover:from-cyan-600 hover:to-teal-600 sm:text-base"
+            className="w-full rounded-xl bg-gradient-to-r from-sky-600 to-teal-600 px-6 py-3 text-sm font-semibold text-white shadow-[0_16px_34px_-18px_rgba(2,132,199,0.95)] transition hover:from-sky-700 hover:to-teal-700 sm:text-base"
           >
             Check camera &amp; microphone
           </button>
@@ -280,7 +277,7 @@ export default function DeviceCheck({
       )}
 
       {(phase === "verifying" || phase === "passed") && (
-        <div className="space-y-3">
+        <div className="space-y-2.5">
           <StatusRow label="Camera" ok={cameraOk} pendingText="Looking for a picture&hellip;" />
           <StatusRow
             label="Microphone"
@@ -289,16 +286,16 @@ export default function DeviceCheck({
           />
 
           {!micOk && (
-            <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+            <div className="h-1.5 w-full overflow-hidden rounded-full bg-sky-100">
               <div
-                className="h-full rounded-full bg-gradient-to-r from-cyan-500 to-teal-500 transition-[width] duration-100"
+                className="h-full rounded-full bg-gradient-to-r from-sky-500 to-teal-500 transition-[width] duration-100"
                 style={{ width: `${meterWidth}%` }}
               />
             </div>
           )}
 
           {phase === "passed" && (
-            <p className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-700">
+            <p className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm font-medium text-emerald-700">
               Camera and microphone confirmed. You can begin.
             </p>
           )}
@@ -335,7 +332,7 @@ function StatusRow({
   pendingText: string;
 }) {
   return (
-    <div className="flex items-center justify-between gap-4 rounded-xl border border-slate-200 bg-slate-50/70 px-4 py-3 text-sm">
+    <div className="flex items-center justify-between gap-4 rounded-xl border border-sky-100 bg-gradient-to-r from-sky-50 to-cyan-50/60 px-4 py-2.5 text-sm">
       <span className="font-medium text-slate-700">{label}</span>
       <span
         className={
