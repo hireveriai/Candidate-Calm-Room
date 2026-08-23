@@ -228,16 +228,22 @@ export default function DeviceCheck({
 
   return (
     <div className="w-full">
-      <video
-        ref={videoRef}
-        muted
-        playsInline
-        autoPlay
-        className={`mb-4 h-[clamp(150px,30vh,280px)] w-full rounded-2xl border border-sky-100 bg-sky-50 shadow-sm ${
+      {/* Letterboxed rather than cropped: the candidate needs to see the whole
+          frame the interview will record, not a centre slice of it. */}
+      <div
+        className={`mb-4 h-[clamp(150px,30vh,280px)] w-full overflow-hidden rounded-2xl border border-sky-100 bg-slate-900/90 shadow-sm ${
           previewLive ? "block" : "hidden"
         }`}
-        style={{ objectFit: "cover", transform: "scaleX(-1)" }}
-      />
+      >
+        <video
+          ref={videoRef}
+          muted
+          playsInline
+          autoPlay
+          className="h-full w-full"
+          style={{ objectFit: "contain", transform: "scaleX(-1)" }}
+        />
+      </div>
       {!previewLive && (
         <div className="mb-4 flex h-[clamp(150px,30vh,280px)] w-full flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-sky-200 bg-gradient-to-br from-sky-50 to-cyan-50/60 text-slate-400">
           <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-white text-sky-600 shadow-sm ring-1 ring-sky-100">
