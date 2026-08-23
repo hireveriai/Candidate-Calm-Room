@@ -52,13 +52,13 @@ export default function PrecheckScreen({
   };
 
   return (
-    <div className="relative min-h-screen w-full bg-gradient-to-b from-sky-50 via-white to-cyan-50/70 px-4 py-6 text-slate-900 sm:px-6 lg:h-screen lg:overflow-hidden lg:py-8">
+    <div className="relative min-h-screen w-full bg-gradient-to-b from-sky-50 via-white to-cyan-50/70 px-4 py-6 text-slate-900 sm:px-6 lg:py-8">
       <div
         aria-hidden
         className="pointer-events-none absolute inset-0 bg-[radial-gradient(70rem_35rem_at_50%_-15%,rgba(14,165,233,0.16),transparent_60%),radial-gradient(55rem_30rem_at_100%_110%,rgba(20,184,166,0.14),transparent_65%)]"
       />
 
-      <div className="relative mx-auto flex h-full w-full max-w-5xl flex-col justify-center">
+      <div className="relative mx-auto flex w-full max-w-6xl flex-col justify-center">
         <header className="flex flex-col items-center text-center">
           <p className="text-[10px] font-semibold uppercase tracking-[0.32em] text-sky-700">
             {resumeAvailable ? "Session retained" : "Final step"}
@@ -75,7 +75,7 @@ export default function PrecheckScreen({
           </p>
         </header>
 
-        <section className="mt-5 grid grid-cols-1 items-start gap-4 lg:grid-cols-2 lg:gap-6">
+        <section className="mt-5 grid grid-cols-1 items-start gap-4 lg:grid-cols-[1.1fr_1fr] lg:gap-6">
           <div className="rounded-[22px] border border-sky-100 bg-white/90 p-4 shadow-[0_24px_60px_-38px_rgba(12,74,110,0.55)] ring-1 ring-white/70 sm:p-5">
             <p className="mb-3 text-[10px] font-semibold uppercase tracking-[0.28em] text-sky-700/80">
               Device check

@@ -236,12 +236,12 @@ export default function DeviceCheck({
           muted
           playsInline
           autoPlay
-          className="h-[clamp(150px,30vh,280px)] w-auto max-w-full rounded-2xl bg-slate-900/90 shadow-sm ring-1 ring-sky-100"
+          className="h-[clamp(240px,46vh,440px)] w-auto max-w-full rounded-2xl bg-slate-900/90 shadow-sm ring-1 ring-sky-100"
           style={{ transform: "scaleX(-1)" }}
         />
       </div>
       {!previewLive && (
-        <div className="mb-4 flex h-[clamp(150px,30vh,280px)] w-full flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-sky-200 bg-gradient-to-br from-sky-50 to-cyan-50/60 text-slate-400">
+        <div className="mb-4 flex h-[clamp(240px,46vh,440px)] w-full flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-sky-200 bg-gradient-to-br from-sky-50 to-cyan-50/60 text-slate-400">
           <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-white text-sky-600 shadow-sm ring-1 ring-sky-100">
             <Camera className="h-5 w-5" strokeWidth={1.75} />
           </span>
