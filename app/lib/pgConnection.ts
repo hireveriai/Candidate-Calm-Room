@@ -61,19 +61,30 @@ export function buildPgConnectionConfig(
   url.searchParams.delete("sslkey");
   url.searchParams.delete("sslrootcert");
 
+  /* When a CA bundle is available the chain is verified properly. When it is
+     not, fall back to TLS-without-chain-verification rather than `ssl: true`.
+     `true` means rejectUnauthorized, and Supabase's pooler certificate does
+     not validate against the public root store - it fails with
+     SELF_SIGNED_CERT_IN_CHAIN. The certs/ directory existed locally but was
+     never tracked by git, so production had no CA and every query died on
+     TLS while local development worked. Degrading to unverified TLS keeps
+     the connection encrypted and the app up; the committed CA bundle is what
+     actually restores verification. */
+  const unverifiedTls = { rejectUnauthorized: false };
+
   const ssl =
     sslMode === "disable"
       ? false
       : ca && ["allow", "prefer", "require", "verify-ca", "verify-full"].includes(sslMode)
         ? { ca, rejectUnauthorized: true }
         : sslMode === "allow" || sslMode === "prefer" || sslMode === "require"
-          ? true
+          ? unverifiedTls
           : ca && raw.includes("sslmode=")
             ? { ca, rejectUnauthorized: true }
             : sslMode === "no-verify"
-              ? { rejectUnauthorized: false }
+              ? unverifiedTls
               : raw.includes("sslmode=")
-                ? true
+                ? unverifiedTls
                 : undefined;
 
   return {
