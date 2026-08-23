@@ -228,20 +228,16 @@ export default function DeviceCheck({
 
   return (
     <div className="w-full">
-      {/* Letterboxed rather than cropped: the candidate needs to see the whole
-          frame the interview will record, not a centre slice of it. */}
-      <div
-        className={`mb-4 h-[clamp(150px,30vh,280px)] w-full overflow-hidden rounded-2xl border border-sky-100 bg-slate-900/90 shadow-sm ${
-          previewLive ? "block" : "hidden"
-        }`}
-      >
+      {/* Height-driven with an auto width, so the preview takes the camera's own
+          aspect ratio: the whole recorded frame, with no crop and no bars. */}
+      <div className={`mb-4 w-full ${previewLive ? "flex justify-center" : "hidden"}`}>
         <video
           ref={videoRef}
           muted
           playsInline
           autoPlay
-          className="h-full w-full"
-          style={{ objectFit: "contain", transform: "scaleX(-1)" }}
+          className="h-[clamp(150px,30vh,280px)] w-auto max-w-full rounded-2xl bg-slate-900/90 shadow-sm ring-1 ring-sky-100"
+          style={{ transform: "scaleX(-1)" }}
         />
       </div>
       {!previewLive && (
