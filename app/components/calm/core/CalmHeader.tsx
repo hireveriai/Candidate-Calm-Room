@@ -12,7 +12,7 @@ export default function CalmHeader() {
               letters sit at their natural width. */}
           <div className="relative flex h-9 w-9 items-center justify-center rounded-xl bg-[linear-gradient(145deg,rgba(56,189,248,0.20),rgba(14,116,144,0.08))] shadow-[inset_0_1px_0_rgba(255,255,255,0.16),0_1px_2px_rgba(0,0,0,0.45),0_0_20px_-6px_rgba(56,189,248,0.55)] ring-1 ring-inset ring-sky-300/25">
             <span className="bg-[linear-gradient(180deg,#f0f9ff,#7dd3fc)] bg-clip-text text-[12px] font-semibold leading-none tracking-[0.01em] text-transparent">
-              NV
+              VN
             </span>
           </div>
           <div>

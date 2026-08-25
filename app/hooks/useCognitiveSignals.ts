@@ -205,13 +205,18 @@ export default function useCognitiveSignals({
     return () => clearTimeout(timer);
   }, [enabled, faceDetectionReady, onFaceDetectionStalled]);
 
+  // When disabled (e.g. mid-transition between questions), the detection
+  // loop above is torn down and simply stops producing new samples -- so
+  // the last real reading is left in place instead of being blanked to
+  // "no face" here, which used to flash a false "Face not visible" alarm
+  // on every question transition even though the candidate never left frame.
   return {
-    faceCount: enabled ? faceCount : 0,
-    faceDetected: enabled ? faceDetected : false,
-    faceDetectionReady: enabled ? faceDetectionReady : false,
-    multiFace: enabled ? multiFace : false,
-    attention: enabled ? attention : true,
-    attentionDirection: enabled ? attentionDirection : "center",
+    faceCount,
+    faceDetected,
+    faceDetectionReady,
+    multiFace,
+    attention,
+    attentionDirection,
     tabActive,
     audioAnomaly: false,
   };
