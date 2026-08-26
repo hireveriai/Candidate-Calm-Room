@@ -43,7 +43,7 @@ export default function InterviewControls({
           <button
             onClick={onSkip}
             disabled={disabled || skipDisabled}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 px-4 py-2.5 text-xs font-medium text-slate-400 transition hover:border-white/20 hover:bg-white/[0.04] hover:text-slate-200 disabled:cursor-not-allowed disabled:opacity-40"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-amber-200/15 bg-amber-200/[0.06] px-4 py-2.5 text-xs font-medium text-amber-100/90 transition hover:border-amber-200/25 hover:bg-amber-200/[0.1] disabled:cursor-not-allowed disabled:opacity-40"
           >
             <SkipForward className="h-3.5 w-3.5" />
             Skip
