@@ -685,6 +685,24 @@ export async function POST(request: Request) {
     const attemptId = attempt.attempt_id;
     const interviewId = attempt.interview_id;
 
+    try {
+      await prisma.$executeRaw`
+        insert into public.interview_notification_events (
+          organization_id, interview_id, attempt_id, event_type
+        )
+        select i.organization_id, i.interview_id, ${attemptId}::uuid, 'INTERVIEW_STARTED'
+        from public.interviews i
+        where i.interview_id = ${interviewId}::uuid
+        on conflict (attempt_id, event_type) do nothing
+      `;
+    } catch (notificationError) {
+      logInterviewEvent("warn", "session.start_notification_event_failed", {
+        attemptId,
+        interviewId,
+        error: notificationError,
+      });
+    }
+
     if (attempt.reused) {
       const sanitizedEndsAt = await sanitizeReusedEmptyAttempt(attemptId);
       if (sanitizedEndsAt) {

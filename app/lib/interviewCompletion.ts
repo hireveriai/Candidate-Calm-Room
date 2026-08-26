@@ -1263,6 +1263,28 @@ export async function finalizeInterviewAttempt(params: {
       where interview_id = ${attempt.interview_id}::uuid
     `;
 
+    try {
+      await tx.$executeRaw`
+        insert into public.interview_notification_events (
+          organization_id, interview_id, attempt_id, event_type
+        )
+        values (
+          ${attempt.organization_id}::uuid,
+          ${attempt.interview_id}::uuid,
+          ${attemptId}::uuid,
+          'INTERVIEW_COMPLETED'
+        )
+        on conflict (attempt_id, event_type) do nothing
+      `;
+    } catch (notificationError) {
+      logInterviewEvent("warn", "interview.completion_notification_event_failed", {
+        attemptId,
+        interviewId: attempt.interview_id,
+        orgId: attempt.organization_id,
+        error: notificationError,
+      });
+    }
+
     await tx.$executeRaw`
     insert into public.interview_attempt_scores (
       attempt_id,
