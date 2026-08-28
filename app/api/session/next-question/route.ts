@@ -115,6 +115,7 @@ type LatestAnswerRow = {
 };
 
 type NextCoreQuestionRow = {
+  interview_question_id: string | null
   question_id: string | null;
   question_text: string;
   question_type: string | null;
@@ -1165,6 +1166,7 @@ export async function POST(request: Request) {
     try {
       plannedQuestions = await prisma.$queryRaw<NextCoreQuestionRow[]>`
           select
+            iq.interview_question_id,
             iq.question_id,
             coalesce(nullif(iq.question_text, ''), q.question_text) as question_text,
             coalesce(iq.question_type, q.question_type) as question_type,
@@ -1191,6 +1193,7 @@ export async function POST(request: Request) {
 
       plannedQuestions = await prisma.$queryRaw<NextCoreQuestionRow[]>`
           select
+            iq.interview_question_id,
             iq.question_id,
             q.question_text,
             q.question_type,
@@ -1290,6 +1293,7 @@ export async function POST(request: Request) {
         questionKind: question.question_kind,
       })),
       plannedQuestions: plannedQuestions.map((question: NextCoreQuestionRow) => ({
+        interviewQuestionId: question.interview_question_id,
         questionId: question.question_id,
         questionText: question.question_text,
         questionType: question.question_type,
@@ -1466,7 +1470,8 @@ export async function POST(request: Request) {
               : 3;
       const nextCore = selectNextCoreQuestion({
         plannedQuestions: plannedQuestions.map((question: NextCoreQuestionRow) => ({
-          questionId: question.question_id,
+          interviewQuestionId: question.interview_question_id,
+        questionId: question.question_id,
           questionText: question.question_text,
           questionType: question.question_type,
           sourceType: question.source_type,
@@ -1687,6 +1692,7 @@ export async function POST(request: Request) {
             insert into public.session_questions (
               attempt_id,
               question_id,
+              interview_question_id,
               content,
               source,
               question_kind,
@@ -1695,6 +1701,7 @@ export async function POST(request: Request) {
             values (
               ${attemptId}::uuid,
               ${nextCore.questionId}::uuid,
+              ${nextCore.interviewQuestionId ?? null}::uuid,
               ${nextCore.questionText}::text,
               ${"system"}::text,
               ${"core"}::text,
@@ -1875,6 +1882,7 @@ export async function POST(request: Request) {
             insert into public.session_questions (
               attempt_id,
               question_id,
+              interview_question_id,
               content,
               source,
               question_kind,
@@ -1883,6 +1891,7 @@ export async function POST(request: Request) {
             values (
               ${attemptId}::uuid,
               ${nextCore?.questionId ?? null}::uuid,
+              ${nextCore?.questionText ? nextCore.interviewQuestionId ?? null : null}::uuid,
               ${continuationQuestion}::text,
               ${nextCore?.questionText ? "system" : "ai"}::text,
               ${nextCore?.questionText ? "core" : "follow_up"}::text,

@@ -11,6 +11,8 @@ export type InterviewQuestionSource = "resume" | "job" | "behavioral";
 export type InterviewPhase = "warmup" | "core" | "probe" | "closing";
 
 export type PlannedInterviewQuestion = {
+  /** Stable identity of the planned row (interview_questions PK). */
+  interviewQuestionId?: string | null;
   questionId: string | null;
   questionText: string;
   questionType: string | null;
