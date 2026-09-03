@@ -2,6 +2,7 @@ import {
   after,
 } from "next/server";
 
+import { openAiFetch } from "@/app/lib/aiUsageLog";
 import {
   assertAnswerContextMatches,
   generateAnswer,
@@ -149,7 +150,8 @@ async function reviewCodeSubmission(input: {
     return null;
   }
 
-  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+  const response = await openAiFetch("https://api.openai.com/v1/chat/completions", {
+    aiUsage: { operation: "interview.code_review" },
     method: "POST",
     headers: {
       "Content-Type": "application/json",

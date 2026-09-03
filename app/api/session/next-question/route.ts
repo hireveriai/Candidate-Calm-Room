@@ -1,5 +1,6 @@
 import { after } from "next/server";
 
+import { openAiFetch } from "@/app/lib/aiUsageLog";
 import { finalizeInterviewAttempt } from "@/app/lib/interviewCompletion";
 import { finalizeActiveRecordings } from "@/app/lib/livekit/recordingLifecycle";
 import { validateAndRepairCompletionTranscripts } from "@/app/lib/recordingTranscriptRepair";
@@ -893,7 +894,8 @@ async function generateAiFollowUpQuestion(input: {
       });
     },
     operation: async () => {
-      const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      const response = await openAiFetch("https://api.openai.com/v1/chat/completions", {
+    aiUsage: { operation: "interview.followup_generation" },
     method: "POST",
     headers: {
       "Content-Type": "application/json",

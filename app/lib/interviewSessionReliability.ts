@@ -143,3 +143,48 @@ export function mapCompletionStatus(params: {
       };
   }
 }
+
+/**
+ * The parent interview row is what recruiters see. It must be derived from the
+ * attempt's real outcome, never asserted.
+ *
+ * An attempt that was ABANDONED, timed out, exited early, or whose transcripts
+ * could not be repaired is NOT a completed interview, and stamping it
+ * COMPLETED/FINALIZED hides a platform-side failure behind a status that reads
+ * as a candidate result. `final_status` keeps the precise machine reason so the
+ * admin console and analytics lose no detail.
+ */
+export function mapInterviewOutcome(params: {
+  attemptStatus: string | null | undefined;
+  earlyExit: boolean;
+  transcriptStatus?: string | null;
+}) {
+  const attemptStatus = normalizeAttemptStatus(params.attemptStatus);
+  const transcriptStatus = normalizeAttemptStatus(params.transcriptStatus);
+  const transcriptIncomplete = transcriptStatus === "PARTIAL";
+
+  if (attemptStatus === "TIME_EXPIRED") {
+    return { status: "NEEDS_REVIEW" as const, finalStatus: "TIME_EXPIRED" };
+  }
+
+  if (attemptStatus === "ABANDONED") {
+    return { status: "NEEDS_REVIEW" as const, finalStatus: "ABANDONED" };
+  }
+
+  if (attemptStatus === "FAILED" || attemptStatus === "TERMINATED") {
+    return { status: "NEEDS_REVIEW" as const, finalStatus: attemptStatus };
+  }
+
+  if (transcriptIncomplete) {
+    return {
+      status: "NEEDS_REVIEW" as const,
+      finalStatus: "TRANSCRIPT_REVIEW_REQUIRED",
+    };
+  }
+
+  if (params.earlyExit) {
+    return { status: "NEEDS_REVIEW" as const, finalStatus: "EARLY_EXIT" };
+  }
+
+  return { status: "COMPLETED" as const, finalStatus: "FINALIZED" };
+}

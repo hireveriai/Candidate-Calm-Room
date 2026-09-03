@@ -81,7 +81,7 @@ model auth_intent_pool {
 
 model auth_sessions {
   session_id          String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  identity_id         String?         @unique(map: "ux_signup_session_per_identity", where: raw("((auth_intent_id = 2) AND (is_active = true))")) @db.Uuid
+  identity_id         String?         @db.Uuid
   issued_at           DateTime?       @default(now()) @db.Timestamptz(6)
   expires_at          DateTime        @db.Timestamptz(6)
   ip_address          String?
@@ -89,11 +89,14 @@ model auth_sessions {
   is_active           Boolean?        @default(true)
   signup_user_type_id Int?            @db.SmallInt
   auth_intent_id      Int             @default(1) @db.SmallInt
+  last_seen_at        DateTime        @default(now()) @db.Timestamptz(6)
   identity_users      identity_users? @relation(fields: [identity_id], references: [identity_id], onDelete: Cascade, onUpdate: NoAction)
   user_type_pool      user_type_pool? @relation(fields: [signup_user_type_id], references: [user_type_id], onDelete: NoAction, onUpdate: NoAction)
 
   @@index([session_id], map: "idx_auth_sessions_active", where: raw("(is_active = true)"))
   @@index([session_id], map: "idx_auth_sessions_signup_valid", where: raw("((auth_intent_id = 2) AND (signup_user_type_id IS NOT NULL) AND (is_active = true))"))
+  @@index([identity_id], map: "idx_auth_sessions_identity_active", where: raw("(is_active = true)"))
+  @@index([last_seen_at], map: "idx_auth_sessions_last_seen_at", where: raw("(is_active = true)"))
 }
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
@@ -984,6 +987,7 @@ model user_devices {
 model user_otps {
   otp_id      String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   otp_code    String?
+  email       String?
   purpose     String?
   expires_at  DateTime? @db.Timestamptz(6)
   used_at     DateTime? @db.Timestamptz(6)

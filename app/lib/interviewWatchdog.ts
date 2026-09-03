@@ -53,6 +53,11 @@ type CompletionEvidenceRow = {
   closing_sequence_complete: boolean;
 };
 
+// Beyond this age a completed attempt is never re-queued for transcript
+// repair. Recordings are retained far longer than this, but every recovery
+// path that can still succeed does so within hours of the interview ending.
+const COMPLETED_REPAIR_MAX_AGE_HOURS = 48;
+
 const MAX_TRANSCRIPT_CHECKPOINT_CHARACTERS = 100_000;
 const WATCHDOG_RUNTIME_BUDGET_MS = 240_000;
 const WATCHDOG_MAX_TRANSCRIPT_REPAIRS = 1;
@@ -613,7 +618,19 @@ export async function runInterviewWatchdog() {
       and (
         upper(coalesce(status, '')) <> 'COMPLETED'
         or (
-          coalesce(
+          -- Repair is a rescue for interviews that have just finished, not an
+          -- archive job. Without this bound the sweep re-ran the full OpenAI
+          -- pipeline against months-old attempts whose transcripts can never
+          -- be recovered: each pass returned needs_review, refreshed checkedAt,
+          -- and requeued itself an hour later, forever.
+          started_at > now() - (${COMPLETED_REPAIR_MAX_AGE_HOURS} * interval '1 hour')
+          -- An attempt that stopped making progress across repeated passes is
+          -- marked terminal and never re-queued; see recordingTranscriptRepair.
+          and coalesce(
+            (termination_metadata #>> '{transcript_integrity,terminal}')::boolean,
+            false
+          ) = false
+          and coalesce(
             nullif(termination_metadata #>> '{transcript_integrity,checkedAt}', '')::timestamptz,
             'epoch'::timestamptz
           ) < now() - (

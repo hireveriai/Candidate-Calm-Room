@@ -2,6 +2,7 @@ import crypto from "crypto";
 
 import OpenAI from "openai";
 
+import { logAiUsage } from "@/app/lib/aiUsageLog";
 import { requireCandidateSession } from "@/app/lib/candidateSession";
 import { assertUuid, logInterviewEvent } from "@/app/lib/interviewReliability";
 
@@ -86,6 +87,7 @@ export async function POST(request: Request) {
       return Response.json({ error: "TTS is not configured" }, { status: 503 });
     }
 
+    const startedAt = Date.now();
     const speechResponse = await client.audio.speech.create({
       model: TTS_MODEL,
       voice: VERIS_VOICE,
@@ -94,6 +96,19 @@ export async function POST(request: Request) {
     });
 
     const bytes = Buffer.from(await speechResponse.arrayBuffer());
+
+    // Speech billing is per character, and only cache misses reach the API -
+    // so this row counts exactly what was charged, not what was spoken.
+    logAiUsage({
+      operation: "interview.tts",
+      model: TTS_MODEL,
+      entityType: "interview_attempt",
+      entityId: attemptId,
+      ok: true,
+      latencyMs: Date.now() - startedAt,
+      billing: { characters: text.length },
+      meta: { voice: VERIS_VOICE, cache: "miss" },
+    });
 
     pruneCacheIfNeeded();
     ttsCache.set(cacheKey, { bytes, createdAt: Date.now() });

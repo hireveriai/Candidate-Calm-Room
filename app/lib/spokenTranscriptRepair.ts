@@ -1,3 +1,5 @@
+import { openAiFetch } from "@/app/lib/aiUsageLog";
+
 export type TranscriptRepairResult = {
   text: string;
   repaired: boolean;
@@ -86,7 +88,8 @@ export async function repairSpokenTranscript(input: {
   const model = process.env.TRANSCRIPT_REPAIR_MODEL || "gpt-4o-mini";
 
   try {
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    const response = await openAiFetch("https://api.openai.com/v1/chat/completions", {
+      aiUsage: { operation: "interview.spoken_transcript_repair" },
       method: "POST",
       signal: controller.signal,
       headers: {

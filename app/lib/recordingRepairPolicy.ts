@@ -180,3 +180,44 @@ export async function findFirstUsableRecordingTranscript<
     failures,
   };
 }
+
+export type IntegrityProgressInput = {
+  /** Issues still outstanding after the pass that just ran. */
+  remainingIssues: number;
+  /** Issues recorded by the previous pass, or null if this is the first. */
+  previousRemainingIssues: number | null;
+  /** Answers this pass actually recovered. */
+  repairedAnswers: number;
+  /** Consecutive unproductive passes before this one. */
+  priorUnproductivePasses: number;
+  /** True when the repair stopped on its own time budget with work queued. */
+  budgetDeferred: boolean;
+  maxUnproductivePasses: number;
+};
+
+/**
+ * Decides whether an attempt is still worth re-repairing.
+ *
+ * The repair lease bounds failures that throw, but a repair that "succeeds"
+ * while leaving issues unresolved resets that counter - so an unrecoverable
+ * attempt was re-queued every hour indefinitely, re-running transcription and
+ * alignment against OpenAI each time. This gives that case a stopping point.
+ */
+export function evaluateIntegrityProgress(input: IntegrityProgressInput) {
+  const madeProgress =
+    input.previousRemainingIssues === null ||
+    input.remainingIssues < input.previousRemainingIssues ||
+    input.repairedAnswers > 0;
+
+  // A budget-deferred pass has work explicitly queued and resumes cheaply, so
+  // it is neither progress nor a strike against the attempt.
+  const unproductivePasses =
+    madeProgress || input.budgetDeferred ? 0 : input.priorUnproductivePasses + 1;
+
+  return {
+    unproductivePasses,
+    terminal:
+      input.remainingIssues > 0 &&
+      unproductivePasses >= input.maxUnproductivePasses,
+  };
+}

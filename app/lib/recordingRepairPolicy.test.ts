@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  evaluateIntegrityProgress,
   findFirstUsableRecordingTranscript,
   isDegenerateRecordingTranscript,
   prioritizeRecordingCandidates,
@@ -90,4 +91,94 @@ test("rejects an answer duplicated end-to-end by speech recognition", () => {
     isDegenerateRecordingTranscript(`${answer} ${answer}`),
     true
   );
+});
+
+test("gives up after repeated passes that resolve nothing", () => {
+  const base = {
+    remainingIssues: 4,
+    previousRemainingIssues: 4,
+    repairedAnswers: 0,
+    budgetDeferred: false,
+    maxUnproductivePasses: 3,
+  };
+
+  const first = evaluateIntegrityProgress({ ...base, priorUnproductivePasses: 0 });
+  assert.equal(first.unproductivePasses, 1);
+  assert.equal(first.terminal, false);
+
+  const second = evaluateIntegrityProgress({ ...base, priorUnproductivePasses: 1 });
+  assert.equal(second.terminal, false);
+
+  const third = evaluateIntegrityProgress({ ...base, priorUnproductivePasses: 2 });
+  assert.equal(third.unproductivePasses, 3);
+  assert.equal(third.terminal, true);
+});
+
+test("a pass that reduces the issue count resets the give-up counter", () => {
+  const result = evaluateIntegrityProgress({
+    remainingIssues: 2,
+    previousRemainingIssues: 5,
+    repairedAnswers: 0,
+    priorUnproductivePasses: 2,
+    budgetDeferred: false,
+    maxUnproductivePasses: 3,
+  });
+
+  assert.equal(result.unproductivePasses, 0);
+  assert.equal(result.terminal, false);
+});
+
+test("recovering an answer counts as progress even when issues remain level", () => {
+  const result = evaluateIntegrityProgress({
+    remainingIssues: 3,
+    previousRemainingIssues: 3,
+    repairedAnswers: 1,
+    priorUnproductivePasses: 2,
+    budgetDeferred: false,
+    maxUnproductivePasses: 3,
+  });
+
+  assert.equal(result.unproductivePasses, 0);
+  assert.equal(result.terminal, false);
+});
+
+test("a budget-deferred pass is never held against the attempt", () => {
+  const result = evaluateIntegrityProgress({
+    remainingIssues: 6,
+    previousRemainingIssues: 6,
+    repairedAnswers: 0,
+    priorUnproductivePasses: 2,
+    budgetDeferred: true,
+    maxUnproductivePasses: 3,
+  });
+
+  assert.equal(result.unproductivePasses, 0);
+  assert.equal(result.terminal, false);
+});
+
+test("a clean attempt never becomes terminal", () => {
+  const result = evaluateIntegrityProgress({
+    remainingIssues: 0,
+    previousRemainingIssues: 0,
+    repairedAnswers: 0,
+    priorUnproductivePasses: 9,
+    budgetDeferred: false,
+    maxUnproductivePasses: 3,
+  });
+
+  assert.equal(result.terminal, false);
+});
+
+test("the first pass on an attempt is never unproductive", () => {
+  const result = evaluateIntegrityProgress({
+    remainingIssues: 7,
+    previousRemainingIssues: null,
+    repairedAnswers: 0,
+    priorUnproductivePasses: 0,
+    budgetDeferred: false,
+    maxUnproductivePasses: 3,
+  });
+
+  assert.equal(result.unproductivePasses, 0);
+  assert.equal(result.terminal, false);
 });

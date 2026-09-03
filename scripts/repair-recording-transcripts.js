@@ -36,6 +36,46 @@ function normalizeText(value) {
   return String(value ?? "").replace(/\s+/g, " ").trim();
 }
 
+// Set once main() has a connection. This script is a heavy Whisper spender and
+// runs outside any request, so its cost has to land in ai_audit_logs too -
+// otherwise a manual repair run looks identical to organic interview traffic
+// on the OpenAI bill.
+let auditClient = null;
+
+async function logAiUsage(entry) {
+  if (!auditClient) return;
+
+  try {
+    await auditClient.query(
+      `insert into public.ai_audit_logs (
+         entity_type,
+         entity_id,
+         ai_provider,
+         request_payload,
+         response_payload
+       ) values ($1, $2::uuid, 'openai', $3::jsonb, $4::jsonb)`,
+      [
+        entry.entityType ?? "script",
+        uuidPattern.test(String(entry.entityId ?? "")) ? entry.entityId : null,
+        JSON.stringify({
+          app: "calm-room-scripts",
+          operation: entry.operation,
+          model: entry.model,
+          script: "repair-recording-transcripts",
+          ...(entry.meta ?? {}),
+        }),
+        JSON.stringify({
+          ...(entry.usage ? { usage: entry.usage } : {}),
+          ...(entry.billing ? { billing: entry.billing } : {}),
+          ok: true,
+        }),
+      ]
+    );
+  } catch (error) {
+    console.warn("ai usage logging failed", entry.operation, error?.message);
+  }
+}
+
 function isNoResponse(value) {
   return /^no response provided\.?$/i.test(normalizeText(value));
 }
@@ -110,13 +150,23 @@ async function fetchAttemptRecordingObjects(client, attemptId) {
 
 async function transcribeRecording(openai, buffer) {
   const file = new File([buffer], "recording.mp4", { type: "video/mp4" });
-  return openai.audio.transcriptions.create({
+  const result = await openai.audio.transcriptions.create({
     file,
     model: "whisper-1",
     response_format: "verbose_json",
     timestamp_granularities: ["segment"],
     temperature: 0,
   });
+
+  await logAiUsage({
+    operation: "script.recording_transcription",
+    model: "whisper-1",
+    entityType: "interview_recording",
+    billing: { audio_seconds: Number(result.duration ?? 0) },
+    meta: { upload_bytes: buffer.byteLength },
+  });
+
+  return result;
 }
 
 async function transcribeAttemptRecordings(client, openai, attemptId) {
@@ -200,6 +250,14 @@ async function alignAnswers(openai, questions, transcript) {
     ],
   });
 
+  await logAiUsage({
+    operation: "script.answer_alignment",
+    model: response.model ?? "gpt-4o-mini",
+    entityType: "interview_recording",
+    usage: response.usage ?? null,
+    meta: { question_count: questions.length },
+  });
+
   const content = response.choices[0]?.message?.content ?? "{}";
   const parsed = safeJsonParse(content, { answers: [] });
   return Array.isArray(parsed.answers) ? parsed.answers : [];
@@ -233,6 +291,13 @@ async function evaluateAnswer(openai, question, answer) {
         content: JSON.stringify({ question, answer }),
       },
     ],
+  });
+
+  await logAiUsage({
+    operation: "script.answer_evaluation",
+    model: response.model ?? "gpt-4o-mini",
+    entityType: "interview_answer",
+    usage: response.usage ?? null,
   });
 
   const parsed = safeJsonParse(response.choices[0]?.message?.content ?? "{}", {});
@@ -821,6 +886,7 @@ async function main() {
   }
 
   await client.connect();
+  auditClient = client;
   const targets = await fetchTargets(client, args);
   const results = [];
 

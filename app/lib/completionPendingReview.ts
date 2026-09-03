@@ -33,9 +33,13 @@ export async function markInterviewCompletedPendingTranscriptReview(params: {
     const interviewId = rows[0]?.interview_id;
     if (!interviewId) return;
 
+    // This is the "we could not finalize this interview" path. It must not
+    // report COMPLETED: that is the field recruiters see, and stamping success
+    // here hid an unrepaired transcript behind a status that reads as a
+    // finished candidate result.
     await tx.$executeRaw`
       update public.interviews
-      set status = 'COMPLETED',
+      set status = 'NEEDS_REVIEW',
           final_status = 'TRANSCRIPT_REVIEW_REQUIRED'
       where interview_id = ${interviewId}::uuid
         and upper(coalesce(final_status, '')) <> 'FINALIZED'

@@ -1,4 +1,5 @@
 import OpenAI from "openai";
+import { logAiUsage } from "@/app/lib/aiUsageLog";
 import type { VerificationProvider } from "./types";
 
 export type AadhaarOcrResult = {
@@ -66,8 +67,10 @@ export async function extractAadhaarFields(
   const client = getOpenAI();
   if (!client || !mimeType.startsWith("image/")) return null;
 
+  const ocrModel = process.env.OPENAI_OCR_MODEL || "gpt-5.5";
+  const ocrStartedAt = Date.now();
   const response = await client.responses.create({
-    model: process.env.OPENAI_OCR_MODEL || "gpt-5.5",
+    model: ocrModel,
     input: [
       {
         role: "user",
@@ -106,6 +109,19 @@ export async function extractAadhaarFields(
         },
       },
     },
+  });
+
+  // The only frontier-model call in the interview path, and it sends a
+  // high-detail image - by far the most expensive single request we make.
+  logAiUsage({
+    operation: "identity.aadhaar_ocr",
+    model: response.model ?? ocrModel,
+    entityType: "identity_verification",
+    ok: true,
+    latencyMs: Date.now() - ocrStartedAt,
+    usage: response.usage as never,
+    billing: { images: 1 },
+    meta: { image_detail: "high", mime_type: mimeType },
   });
 
   try {

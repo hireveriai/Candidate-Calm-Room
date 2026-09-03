@@ -1,3 +1,4 @@
+import { openAiFetch } from "@/app/lib/aiUsageLog";
 import { requireCandidateSession } from "@/app/lib/candidateSession";
 import {
   MAX_CLARIFICATIONS_PER_QUESTION,
@@ -67,7 +68,8 @@ async function generateClarifiedQuestion(params: {
       });
     },
     operation: async () => {
-      const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      const response = await openAiFetch("https://api.openai.com/v1/chat/completions", {
+        aiUsage: { operation: "interview.question_clarification" },
         method: "POST",
         headers: {
           "Content-Type": "application/json",

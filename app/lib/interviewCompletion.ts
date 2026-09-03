@@ -9,7 +9,10 @@ import {
   logInterviewEvent,
   normalizeInterviewState,
 } from "@/app/lib/interviewReliability";
-import { mapCompletionStatus } from "@/app/lib/interviewSessionReliability";
+import {
+  mapCompletionStatus,
+  mapInterviewOutcome,
+} from "@/app/lib/interviewSessionReliability";
 import {
   calculateInterviewScore,
   toFiniteNumber,
@@ -928,14 +931,32 @@ export async function finalizeInterviewAttempt(params: {
         nextState: "FINALIZED",
       });
 
+        // Even a successfully-finalized attempt is not a completed interview
+        // if its transcripts never came back. Without this check a retry of
+        // this path silently promoted a pending-review session to FINALIZED.
+        const reusedIntegrity = existingMetadata["transcript_integrity"];
+        const reusedTranscriptStatus =
+          reusedIntegrity &&
+          typeof reusedIntegrity === "object" &&
+          !Array.isArray(reusedIntegrity) &&
+          (reusedIntegrity as Record<string, unknown>)["status"] ===
+            "needs_review"
+            ? "PARTIAL"
+            : "FINALIZED";
+        const reusedOutcome = mapInterviewOutcome({
+          attemptStatus: lockedAttempt.status,
+          earlyExit: lockedAttempt.early_exit === true,
+          transcriptStatus: reusedTranscriptStatus,
+        });
+
         await tx.$executeRaw`
           update public.interviews
-          set status = 'COMPLETED',
-              final_status = 'FINALIZED'
+          set status = ${reusedOutcome.status}::text,
+              final_status = ${reusedOutcome.finalStatus}::text
           where interview_id = ${lockedAttempt.interview_id}::uuid
             and (
-              status is distinct from 'COMPLETED'
-              or final_status is distinct from 'FINALIZED'
+              status is distinct from ${reusedOutcome.status}::text
+              or final_status is distinct from ${reusedOutcome.finalStatus}::text
             )
         `;
 
@@ -1123,10 +1144,15 @@ export async function finalizeInterviewAttempt(params: {
       behavioralFlags
     );
 
+    // An early exit never yields a hiring verdict. finalScore is multiplied by
+    // the completion factor AND capped by it, so a truncated interview is
+    // structurally pushed below the NO_HIRE threshold -- Kawaljeet Kaur's
+    // session scored 23.7 on six answered questions averaging ~47 because the
+    // platform stopped asking at Q6. Reading that as a negative signal about
+    // the candidate turns our own capture failure into their rejection. The
+    // only honest output for an incomplete interview is that it needs review.
     const recommendation = effectiveEarlyExit
-      ? finalScore >= 40
-        ? "REVIEW_REQUIRED"
-        : "NO_HIRE"
+      ? "REVIEW_REQUIRED"
       : getRecommendation(finalScore, riskLevel);
     const evaluationDecision =
       mapRecommendationToEvaluationDecision(recommendation);
@@ -1256,26 +1282,49 @@ export async function finalizeInterviewAttempt(params: {
       where attempt_id = ${attemptId}::uuid
     `;
 
+    // Derived from the outcome computed above, never asserted. Writing a
+    // literal 'COMPLETED' here stamped abandoned and partially-transcribed
+    // attempts as finished interviews, hiding platform-side failures from
+    // recruiters while the attempt row recorded the real outcome.
+    const interviewOutcome = mapInterviewOutcome({
+      attemptStatus: completionStatus.status,
+      earlyExit: effectiveEarlyExit,
+      transcriptStatus: finalTranscriptStatus,
+    });
+
     await tx.$executeRaw`
       update public.interviews
-      set status = 'COMPLETED',
-          final_status = 'FINALIZED'
+      set status = ${interviewOutcome.status}::text,
+          final_status = ${interviewOutcome.finalStatus}::text
       where interview_id = ${attempt.interview_id}::uuid
     `;
 
+    // Only a genuinely completed interview announces itself as one. Emitting
+    // INTERVIEW_COMPLETED for an abandoned or partially-transcribed session
+    // sent recruiters a "candidate completed their interview" email for a
+    // session the platform had itself failed to capture.
+    //
+    // TODO: emit a dedicated INTERVIEW_NEEDS_REVIEW event here once the
+    // notification pipeline has a template for it. That needs the event_type
+    // CHECK constraint widened and a branch in the recruiter-dashboard
+    // consumer (interview-notifications.ts), which currently treats every
+    // non-INTERVIEW_STARTED event as a completion email. Until then, staying
+    // silent is correct: no notification beats a false one.
     try {
-      await tx.$executeRaw`
-        insert into public.interview_notification_events (
-          organization_id, interview_id, attempt_id, event_type
-        )
-        values (
-          ${attempt.organization_id}::uuid,
-          ${attempt.interview_id}::uuid,
-          ${attemptId}::uuid,
-          'INTERVIEW_COMPLETED'
-        )
-        on conflict (attempt_id, event_type) do nothing
-      `;
+      if (interviewOutcome.status === "COMPLETED") {
+        await tx.$executeRaw`
+          insert into public.interview_notification_events (
+            organization_id, interview_id, attempt_id, event_type
+          )
+          values (
+            ${attempt.organization_id}::uuid,
+            ${attempt.interview_id}::uuid,
+            ${attemptId}::uuid,
+            'INTERVIEW_COMPLETED'
+          )
+          on conflict (attempt_id, event_type) do nothing
+        `;
+      }
     } catch (notificationError) {
       logInterviewEvent("warn", "interview.completion_notification_event_failed", {
         attemptId,

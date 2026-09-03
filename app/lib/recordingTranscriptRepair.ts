@@ -7,12 +7,14 @@ import { extname, join } from "node:path";
 import { spawn } from "node:child_process";
 import ffmpegPath from "ffmpeg-static";
 
+import { logAiUsage } from "@/app/lib/aiUsageLog";
 import { prisma } from "@/app/lib/prisma";
 import { isInvalidCandidateTranscript } from "@/app/lib/transcriptGuards";
 import {
   hasUnverifiedIncompleteSpokenAnswer,
 } from "@/app/lib/transcriptIntegrity";
 import {
+  evaluateIntegrityProgress,
   findFirstUsableRecordingTranscript,
   isDegenerateRecordingTranscript,
   isReusableRecordingTranscript,
@@ -101,7 +103,20 @@ export type CompletionTranscriptIntegrityResult = {
   remainingIssues: number;
   status: "clean" | "repaired" | "needs_review";
   repairSkipped?: string;
+  /** Total integrity passes this attempt has had, including this one. */
+  passCount: number;
+  /** Consecutive passes that failed to reduce remainingIssues. */
+  unproductivePasses: number;
+  /** Once true the watchdog stops re-queueing this attempt entirely. */
+  terminal: boolean;
 };
+
+// MAX_REPAIR_FAILURES only bounds repairs that throw. A repair that "succeeds"
+// while leaving issues unresolved resets failure_count to zero, so nothing
+// stopped an unrecoverable attempt from being repaired again every hour for
+// months. This bounds that case: after this many passes that fail to reduce
+// the outstanding issue count, the attempt is terminal and needs a human.
+const MAX_UNPRODUCTIVE_INTEGRITY_PASSES = 3;
 
 // OpenAI transcription uploads must remain below 25 MB, but the original
 // interview video can be much larger. Large videos are converted to a small,
@@ -509,7 +524,8 @@ async function transcribeRecording(openai: OpenAI, filePath: string) {
 
   const file = new File([uploadBuffer], uploadName, { type: uploadType });
 
-  return openai.audio.transcriptions.create({
+  const startedAt = Date.now();
+  const result = await openai.audio.transcriptions.create({
     file,
     model: "whisper-1",
     language: "en",
@@ -517,6 +533,20 @@ async function transcribeRecording(openai: OpenAI, filePath: string) {
     timestamp_granularities: ["segment"],
     temperature: 0,
   });
+
+  // Whisper bills per second of audio, so the returned duration is the
+  // billable quantity - this is the single most expensive recovery path.
+  logAiUsage({
+    operation: "interview.recording_transcription",
+    model: "whisper-1",
+    entityType: "interview_recording",
+    ok: true,
+    latencyMs: Date.now() - startedAt,
+    billing: { audio_seconds: Number(result.duration ?? 0) },
+    meta: { file_path: filePath, upload_bytes: uploadBuffer.byteLength },
+  });
+
+  return result;
 }
 
 function needsRecordingRepair(question: RepairQuestionRow) {
@@ -601,14 +631,29 @@ async function transcribeQuestionWindow(
       outputPath,
     ]);
     const audio = await fs.readFile(outputPath);
+    const windowModel =
+      process.env.OPENAI_RECORDING_WINDOW_TRANSCRIPTION_MODEL ||
+      "gpt-4o-transcribe-diarize";
+    const windowStartedAt = Date.now();
     const result = await openai.audio.transcriptions.create({
       file: new File([audio], "question-window.mp3", { type: "audio/mpeg" }),
-      model:
-        process.env.OPENAI_RECORDING_WINDOW_TRANSCRIPTION_MODEL ||
-        "gpt-4o-transcribe-diarize",
+      model: windowModel,
       language: "en",
       response_format: "diarized_json",
       chunking_strategy: "auto",
+    });
+
+    // One of these fires per unrecovered question, so a single bad interview
+    // can bill a dozen windows on top of the full-recording pass above.
+    logAiUsage({
+      operation: "interview.question_window_transcription",
+      model: windowModel,
+      entityType: "interview_recording",
+      ok: true,
+      latencyMs: Date.now() - windowStartedAt,
+      usage: (result as { usage?: never }).usage ?? null,
+      billing: { audio_seconds: Math.max(1, endSeconds - startSeconds) },
+      meta: { question_order: question.question_order },
     });
     const transcript = normalizeText(result.text);
     if (!transcript || isDegenerateRecordingTranscript(transcript)) {
@@ -793,6 +838,7 @@ function buildSegmentWindowTranscripts(params: {
 }
 
 async function alignAnswers(openai: OpenAI, questions: RepairQuestionRow[], transcript: string) {
+  const alignStartedAt = Date.now();
   const response = await openai.chat.completions.create({
     model: "gpt-4o-mini",
     temperature: 0,
@@ -823,6 +869,16 @@ async function alignAnswers(openai: OpenAI, questions: RepairQuestionRow[], tran
         }),
       },
     ],
+  });
+
+  logAiUsage({
+    operation: "interview.answer_alignment",
+    model: response.model ?? "gpt-4o-mini",
+    entityType: "interview_recording",
+    ok: true,
+    latencyMs: Date.now() - alignStartedAt,
+    usage: response.usage as never,
+    meta: { question_count: questions.length },
   });
 
   const content = response.choices[0]?.message?.content ?? "{}";
@@ -1762,7 +1818,38 @@ async function runRepairPendingAnswersFromRecording(
   };
 }
 
+async function loadPriorIntegrityState(attemptId: string) {
+  const rows = await prisma.$queryRaw<
+    Array<{
+      pass_count: number | null;
+      unproductive_passes: number | null;
+      remaining_issues: number | null;
+    }>
+  >`
+    select
+      nullif(termination_metadata #>> '{transcript_integrity,passCount}', '')::int as pass_count,
+      nullif(termination_metadata #>> '{transcript_integrity,unproductivePasses}', '')::int
+        as unproductive_passes,
+      nullif(termination_metadata #>> '{transcript_integrity,remainingIssues}', '')::int
+        as remaining_issues
+    from public.interview_attempts
+    where attempt_id = ${attemptId}::uuid
+  `;
+
+  const row = rows[0];
+
+  return {
+    passCount: Number(row?.pass_count ?? 0),
+    unproductivePasses: Number(row?.unproductive_passes ?? 0),
+    previousRemainingIssues:
+      row?.remaining_issues === null || row?.remaining_issues === undefined
+        ? null
+        : Number(row.remaining_issues),
+  };
+}
+
 export async function validateAndRepairCompletionTranscripts(attemptId: string) {
+  const prior = await loadPriorIntegrityState(attemptId);
   const createdPlaceholders = await createMissingAnswerPlaceholders(attemptId);
   const rejectedQuestionEchoes = await rejectQuestionEchoAnswers(attemptId);
   const repairResult = await repairPendingAnswersFromRecording(attemptId);
@@ -1774,6 +1861,16 @@ export async function validateAndRepairCompletionTranscripts(attemptId: string) 
       : createdPlaceholders > 0 || rejectedQuestionEchoes > 0 || repairedAnswers > 0
         ? "repaired"
         : "clean";
+
+  const { unproductivePasses, terminal } = evaluateIntegrityProgress({
+    remainingIssues,
+    previousRemainingIssues: prior.previousRemainingIssues,
+    repairedAnswers,
+    priorUnproductivePasses: prior.unproductivePasses,
+    budgetDeferred: repairResult.skipped === "repair_time_budget_reached",
+    maxUnproductivePasses: MAX_UNPRODUCTIVE_INTEGRITY_PASSES,
+  });
+
   const result: CompletionTranscriptIntegrityResult = {
     checkedAt: new Date().toISOString(),
     createdPlaceholders,
@@ -1782,7 +1879,19 @@ export async function validateAndRepairCompletionTranscripts(attemptId: string) 
     remainingIssues,
     status,
     ...(repairResult.skipped ? { repairSkipped: repairResult.skipped } : {}),
+    passCount: prior.passCount + 1,
+    unproductivePasses,
+    terminal,
   };
+
+  if (terminal) {
+    console.warn("Transcript integrity gave up on attempt", {
+      attemptId,
+      remainingIssues,
+      unproductivePasses,
+      passCount: result.passCount,
+    });
+  }
 
   await prisma.$executeRaw`
     update public.interview_attempts

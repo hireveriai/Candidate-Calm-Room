@@ -1,3 +1,4 @@
+import { openAiFetch } from "@/app/lib/aiUsageLog";
 import { InterviewQuestionType } from "@/app/lib/interviewQuestionTypes";
 
 export type JsonValue =
@@ -116,7 +117,8 @@ export async function evaluateAnswerWithAi(input: {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 8000);
 
-  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+  const response = await openAiFetch("https://api.openai.com/v1/chat/completions", {
+    aiUsage: { operation: "interview.answer_evaluation" },
     method: "POST",
     signal: controller.signal,
     headers: {
