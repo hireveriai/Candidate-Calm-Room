@@ -53,10 +53,12 @@ type CompletionEvidenceRow = {
   closing_sequence_complete: boolean;
 };
 
-// Beyond this age a completed attempt is never re-queued for transcript
-// repair. Recordings are retained far longer than this, but every recovery
-// path that can still succeed does so within hours of the interview ending.
-const COMPLETED_REPAIR_MAX_AGE_HOURS = 48;
+// Beyond this age an attempt is out of the watchdog's scope entirely, whatever
+// its status. Recordings are retained far longer, but every recovery path that
+// can still succeed does so within hours of the interview ending, and no live
+// session survives this long. Older attempts needing attention are handled
+// deliberately through the recover/backfill scripts, not by an hourly sweep.
+const WATCHDOG_MAX_ATTEMPT_AGE_HOURS = 48;
 
 const MAX_TRANSCRIPT_CHECKPOINT_CHARACTERS = 100_000;
 const WATCHDOG_RUNTIME_BUDGET_MS = 240_000;
@@ -615,18 +617,21 @@ export async function runInterviewWatchdog() {
         'ABANDONED',
         'TIME_EXPIRED'
       )
+      -- The watchdog is a rescue for interviews that have just finished, not
+      -- an archive job, and this bound must apply to EVERY status rather than
+      -- only to attempts already marked COMPLETED. An old attempt sitting in
+      -- ABANDONED/TIME_EXPIRED/INTERRUPTED is reopened to COMPLETING further
+      -- down and then repaired, so a cutoff scoped to the COMPLETED branch
+      -- alone let months-old attempts back into the OpenAI pipeline through
+      -- the side door. No session is live after this long, so nothing that
+      -- still needs closing is excluded here.
+      and started_at > now() - (${WATCHDOG_MAX_ATTEMPT_AGE_HOURS} * interval '1 hour')
       and (
         upper(coalesce(status, '')) <> 'COMPLETED'
         or (
-          -- Repair is a rescue for interviews that have just finished, not an
-          -- archive job. Without this bound the sweep re-ran the full OpenAI
-          -- pipeline against months-old attempts whose transcripts can never
-          -- be recovered: each pass returned needs_review, refreshed checkedAt,
-          -- and requeued itself an hour later, forever.
-          started_at > now() - (${COMPLETED_REPAIR_MAX_AGE_HOURS} * interval '1 hour')
           -- An attempt that stopped making progress across repeated passes is
           -- marked terminal and never re-queued; see recordingTranscriptRepair.
-          and coalesce(
+          coalesce(
             (termination_metadata #>> '{transcript_integrity,terminal}')::boolean,
             false
           ) = false
