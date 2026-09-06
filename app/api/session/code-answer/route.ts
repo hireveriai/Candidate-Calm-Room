@@ -166,7 +166,7 @@ async function reviewCodeSubmission(input: {
         {
           role: "system",
           content:
-            "You are reviewing a candidate coding interview answer. Return only JSON with keys correctness_score, code_quality_score, problem_solving_score, confidence_score, fraud_score, review_summary. Scores must be numbers between 0 and 1.",
+            "You are reviewing a candidate coding interview answer. Return only JSON with keys correctness_score, code_quality_score, problem_solving_score, confidence_score, integrity_risk, review_summary. Scores must be numbers between 0 and 1. Integrity risk is a reviewer prompt, not an accusation: never use the words fraud, dishonest, cheating, deception, or suspicious in review_summary.",
         },
         {
           role: "user",
@@ -201,7 +201,8 @@ async function reviewCodeSubmission(input: {
     code_quality_score: clampScore(parsed.code_quality_score),
     problem_solving_score: clampScore(parsed.problem_solving_score),
     confidence_score: clampScore(parsed.confidence_score),
-    fraud_score: clampScore(parsed.fraud_score),
+    // Asked for as integrity_risk now; internal name and column unchanged.
+    fraud_score: clampScore(parsed.integrity_risk ?? parsed.fraud_score),
     review_summary:
       typeof parsed.review_summary === "string"
         ? parsed.review_summary

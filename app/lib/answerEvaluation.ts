@@ -134,7 +134,7 @@ export async function evaluateAnswerWithAi(input: {
           role: "system",
           content: [
             "You are evaluating a spoken interview answer.",
-            "Return only JSON with keys skill_score, clarity_score, depth_score, confidence_score, fraud_score, reasoning.",
+            "Return only JSON with keys skill_score, clarity_score, depth_score, confidence_score, integrity_risk, reasoning.",
             "All scores must be numbers between 0 and 1.",
             "Treat the transcript as imperfect automatic speech recognition with missing punctuation, substitutions, and possible question echo.",
             "Do not penalize accent, missing transcript punctuation, isolated grammar slips, non-native phrasing, or likely speech-to-text mistakes.",
@@ -144,7 +144,8 @@ export async function evaluateAnswerWithAi(input: {
             "Depth should reflect specificity, technical or functional detail, and authenticity.",
             "Confidence should reflect decisiveness, coherence, and delivery confidence, not arrogance.",
             "Call an answer vague only when it lacks concrete steps, decisions, examples, tools, or outcomes relevant to the question.",
-            "Fraud score must be based only on explicit contradictions or implausible content in the answer. Never infer fraud from grammar, accent, fluency, transcription quality, gaze, or delivery style.",
+            "Integrity risk must be based only on explicit contradictions or implausible content in the answer. Never infer it from grammar, accent, fluency, transcription quality, gaze, or delivery style.",
+            "Integrity risk is a reviewer prompt, not an accusation. Never use the words fraud, dishonest, dishonesty, cheating, deception, or suspicious in the reasoning. Describe only the specific inconsistency you observed, and say nothing about integrity when there is none to report.",
             "Behavior and focus signals are scored separately and must not be included in these content scores.",
             "Use the question_type-specific rubric instead of assuming all technical questions are coding tasks.",
             "Do not inflate scores when the answer is vague.",
@@ -197,7 +198,12 @@ export async function evaluateAnswerWithAi(input: {
     clarity_score: clamp01(parsed.clarity_score),
     depth_score: clamp01(parsed.depth_score),
     confidence_score: clamp01(parsed.confidence_score),
-    fraud_score: clamp01(parsed.fraud_score),
+    // The model is now asked for integrity_risk, because naming the field
+    // "fraud" made it narrate about fraud and dishonesty in reasoning text that
+    // recruiters read about named candidates. The internal field and the
+    // database column keep their existing name so no reader has to change;
+    // fraud_score is still accepted so evaluations already in flight parse.
+    fraud_score: clamp01(parsed.integrity_risk ?? parsed.fraud_score),
     reasoning:
       typeof parsed.reasoning === "string"
         ? parsed.reasoning
