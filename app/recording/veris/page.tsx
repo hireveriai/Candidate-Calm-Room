@@ -596,7 +596,7 @@ export default function VerisRecordingView() {
             </div>
             {latestSignals.length === 0 ? (
               <p className="mt-3 rounded-lg border border-white/5 bg-white/[0.03] px-3 py-3 text-sm text-slate-400">
-                No suspicious behavior signals detected in the current window.
+                No behavior signals marked for review in the current window.
               </p>
             ) : (
               <div className="mt-3 space-y-2">
