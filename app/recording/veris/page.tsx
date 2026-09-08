@@ -429,7 +429,7 @@ export default function VerisRecordingView() {
       <header className="relative z-10 flex h-[78px] items-center justify-between border-b border-white/10 px-10">
         <div className="flex items-center gap-4">
           <div className="flex h-11 w-11 items-center justify-center rounded-xl border border-sky-300/20 bg-sky-300/[0.08] text-xs font-semibold">
-            HV
+            VN
           </div>
           <div>
             <p className="text-sm font-semibold tracking-[0.22em]">VERIS</p>
