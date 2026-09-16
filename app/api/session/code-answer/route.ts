@@ -12,6 +12,7 @@ import {
 } from "@/app/lib/calmAnswerPipeline";
 import { canSubmitCodingAnswer } from "@/app/lib/calmTiming";
 import { requireCandidateSession } from "@/app/lib/candidateSession";
+import { computeAndPersistCodeSimilarity } from "@/app/lib/codeSimilarity";
 import { prisma } from "@/app/lib/prisma";
 
 export const dynamic = "force-dynamic";
@@ -356,6 +357,17 @@ export async function POST(request: Request) {
         prompt: body.prompt?.trim() || context.question_text || "Coding question",
         language,
         code,
+      });
+    });
+
+    // Independent of the AI review above — a failure here must never affect
+    // scoring/feedback, so it runs in its own after() with its own try/catch.
+    after(async () => {
+      await computeAndPersistCodeSimilarity({
+        answerId: result.record.answer_id,
+        attemptId: context.attempt_id,
+        questionId: context.question_id ?? null,
+        codeText: code,
       });
     });
 
