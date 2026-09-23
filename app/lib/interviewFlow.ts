@@ -6,6 +6,7 @@ import {
   canonicalizeTechnologyReferences,
   technologiesOverlap,
 } from "@/app/lib/skillNormalization";
+import type { RoleContextKind, RoleFamilyHint } from "@/app/lib/roleContext";
 
 export type InterviewQuestionSource = "resume" | "job" | "behavioral";
 export type InterviewPhase = "warmup" | "core" | "probe" | "closing";
@@ -818,6 +819,26 @@ export function selectNextCoreQuestion(params: {
   })[0];
 }
 
+/**
+ * Everyday work situation for each role family, used to ground role-neutral
+ * filler questions. Deliberately short and generic: the skill/responsibility
+ * anchor carries the role-specific subject matter.
+ */
+const ROLE_FAMILY_SITUATION: Record<RoleFamilyHint, string> = {
+  technical: "a system or piece of work you owned",
+  sales: "a customer or a deal",
+  marketing: "a campaign or initiative",
+  people: "an employee or team situation",
+  education: "a class or group of learners",
+  finance: "a budget, report or financial decision",
+  healthcare: "a patient or care situation",
+  customer: "a customer relationship",
+  operations: "a process, schedule or deadline",
+  product: "a product decision",
+  leadership: "your team or organisation",
+  general: "your day-to-day work",
+};
+
 export function buildFallbackCoreQuestion(params: {
   sourceType: InterviewQuestionSource;
   skillName?: string | null;
@@ -825,6 +846,14 @@ export function buildFallbackCoreQuestion(params: {
   roleTitle?: string | null;
   phase?: InterviewPhase;
   variantSeed?: string | number | null;
+  /**
+   * Technical wording ("failing in production", "what broke") is used ONLY
+   * when this is explicitly "technical". Anything else - including a missing
+   * value - gets role-neutral wording, so a filler question can never assume
+   * a non-technical candidate is technical.
+   */
+  roleContext?: RoleContextKind | null;
+  roleFamily?: RoleFamilyHint | null;
 }) {
   const skillContext =
     normalizeText(params.skillName) ||
@@ -835,6 +864,15 @@ export function buildFallbackCoreQuestion(params: {
 
   if (params.phase === "closing") {
     return `Before we wrap up, what is one recent decision you made while working on ${skillContext}, and why did it matter?`;
+  }
+
+  if (params.roleContext !== "technical") {
+    return buildRoleNeutralFallbackCoreQuestion({
+      sourceType: params.sourceType,
+      skillContext,
+      situation: ROLE_FAMILY_SITUATION[params.roleFamily ?? "general"] ?? ROLE_FAMILY_SITUATION.general,
+      templateSeed,
+    });
   }
 
   switch (params.sourceType) {
@@ -863,6 +901,46 @@ export function buildFallbackCoreQuestion(params: {
         `Walk me through the steps you would take to execute ${skillContext} reliably in production.`,
       ];
       return templates[stableTemplateIndex(templateSeed, templates.length)];
+    }
+  }
+}
+
+function buildRoleNeutralFallbackCoreQuestion(params: {
+  sourceType: InterviewQuestionSource;
+  skillContext: string;
+  situation: string;
+  templateSeed: string;
+}) {
+  const { skillContext, situation } = params;
+
+  switch (params.sourceType) {
+    case "resume": {
+      const templates = [
+        `What is the most challenging piece of work involving ${skillContext} you have handled, and what was the outcome?`,
+        `When you worked on ${skillContext}, what concrete result were you accountable for and how did you deliver it?`,
+        `Tell me about a time something involving ${skillContext} did not go to plan. What did you change, and what improved?`,
+      ];
+      return templates[stableTemplateIndex(params.templateSeed, templates.length)];
+    }
+    case "behavioral": {
+      // Unchanged from the original behavioural templates, which were already
+      // role-neutral.
+      const templates = [
+        `When work around ${skillContext} started going off track, how did you regain control and align the team?`,
+        `Think of a time you had conflicting priorities around ${skillContext}. How did you decide what to protect first?`,
+        `When stakeholders pushed for speed on ${skillContext}, how did you defend quality or risk controls?`,
+      ];
+      return templates[stableTemplateIndex(params.templateSeed, templates.length)];
+    }
+    case "job":
+    default: {
+      const templates = [
+        `Tell me about a time ${skillContext} became difficult while handling ${situation}. How did you approach it?`,
+        `If you had to improve how ${skillContext} is handled, what would you look at first, and why?`,
+        `How can you tell when ${skillContext} is not going well, and what do you do next?`,
+        `Walk me through how you handle ${skillContext} when priorities or deadlines change suddenly.`,
+      ];
+      return templates[stableTemplateIndex(params.templateSeed, templates.length)];
     }
   }
 }

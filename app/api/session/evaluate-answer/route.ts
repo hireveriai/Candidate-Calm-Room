@@ -1,17 +1,13 @@
 import { prisma } from "@/app/lib/prisma";
 import { requireCandidateSession } from "@/app/lib/candidateSession";
 import { assertUuid, logInterviewEvent } from "@/app/lib/interviewReliability";
-import {
-  classifyInterviewQuestion,
-  InterviewQuestionType,
-  normalizeInterviewQuestionType,
-} from "@/app/lib/interviewQuestionTypes";
+import { InterviewQuestionType } from "@/app/lib/interviewQuestionTypes";
 import { isInvalidCandidateTranscript } from "@/app/lib/transcriptGuards";
 import {
   clamp01,
-  deriveSkillType,
   evaluateAnswerWithAi,
   normalizeText,
+  resolveAnswerEvaluationPlan,
   type BehaviorSignal,
   type EvaluationResult,
   type FocusMetrics,
@@ -37,9 +33,18 @@ type QuestionContextRow = {
   skill_id: string | null;
   skill_name: string | null;
   job_title: string | null;
+  job_description?: string | null;
+  core_skills?: string[] | null;
   question_type: string | null;
   question_kind: string | null;
+  evaluation_criteria?: string | null;
+  competency_label?: string | null;
 };
+
+function isMissingInterviewQuestionLinkColumn(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return /interview_question_id/.test(message) && /does not exist/.test(message);
+}
 
 function hasMissingRecordEvaluationFunction(error: unknown) {
   return (
@@ -167,7 +172,17 @@ export async function POST(request: Request) {
     assertUuid(answerId, "answerId");
     assertUuid(sessionQuestionId, "sessionQuestionId");
 
-    const contextRows = await prisma.$queryRaw<QuestionContextRow[]>`
+    // The planned question behind this answer. Questions snapshotted from a
+    // job questionnaire have no question_id (public.questions is unused), so
+    // matching on question_id alone never found them and scoring ran without
+    // the question's source, type or stored evaluation criteria. The asked
+    // session question records interview_question_id; that is the reliable
+    // link. question_id is kept as a fallback for older interviews, and exact
+    // text within the same interview for rows asked before the link existed.
+    let contextRows: QuestionContextRow[];
+
+    try {
+      contextRows = await prisma.$queryRaw<QuestionContextRow[]>`
       select
         ia.answer_id,
         ia.attempt_id,
@@ -176,8 +191,74 @@ export async function POST(request: Request) {
         coalesce(iq.target_skill_id, qsm.skill_id) as skill_id,
         sm.skill_name,
         jp.job_title,
+        jp.job_description,
+        jp.core_skills,
         coalesce(iq.question_type, sq.question_kind) as question_type,
-        sq.question_kind
+        sq.question_kind,
+        iq.reference_context->>'evaluation_criteria' as evaluation_criteria,
+        iq.reference_context->>'anchor' as competency_label
+      from public.interview_answers ia
+      join public.session_questions sq
+        on sq.session_question_id = ia.session_question_id
+      join public.interview_attempts iat
+        on iat.attempt_id = ia.attempt_id
+      left join public.interviews i
+        on i.interview_id = iat.interview_id
+      left join public.job_positions jp
+        on jp.job_id = i.job_id
+      left join lateral (
+        select candidate_iq.*
+        from public.interview_questions candidate_iq
+        where candidate_iq.interview_id = iat.interview_id
+          and (
+            candidate_iq.interview_question_id = sq.interview_question_id
+            or (ia.question_id is not null and candidate_iq.question_id = ia.question_id)
+            or (
+              sq.interview_question_id is null
+              and ia.question_id is null
+              and sq.question_kind = 'core'
+              and lower(btrim(candidate_iq.question_text)) = lower(btrim(sq.content))
+            )
+          )
+        order by
+          case
+            when candidate_iq.interview_question_id = sq.interview_question_id then 0
+            when candidate_iq.question_id = ia.question_id then 1
+            else 2
+          end,
+          candidate_iq.question_order
+        limit 1
+      ) iq on true
+      left join public.question_skill_map qsm
+        on qsm.question_id = ia.question_id
+      left join public.skill_master sm
+        on sm.skill_id = coalesce(iq.target_skill_id, qsm.skill_id)
+      where ia.answer_id = ${answerId}::uuid
+        and ia.session_question_id = ${sessionQuestionId}::uuid
+      limit 1
+    `;
+    } catch (linkedQueryError) {
+      // Environments without session_questions.interview_question_id keep the
+      // previous query rather than failing evaluation outright.
+      if (!isMissingInterviewQuestionLinkColumn(linkedQueryError)) {
+        throw linkedQueryError;
+      }
+
+      contextRows = await prisma.$queryRaw<QuestionContextRow[]>`
+      select
+        ia.answer_id,
+        ia.attempt_id,
+        sq.content as question_text,
+        iq.source_type,
+        coalesce(iq.target_skill_id, qsm.skill_id) as skill_id,
+        sm.skill_name,
+        jp.job_title,
+        jp.job_description,
+        jp.core_skills,
+        coalesce(iq.question_type, sq.question_kind) as question_type,
+        sq.question_kind,
+        iq.reference_context->>'evaluation_criteria' as evaluation_criteria,
+        iq.reference_context->>'anchor' as competency_label
       from public.interview_answers ia
       join public.session_questions sq
         on sq.session_question_id = ia.session_question_id
@@ -198,6 +279,7 @@ export async function POST(request: Request) {
         and ia.session_question_id = ${sessionQuestionId}::uuid
       limit 1
     `;
+    }
 
     const context = contextRows[0];
 
@@ -226,19 +308,19 @@ export async function POST(request: Request) {
       });
     }
 
-    const resolvedQuestionType = normalizeInterviewQuestionType(
-      context.question_type,
-      classifyInterviewQuestion(
-        context.question_text ?? "",
-        context.job_title ?? undefined,
-        context.skill_name ? [context.skill_name] : []
-      ).questionType
-    );
-    const skillType = deriveSkillType(
-      context.source_type,
-      context.skill_name,
-      resolvedQuestionType
-    );
+    const evaluationPlan = resolveAnswerEvaluationPlan({
+      storedQuestionType: context.question_type,
+      questionText: context.question_text,
+      sourceType: context.source_type,
+      skillName: context.skill_name,
+      jobTitle: context.job_title,
+      jobDescription: context.job_description,
+      coreSkills: context.core_skills,
+      evaluationCriteria: context.evaluation_criteria,
+      competencyLabel: context.competency_label,
+    });
+    const resolvedQuestionType = evaluationPlan.questionType;
+    const skillType = evaluationPlan.skillType;
     const normalizedTranscript = normalizeText(transcript);
     const normalizedRawTranscript = normalizeText(rawTranscript);
 
@@ -265,6 +347,10 @@ export async function POST(request: Request) {
         focusMetrics,
         behaviorSignals,
         questionType: resolvedQuestionType,
+        questionTypeLabel: evaluationPlan.questionTypeLabel,
+        evaluationRubric: evaluationPlan.rubric,
+        evaluationCriteria: evaluationPlan.evaluationCriteria,
+        competency: evaluationPlan.competency,
       }).catch((error) => {
         console.error("Spoken answer AI evaluation error:", error);
         return null;
@@ -298,6 +384,13 @@ export async function POST(request: Request) {
           behavior_fraud_adjustment: behaviorFraudAdjustment,
           behavior_signals: behaviorSignals,
           focus_metrics: focusMetrics ?? null,
+        },
+        rubric_context: {
+          role_context: evaluationPlan.roleContext.kind,
+          role_family: evaluationPlan.roleContext.family,
+          question_type: evaluationPlan.questionTypeLabel,
+          rubric_source: evaluationPlan.rubricSource,
+          evaluation_criteria_used: Boolean(evaluationPlan.evaluationCriteria),
         },
       },
     };

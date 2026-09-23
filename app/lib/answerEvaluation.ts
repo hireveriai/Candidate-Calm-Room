@@ -1,4 +1,5 @@
 import { openAiFetch } from "@/app/lib/aiUsageLog";
+import { buildEvaluationRubric } from "@/app/lib/evaluationRubric";
 import { InterviewQuestionType } from "@/app/lib/interviewQuestionTypes";
 
 export type JsonValue =
@@ -46,54 +47,14 @@ export function normalizeText(value: string | null | undefined) {
   return value?.replace(/\s+/g, " ").trim() ?? "";
 }
 
-export function deriveSkillType(
-  sourceType: string | null | undefined,
-  skillName: string | null | undefined,
-  questionType?: string | null
-) {
-  const normalizedQuestionType = questionType;
-  if (normalizedQuestionType === InterviewQuestionType.BEHAVIORAL) {
-    return "behavioral";
-  }
-
-  if (sourceType === "behavioral") {
-    return "behavioral";
-  }
-
-  const normalizedSkill = normalizeText(skillName).toLowerCase();
-
-  if (
-    /\b(sql|database|postgres|postgresql|mysql|oracle|python|java|typescript|javascript|react|node|api|etl|performance|backup|recovery|debug|coding|programming)\b/i.test(
-      normalizedSkill
-    )
-  ) {
-    return "technical";
-  }
-
-  return "functional";
-}
-
-export function buildEvaluationRubric(questionType: InterviewQuestionType) {
-  switch (questionType) {
-    case InterviewQuestionType.CODING:
-      return "Evaluate correctness, optimization, syntax, complexity, and execution reasoning.";
-    case InterviewQuestionType.SYSTEM_DESIGN:
-      return "Evaluate scalability, tradeoffs, resilience, data flow, boundaries, and architecture maturity.";
-    case InterviewQuestionType.BEHAVIORAL:
-      return "Evaluate communication, ownership, emotional maturity, leadership, and STAR-style specificity.";
-    case InterviewQuestionType.ARCHITECTURE:
-      return "Evaluate strategic reasoning, governance, platform maturity, enterprise integration, and long-term risk handling.";
-    case InterviewQuestionType.TROUBLESHOOTING:
-      return "Evaluate debugging methodology, root-cause analysis quality, prioritization, and operational maturity.";
-    case InterviewQuestionType.MCQ:
-      return "Evaluate answer choice accuracy and whether the explanation supports the selected option.";
-    case InterviewQuestionType.CASE_STUDY:
-      return "Evaluate scenario analysis, structure, tradeoffs, stakeholder awareness, and decision quality.";
-    case InterviewQuestionType.TECHNICAL_DISCUSSION:
-    default:
-      return "Evaluate technical depth, real-world experience, terminology, architecture understanding, measurable outcomes, and clarity.";
-  }
-}
+// The rubric and skill-type logic lives in the pure evaluationRubric module so
+// it can be unit tested without Prisma; re-exported here so existing imports
+// keep working.
+export {
+  buildEvaluationRubric,
+  deriveSkillType,
+  resolveAnswerEvaluationPlan,
+} from "@/app/lib/evaluationRubric";
 
 // Shared by both the live per-answer evaluation route and the recording
 // repair pipeline, so a recovered answer gets the exact same real AI
@@ -109,6 +70,15 @@ export async function evaluateAnswerWithAi(input: {
   focusMetrics: FocusMetrics | null | undefined;
   behaviorSignals: BehaviorSignal[];
   questionType: InterviewQuestionType;
+  /**
+   * Role-aware rubric and label from resolveAnswerEvaluationPlan. When absent
+   * the question-type rubric is used, which is the previous behaviour.
+   */
+  evaluationRubric?: string | null;
+  questionTypeLabel?: string | null;
+  /** The question's own stored evaluation criteria, when it has any. */
+  evaluationCriteria?: string | null;
+  competency?: string | null;
 }) {
   if (!process.env.OPENAI_API_KEY) {
     return null;
@@ -141,7 +111,9 @@ export async function evaluateAnswerWithAi(input: {
             "Grammar may reduce clarity only when repeated candidate-origin sentence-structure problems remain after normalizing obvious transcription artifacts and materially obscure the intended meaning.",
             "Do not claim a grammar problem from one phrase. Require a recurring pattern within the answer and identify how it affected comprehension in the reasoning.",
             "Clarity should reflect whether the candidate's intended reasoning and sequence can be understood after mentally normalizing obvious transcription artifacts.",
-            "Depth should reflect specificity, technical or functional detail, and authenticity.",
+            "Depth should reflect specificity, role-relevant detail (technical or functional, as the role requires), and authenticity.",
+            "Judge the answer by the standards of the job_role. Do not expect software, engineering or other technical detail unless the job role or the question itself calls for it.",
+            "When question_evaluation_criteria is provided, treat it as the primary description of a strong answer and use evaluation_rubric as secondary guidance.",
             "Confidence should reflect decisiveness, coherence, and delivery confidence, not arrogance.",
             "Call an answer vague only when it lacks concrete steps, decisions, examples, tools, or outcomes relevant to the question.",
             "Integrity risk must be based only on explicit contradictions or implausible content in the answer. Never infer it from grammar, accent, fluency, transcription quality, gaze, or delivery style.",
@@ -158,8 +130,12 @@ export async function evaluateAnswerWithAi(input: {
               job_role: input.jobRole ?? "",
               skill: input.skillName ?? "",
               skill_type: input.skillType,
-              question_type: input.questionType,
-              evaluation_rubric: buildEvaluationRubric(input.questionType),
+              question_type: input.questionTypeLabel || input.questionType,
+              evaluation_rubric: input.evaluationRubric || buildEvaluationRubric(input.questionType),
+              ...(input.evaluationCriteria
+                ? { question_evaluation_criteria: input.evaluationCriteria }
+                : {}),
+              ...(input.competency ? { competency: input.competency } : {}),
               question: input.questionText ?? "",
               transcript: input.transcript,
               raw_transcript: input.rawTranscript ?? "",

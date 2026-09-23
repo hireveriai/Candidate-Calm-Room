@@ -21,12 +21,8 @@ import {
   prioritizeRecordingCandidates,
 } from "@/app/lib/recordingRepairPolicy";
 import {
-  classifyInterviewQuestion,
-  normalizeInterviewQuestionType,
-} from "@/app/lib/interviewQuestionTypes";
-import {
-  deriveSkillType,
   evaluateAnswerWithAi,
+  resolveAnswerEvaluationPlan,
 } from "@/app/lib/answerEvaluation";
 
 type RepairQuestionRow = {
@@ -42,7 +38,11 @@ type RepairQuestionRow = {
   source_type?: string | null;
   skill_name?: string | null;
   job_title?: string | null;
+  job_description?: string | null;
+  core_skills?: string[] | null;
   question_type?: string | null;
+  evaluation_criteria?: string | null;
+  competency_label?: string | null;
 };
 
 type RepairRecordingRow = {
@@ -259,7 +259,11 @@ async function fetchRepairQuestions(attemptId: string) {
       iq.source_type,
       sm.skill_name,
       jp.job_title,
-      coalesce(iq.question_type, sq.question_kind) as question_type
+      jp.job_description,
+      jp.core_skills,
+      coalesce(iq.question_type, sq.question_kind) as question_type,
+      iq.reference_context->>'evaluation_criteria' as evaluation_criteria,
+      iq.reference_context->>'anchor' as competency_label
     from public.interview_answers ans
     left join public.session_questions sq
       on sq.session_question_id = ans.session_question_id
@@ -270,7 +274,10 @@ async function fetchRepairQuestions(attemptId: string) {
     left join public.interview_questions iq
       on iq.interview_id = att.interview_id
       and (
-        iq.interview_question_id = ans.question_id
+        -- Snapshotted questionnaire questions have no question_id; the asked
+        -- session question carries the stable interview_question_id link.
+        iq.interview_question_id = sq.interview_question_id
+        or iq.interview_question_id = ans.question_id
         or iq.question_id = ans.question_id
         or iq.interview_question_id = ans.session_question_id
         or iq.question_id = sq.question_id
@@ -1063,30 +1070,33 @@ function buildHeuristicRecoveredEvaluation(answer: string) {
 // with a placeholder message describing the recovery mechanism.
 async function evaluateRecoveredAnswer(question: RepairQuestionRow, answer: string) {
   try {
-    const resolvedQuestionType = normalizeInterviewQuestionType(
-      question.question_type,
-      classifyInterviewQuestion(
-        question.question ?? "",
-        question.job_title ?? undefined,
-        question.skill_name ? [question.skill_name] : []
-      ).questionType
-    );
-    const skillType = deriveSkillType(
-      question.source_type,
-      question.skill_name,
-      resolvedQuestionType
-    );
+    // Same role-aware plan as the live evaluate-answer route.
+    const evaluationPlan = resolveAnswerEvaluationPlan({
+      storedQuestionType: question.question_type,
+      questionText: question.question,
+      sourceType: question.source_type,
+      skillName: question.skill_name,
+      jobTitle: question.job_title,
+      jobDescription: question.job_description,
+      coreSkills: question.core_skills,
+      evaluationCriteria: question.evaluation_criteria,
+      competencyLabel: question.competency_label,
+    });
 
     const aiEvaluation = await evaluateAnswerWithAi({
       jobRole: question.job_title ?? null,
       skillName: question.skill_name ?? null,
-      skillType,
+      skillType: evaluationPlan.skillType,
       questionText: question.question,
       transcript: answer,
       rawTranscript: null,
       focusMetrics: null,
       behaviorSignals: [],
-      questionType: resolvedQuestionType,
+      questionType: evaluationPlan.questionType,
+      questionTypeLabel: evaluationPlan.questionTypeLabel,
+      evaluationRubric: evaluationPlan.rubric,
+      evaluationCriteria: evaluationPlan.evaluationCriteria,
+      competency: evaluationPlan.competency,
     });
 
     if (aiEvaluation) {
@@ -1105,6 +1115,13 @@ async function evaluateRecoveredAnswer(question: RepairQuestionRow, answer: stri
             ? aiEvaluation.evaluation_json
             : {}),
           mode: "recording_auto_repair_ai",
+          rubric_context: {
+            role_context: evaluationPlan.roleContext.kind,
+            role_family: evaluationPlan.roleContext.family,
+            question_type: evaluationPlan.questionTypeLabel,
+            rubric_source: evaluationPlan.rubricSource,
+            evaluation_criteria_used: Boolean(evaluationPlan.evaluationCriteria),
+          },
         },
       };
     }

@@ -19,6 +19,7 @@ import {
   syncWarRoomActionsToCalm,
 } from "@/app/lib/warRoomSync";
 import { buildDeterministicInterviewBudget } from "@/app/lib/interviewBudget";
+import { resolveRoleContext, type RoleContextKind } from "@/app/lib/roleContext";
 import {
   buildAskedQuestionState,
   buildFallbackCoreQuestion,
@@ -807,9 +808,17 @@ function normalizeIntent(value: unknown): FollowUpIntent {
 function deriveSkillType(params: {
   sourceType: string | null | undefined;
   skillName: string | null | undefined;
+  roleContext?: RoleContextKind | null;
 }) {
   if (params.sourceType === "behavioral") {
     return "behavioral" as const;
+  }
+
+  // A non-technical role never gets technical follow-ups ("debug ... during a
+  // live production incident"), even when a skill name such as "performance
+  // management" or "backup planning" matches the technical keyword list.
+  if (params.roleContext === "non_technical") {
+    return "functional" as const;
   }
 
   const skillName = normalizeText(params.skillName).toLowerCase();
@@ -1146,6 +1155,11 @@ export async function POST(request: Request) {
       experienceLevel: attempt.experience_level,
     });
     const totalLimit = blueprint.totalQuestions;
+    const roleContext = resolveRoleContext({
+      jobTitle: attempt.job_title,
+      jobDescription: attempt.job_description,
+      coreSkills: attempt.core_skills,
+    });
     const askedTotal = askedQuestions.length;
     const coreAskedTotal = askedQuestions.filter(
       (question: AskedQuestionRow) => question.question_kind === "core"
@@ -1548,6 +1562,7 @@ export async function POST(request: Request) {
       const followUpSkillType = deriveSkillType({
         sourceType: latestPlannedQuestion?.source_type ?? nextCore?.sourceType,
         skillName: followUpSkillBeingTested,
+        roleContext: roleContext.kind,
       });
 
       // A recruiter's "Probe Deeper" click in the war room takes priority
@@ -1757,6 +1772,8 @@ export async function POST(request: Request) {
           roleTitle: attempt.job_title,
           phase: completion.lowTime ? "closing" : phase,
           variantSeed: askedTotal + 1,
+          roleContext: roleContext.kind,
+          roleFamily: roleContext.family,
         });
         const fallbackQuestionKey = normalizeQuestionKey(fallbackQuestion);
 
