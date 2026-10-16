@@ -1,18 +1,9 @@
+import { isAuthorizedCronRequest } from "@/app/lib/cronAuth";
 import { runInterviewWatchdog } from "@/app/lib/interviewWatchdog";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 export const maxDuration = 300;
-
-function isAuthorizedCronRequest(request: Request) {
-  const cronSecret = process.env.CRON_SECRET;
-
-  if (!cronSecret) {
-    return true;
-  }
-
-  return request.headers.get("authorization") === `Bearer ${cronSecret}`;
-}
 
 async function executeWatchdog() {
   try {
@@ -39,6 +30,10 @@ export async function GET(request: Request) {
   return executeWatchdog();
 }
 
-export async function POST() {
+export async function POST(request: Request) {
+  if (!isAuthorizedCronRequest(request)) {
+    return new Response("Unauthorized", { status: 401 });
+  }
+
   return executeWatchdog();
 }
