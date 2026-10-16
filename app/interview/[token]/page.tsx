@@ -52,6 +52,11 @@ import {
   RECONNECT_BACKOFF_MS,
   shouldSuppressReliabilityInterruption,
 } from "@/app/lib/interviewSessionReliability";
+import {
+  INITIAL_RECONNECT_FLAP_STATE,
+  markReconnectRecovered,
+  planReconnectEpisode,
+} from "@/app/lib/reconnectFlapPolicy";
 import { isInvalidCandidateTranscript } from "@/app/lib/transcriptGuards";
 import {
   boundBrowserTranscript,
@@ -444,6 +449,9 @@ export default function Page() {
   const pageLifecycleSignalSentRef = useRef(false);
   const reconnectPauseStartedAtRef = useRef<number | null>(null);
   const reconnectCurrentAttemptRef = useRef(0);
+  // Survives exitReconnectMode so a media connection that drops again right
+  // after each "recovery" backs off instead of looping (see reconnectFlapPolicy).
+  const reconnectFlapRef = useRef(INITIAL_RECONNECT_FLAP_STATE);
   const pausedPhaseRef = useRef<VerisState>("idle");
   const shouldResumeListeningRef = useRef(false);
   const shouldResumeAudioAnalysisRef = useRef(false);
@@ -1175,6 +1183,7 @@ export default function Page() {
     reconnectModeRef.current = false;
     reconnectInFlightRef.current = false;
     reconnectCurrentAttemptRef.current = 0;
+    reconnectFlapRef.current = markReconnectRecovered(reconnectFlapRef.current, Date.now());
     setReconnectAttempt(0);
     setReconnectCountdownMs(0);
     setReconnectReason("");
@@ -1265,21 +1274,25 @@ export default function Page() {
       setReconnectReason(
         error instanceof Error ? error.message : "Reconnection attempt failed"
       );
-      setReconnectCountdownMs(delay);
-
-      if (reconnectCountdownIntervalRef.current !== null) {
-        window.clearInterval(reconnectCountdownIntervalRef.current);
-      }
-
-      reconnectCountdownIntervalRef.current = window.setInterval(() => {
-        setReconnectCountdownMs((current) => Math.max(0, current - 1000));
-      }, 1000);
-
-      reconnectTimeoutHandleRef.current = window.setTimeout(() => {
-        reconnectInFlightRef.current = false;
-        void performReconnectAttempt(attemptNumber + 1);
-      }, delay);
+      scheduleReconnectAttempt(attemptNumber + 1, delay);
     }
+  };
+
+  const scheduleReconnectAttempt = (attemptNumber: number, delay: number) => {
+    setReconnectCountdownMs(delay);
+
+    if (reconnectCountdownIntervalRef.current !== null) {
+      window.clearInterval(reconnectCountdownIntervalRef.current);
+    }
+
+    reconnectCountdownIntervalRef.current = window.setInterval(() => {
+      setReconnectCountdownMs((current) => Math.max(0, current - 1000));
+    }, 1000);
+
+    reconnectTimeoutHandleRef.current = window.setTimeout(() => {
+      reconnectInFlightRef.current = false;
+      void performReconnectAttempt(attemptNumber);
+    }, delay);
   };
 
   const enterReconnectMode = async (
@@ -1300,6 +1313,9 @@ export default function Page() {
       return;
     }
 
+    const episodePlan = planReconnectEpisode(reconnectFlapRef.current, Date.now());
+    reconnectFlapRef.current = episodePlan.state;
+
     // React state updates are asynchronous. The ref prevents repeated
     // LiveKit callbacks from opening thousands of concurrent reconnect flows.
     reconnectModeRef.current = true;
@@ -1314,6 +1330,7 @@ export default function Page() {
     try {
       await recordReconnectState(reason, {
         source,
+        reconnectEpisode: episodePlan.episode,
         ...metadata,
       });
     } catch {
@@ -1332,6 +1349,7 @@ export default function Page() {
         currentQuestion: currentQuestion || null,
         transcriptBuffer: transcriptRef.current.trim() || transcript.trim() || null,
         currentPhase: getCurrentPhaseFromState(verisState, showCoding),
+        reconnectEpisode: episodePlan.episode,
         ...metadata,
       },
     };
@@ -1341,6 +1359,22 @@ export default function Page() {
       clearPendingRecoveryEvent();
     } catch {
       persistPendingRecoveryEvent(eventPayload);
+    }
+
+    if (episodePlan.giveUp) {
+      setMediaRecoveryError(
+        "We could not keep a stable connection to the interview. The interview will be safely closed."
+      );
+      void terminateInterview("network_disconnect_timeout", {
+        message:
+          "Interview ended because the connection kept dropping and could not be restored.",
+      });
+      return;
+    }
+
+    if (episodePlan.delayMs > 0) {
+      scheduleReconnectAttempt(1, episodePlan.delayMs);
+      return;
     }
 
     void performReconnectAttempt(1);
@@ -3243,7 +3277,7 @@ export default function Page() {
                   });
                 }
               }}
-              onRoomConnectionChange={(state) => {
+              onRoomConnectionChange={(state, detail) => {
                 if (state === "connected") {
                   setNetworkOnline(true);
                   return;
@@ -3258,10 +3292,13 @@ export default function Page() {
 
                 if (started && !interviewFinished && !interviewInterrupted) {
                   void enterReconnectMode(
-                    "Realtime interview connection ended unexpectedly.",
-                    "livekit_disconnected",
+                    detail?.neverConnected
+                      ? "Could not connect to the interview video service."
+                      : "Realtime interview connection ended unexpectedly.",
+                    detail?.neverConnected ? "livekit_connect_failed" : "livekit_disconnected",
                     {
                       roomState: state,
+                      ...(detail ? { connectError: detail.error } : {}),
                     }
                   );
                 }

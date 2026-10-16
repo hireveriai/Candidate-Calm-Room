@@ -52,7 +52,9 @@ type Props = {
     reason?: "acquisition_failed" | "track_ended"
   ) => void;
   onRoomConnectionChange?: (
-    state: "connected" | "reconnecting" | "disconnected"
+    state: "connected" | "reconnecting" | "disconnected",
+    /** Set when the room never connected (token/config/connect failure). */
+    detail?: { neverConnected: boolean; error: string }
   ) => void;
   /**
    * An AudioContext created and resumed synchronously inside the candidate's
@@ -1045,7 +1047,10 @@ const VideoPanel = forwardRef<VideoPanelHandle, Props>(function VideoPanel(
           return;
         }
         console.error("Unable to publish LiveKit camera feed:", error);
-        onRoomConnectionChangeRef.current?.("disconnected");
+        onRoomConnectionChangeRef.current?.("disconnected", {
+          neverConnected: !hasConnectedRoomRef.current,
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
     }
 
