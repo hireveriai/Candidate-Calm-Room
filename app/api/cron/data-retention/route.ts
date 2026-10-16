@@ -1,16 +1,10 @@
+import { isAuthorizedCronRequest } from "@/app/lib/cronAuth";
 import { runDataRetention } from "@/app/lib/dataRetention";
 import { logInterviewEvent } from "@/app/lib/interviewReliability";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 export const maxDuration = 300;
-
-// Unlike purge-browser-logs, this job deletes candidate data, so it refuses to
-// run unless CRON_SECRET is configured (Vercel Cron sends it automatically).
-function isAuthorizedCronRequest(request: Request) {
-  const cronSecret = process.env.CRON_SECRET?.trim();
-  return Boolean(cronSecret) && request.headers.get("authorization") === `Bearer ${cronSecret}`;
-}
 
 export async function GET(request: Request) {
   if (!isAuthorizedCronRequest(request)) {

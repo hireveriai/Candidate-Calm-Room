@@ -1,3 +1,4 @@
+import { isAuthorizedCronRequest } from "@/app/lib/cronAuth";
 import { prisma } from "@/app/lib/prisma";
 
 export const dynamic = "force-dynamic";
@@ -5,16 +6,6 @@ export const runtime = "nodejs";
 export const maxDuration = 60;
 
 const RETENTION_DAYS = 7;
-
-function isAuthorizedCronRequest(request: Request) {
-  const cronSecret = process.env.CRON_SECRET;
-
-  if (!cronSecret) {
-    return true;
-  }
-
-  return request.headers.get("authorization") === `Bearer ${cronSecret}`;
-}
 
 export async function GET(request: Request) {
   if (!isAuthorizedCronRequest(request)) {

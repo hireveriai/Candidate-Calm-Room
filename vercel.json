@@ -7,7 +7,7 @@
   "crons": [
     {
       "path": "/api/interview/watchdog",
-      "schedule": "*/5 * * * *"
+      "schedule": "0 4 * * *"
     },
     {
       "path": "/api/cron/purge-browser-logs",
