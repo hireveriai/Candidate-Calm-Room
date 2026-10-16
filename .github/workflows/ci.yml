@@ -1,0 +1,40 @@
+name: CI
+
+# Type check, unit tests and lint on every push and pull request.
+# Tests that need a database skip themselves unless TEST_DATABASE_URL is set,
+# so this never touches production data. Lint is reported but not yet
+# blocking: some existing UI files still have lint errors to clean up.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Type check
+        run: npx tsc --noEmit -p tsconfig.json
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Lint (non-blocking)
+        continue-on-error: true
+        run: npx eslint .

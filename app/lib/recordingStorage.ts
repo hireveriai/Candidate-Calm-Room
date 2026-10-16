@@ -30,6 +30,57 @@ function encodeStoragePath(path: string) {
     .join("/");
 }
 
+export function getRecordingBucket() {
+  return process.env.RECORDING_S3_BUCKET?.trim() || requireEnv("SUPABASE_STORAGE_BUCKET");
+}
+
+/** Object path inside a bucket, from a bare path or a Supabase storage URL. */
+export function toStorageObjectPath(value: string | null | undefined) {
+  const raw = value?.trim() ?? "";
+  if (!raw) {
+    return null;
+  }
+
+  const match = raw.match(/\/object\/(?:public|sign|authenticated)\/[^/]+\/([^?]+)/);
+  const path = decodeURIComponent(match?.[1] ?? raw).replace(/^\/+/, "");
+
+  return /^https?:\/\//i.test(path) ? null : path || null;
+}
+
+/**
+ * Deletes objects with the Supabase Storage bulk-remove endpoint. Missing
+ * objects are not an error, so a retried purge is a no-op.
+ */
+export async function deleteStorageObjects(bucket: string, paths: string[]) {
+  const unique = [...new Set(paths.filter(Boolean))];
+  if (unique.length === 0) {
+    return 0;
+  }
+
+  const supabaseUrl = requireEnv("NEXT_PUBLIC_SUPABASE_URL").replace(/\/+$/, "");
+  const serviceRoleKey = requireEnv("SUPABASE_SERVICE_ROLE_KEY");
+  const response = await fetch(
+    `${supabaseUrl}/storage/v1/object/${encodeURIComponent(bucket)}`,
+    {
+      method: "DELETE",
+      headers: {
+        Authorization: `Bearer ${serviceRoleKey}`,
+        apikey: serviceRoleKey,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ prefixes: unique }),
+      cache: "no-store",
+    },
+  );
+
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { message?: string; error?: string } | null;
+    throw new Error(payload?.message ?? payload?.error ?? `Storage delete failed (${response.status})`);
+  }
+
+  return unique.length;
+}
+
 export async function createRecordingSignedUrl(filePath: string) {
   const supabaseUrl = requireEnv("NEXT_PUBLIC_SUPABASE_URL").replace(/\/+$/, "");
   const serviceRoleKey = requireEnv("SUPABASE_SERVICE_ROLE_KEY");
