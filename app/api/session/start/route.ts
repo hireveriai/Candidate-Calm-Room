@@ -10,6 +10,7 @@ import {
 import { shouldSanitizeReusedEmptyAttempt } from "@/app/lib/sessionStartPolicy";
 import { startRecoveryAttemptFromToken } from "@/app/lib/interviewRecovery";
 import { isAmbiguousDatabaseColumnError } from "@/app/lib/sessionStartDatabaseError";
+import { INTERVIEW_CONSENT_VERSION } from "@/app/lib/interviewConsent";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -189,6 +190,22 @@ async function getInviteAccessType(token: string) {
 
     throw error;
   }
+}
+
+// The candidate must have accepted the current consent text for this interview
+// (recorded by /api/interview/consent) before any attempt is created.
+async function hasCurrentInterviewConsent(token: string) {
+  const rows = await prisma.$queryRaw<Array<{ consent_id: string }>>`
+    select c.consent_id::text
+    from public.interview_invites ii
+    join public.interview_consents c
+      on c.interview_id = ii.interview_id
+     and c.consent_version = ${INTERVIEW_CONSENT_VERSION}
+    where ii.token = ${token}::text
+    limit 1
+  `;
+
+  return Boolean(rows[0]);
 }
 
 async function recoverLatestAttemptFromToken(token: string) {
@@ -432,6 +449,17 @@ export async function POST(request: Request) {
 
     if (!token) {
       return Response.json({ error: "token is required" }, { status: 400 });
+    }
+
+    if (!(await hasCurrentInterviewConsent(token))) {
+      return Response.json(
+        {
+          error: "Please review and accept the interview consent to continue.",
+          code: "CONSENT_REQUIRED",
+          consentVersion: INTERVIEW_CONSENT_VERSION,
+        },
+        { status: 403 }
+      );
     }
 
     let attempt: SessionStartRow | undefined;

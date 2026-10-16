@@ -11,6 +11,10 @@ import {
 } from "lucide-react";
 import IdentityVerificationModal from "./IdentityVerificationModal";
 import type { IdentityVerificationSummary } from "@/app/lib/identity-verification/types";
+import {
+  INTERVIEW_CONSENT_POINTS,
+  INTERVIEW_CONSENT_VERSION,
+} from "@/app/lib/interviewConsent";
 
 type Props = {
   token: string;
@@ -64,11 +68,27 @@ export default function InterviewEntryGate({ token, onReadyForPrecheck }: Props)
   const [country, setCountry] = useState("");
   const [verification, setVerification] =
     useState<IdentityVerificationSummary | null>(null);
+  const [consented, setConsented] = useState(false);
 
   async function start() {
+    if (!consented) {
+      setError("Please read and accept the interview consent to continue.");
+      return;
+    }
+
     setLoading(true);
     setError("");
     try {
+      const consentResponse = await fetch("/api/interview/consent", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, consentVersion: INTERVIEW_CONSENT_VERSION }),
+      });
+      if (!consentResponse.ok) {
+        const consentPayload = (await consentResponse.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(consentPayload?.error || "Unable to record your consent. Please try again.");
+      }
+
       const response = await fetch(
         `/api/identity-verification/context?token=${encodeURIComponent(token)}`,
         { cache: "no-store" }
@@ -155,10 +175,31 @@ export default function InterviewEntryGate({ token, onReadyForPrecheck }: Props)
             ))}
           </div>
 
+          <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50/80 p-4 text-left">
+            <p className="text-sm font-semibold text-slate-900">Before you begin</p>
+            <ul className="mt-2 list-disc space-y-1 pl-5 text-[13px] leading-5 text-slate-600">
+              {INTERVIEW_CONSENT_POINTS.map((point) => (
+                <li key={point}>{point}</li>
+              ))}
+            </ul>
+            <label className="mt-3 flex cursor-pointer items-start gap-3 text-sm text-slate-800">
+              <input
+                type="checkbox"
+                className="mt-0.5 h-4 w-4 shrink-0 accent-sky-600"
+                checked={consented}
+                onChange={(event) => {
+                  setConsented(event.target.checked);
+                  if (event.target.checked) setError("");
+                }}
+              />
+              <span>I have read the above and consent to this interview being recorded and evaluated.</span>
+            </label>
+          </div>
+
           <div className="mt-6 flex flex-col items-center">
             <button
               onClick={start}
-              disabled={loading || !token}
+              disabled={loading || !token || !consented}
               className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-sky-600 to-teal-600 px-7 py-3 text-sm font-semibold text-white shadow-[0_16px_34px_-18px_rgba(2,132,199,0.95)] transition hover:from-sky-700 hover:to-teal-700 disabled:cursor-not-allowed disabled:opacity-45 sm:w-auto sm:text-base"
             >
               {loading ? (
