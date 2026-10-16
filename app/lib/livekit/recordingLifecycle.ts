@@ -268,5 +268,21 @@ export async function finalizeActiveRecordings(attemptId: string) {
     ...row,
   })));
 
+  // A browser segment whose upload never finished (tab closed, network lost)
+  // has no egress to stop and no storage object to recover, so it used to stay
+  // 'recording' forever. complete-upload still flips it to 'completed' if a
+  // late upload lands, so this cannot discard a recording that exists.
+  await prisma.$executeRaw`
+    update public.interview_recordings
+    set status = 'failed',
+        failure_reason = coalesce(failure_reason, 'Browser recording upload was not completed'),
+        ended_at = coalesce(ended_at, timezone('utc', now()))
+    where attempt_id = ${attemptId}::uuid
+      and status = 'recording'
+      and egress_id is null
+  `.catch((error: unknown) => {
+    console.error("Unable to close unfinished browser recording segments", { attemptId, error });
+  });
+
   return results;
 }
