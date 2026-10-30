@@ -382,7 +382,7 @@ model identity_users {
   primary_email  String?
   primary_phone  String?
   is_verified    Boolean?       @default(false)
-  auth_sessions  auth_sessions?
+  auth_sessions  auth_sessions[]
   users          users?
 }
 
