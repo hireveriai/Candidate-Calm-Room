@@ -46,7 +46,15 @@ type SpeechRecognitionWindow = Window &
 let recognition: VerisSpeechRecognition | null = null;
 let stopRequested = false;
 
-type VerisAudioSink = (bytes: ArrayBuffer) => Promise<void>;
+// Called once, the moment audio actually starts coming out of the speakers,
+// with the clip's length. The on-screen question uses it to reveal words in
+// step with the voice instead of from when the TTS request was sent.
+export type VerisPlaybackStartHandler = (durationMs: number) => void;
+
+type VerisAudioSink = (
+  bytes: ArrayBuffer,
+  onPlaybackStart?: VerisPlaybackStartHandler
+) => Promise<void>;
 
 // Lets page.tsx inject a "play this into the recorded/published mix" callback
 // (backed by VideoPanel's Web Audio mixer) without this module ever knowing
@@ -98,7 +106,10 @@ async function fetchVerisSpeechBytes(
   return response.arrayBuffer();
 }
 
-function playViaFallbackAudioElement(bytes: ArrayBuffer): Promise<void> {
+function playViaFallbackAudioElement(
+  bytes: ArrayBuffer,
+  onPlaybackStart?: VerisPlaybackStartHandler
+): Promise<void> {
   return new Promise((resolve, reject) => {
     fallbackAudioEl ??= new Audio();
     const el = fallbackAudioEl;
@@ -107,7 +118,12 @@ function playViaFallbackAudioElement(bytes: ArrayBuffer): Promise<void> {
     const cleanup = () => {
       el.removeEventListener("ended", onEnded);
       el.removeEventListener("error", onError);
+      el.removeEventListener("playing", onPlaying);
       URL.revokeObjectURL(blobUrl);
+    };
+    const onPlaying = () => {
+      el.removeEventListener("playing", onPlaying);
+      onPlaybackStart?.(Number.isFinite(el.duration) ? el.duration * 1000 : 0);
     };
     const onEnded = () => {
       cleanup();
@@ -120,6 +136,7 @@ function playViaFallbackAudioElement(bytes: ArrayBuffer): Promise<void> {
 
     el.addEventListener("ended", onEnded);
     el.addEventListener("error", onError);
+    el.addEventListener("playing", onPlaying);
     el.src = blobUrl;
     el.play().catch((error) => {
       cleanup();
@@ -153,7 +170,10 @@ const TTS_FETCH_TIMEOUT_MS = 10_000;
  * (see QuestionRenderer), so silence costs the candidate far less than a
  * second interviewer voice costs the recording.
  */
-export async function speak(text: string): Promise<void> {
+export async function speak(
+  text: string,
+  options: { onPlaybackStart?: VerisPlaybackStartHandler } = {}
+): Promise<void> {
   for (let attempt = 1; attempt <= TTS_ATTEMPTS; attempt += 1) {
     const controller = new AbortController();
     // Guards only the network request, never playback. Playback is awaited to
@@ -166,9 +186,9 @@ export async function speak(text: string): Promise<void> {
       window.clearTimeout(fetchWatchdog);
 
       if (verisAudioSink) {
-        await verisAudioSink(bytes);
+        await verisAudioSink(bytes, options.onPlaybackStart);
       } else {
-        await playViaFallbackAudioElement(bytes);
+        await playViaFallbackAudioElement(bytes, options.onPlaybackStart);
       }
 
       return;

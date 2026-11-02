@@ -8,7 +8,9 @@ import CalmLayout from "@/app/components/calm/core/CalmLayout";
 import CalmHeader from "@/app/components/calm/core/CalmHeader";
 import VideoPanel from "@/app/components/calm/core/VideoPanel";
 import type { VideoPanelHandle } from "@/app/components/calm/core/VideoPanel";
-import QuestionRenderer from "@/app/components/calm/core/QuestionRenderer";
+import QuestionRenderer, {
+  type QuestionReveal,
+} from "@/app/components/calm/core/QuestionRenderer";
 import SystemIndicators from "@/app/components/calm/core/SystemIndicators";
 import InterviewControls from "@/app/components/calm/core/InterviewControls";
 import PrecheckScreen from "@/app/components/calm/flow/PrecheckScreen";
@@ -271,6 +273,9 @@ export default function Page() {
 
   const [verisState, setVerisState] = useState<VerisState>("idle");
   const [currentQuestion, setCurrentQuestion] = useState("");
+  const [questionReveal, setQuestionReveal] = useState<QuestionReveal>({
+    mode: "full",
+  });
   const [sessionQuestionId, setSessionQuestionId] = useState("");
   const [questionId, setQuestionId] = useState("");
   const [transcript, setTranscript] = useState("");
@@ -1528,11 +1533,11 @@ export default function Page() {
   // VideoPanel's recording mixer, without verisVoice.ts needing to know
   // about React refs or LiveKit.
   useEffect(() => {
-    registerVerisAudioSink(async (bytes) => {
+    registerVerisAudioSink(async (bytes, onPlaybackStart) => {
       if (!videoPanelRef.current) {
         throw new Error("VideoPanel is not mounted yet");
       }
-      await videoPanelRef.current.playVerisAudio(bytes);
+      await videoPanelRef.current.playVerisAudio(bytes, onPlaybackStart);
     });
 
     return () => registerVerisAudioSink(null);
@@ -1893,9 +1898,24 @@ export default function Page() {
     resetInactivityTimeout();
 
     setVerisState("speaking");
+    // Reveal the question in step with VERIS's voice, so the candidate can't
+    // read ahead and start answering before the microphone is open.
+    setQuestionReveal({ mode: "pending" });
     await speak(
-      options.spokenPrefix ? `${options.spokenPrefix} ${question}` : question
+      options.spokenPrefix ? `${options.spokenPrefix} ${question}` : question,
+      {
+        onPlaybackStart: (durationMs) =>
+          setQuestionReveal({
+            mode: "speaking",
+            startedAt: performance.now(),
+            durationMs,
+            spokenPrefix: options.spokenPrefix,
+          }),
+      }
     );
+    // speak() resolves without audio when TTS fails; either way the full
+    // question must be on screen once VERIS is done.
+    setQuestionReveal({ mode: "full" });
     // Do not run speech recognition while VERIS is speaking. Otherwise Chrome
     // can transcribe the synthesized question as the candidate's answer.
     if (shouldCaptureSpokenAnswer) {
@@ -3339,7 +3359,7 @@ export default function Page() {
                 </p>
                 <p className="mt-1 text-xs leading-5 text-slate-500">
                   {verisState === "listening"
-                    ? "Take your time and answer naturally."
+                    ? "Your turn. Take your time and answer naturally."
                     : "Please listen carefully to the full question."}
                 </p>
               </div>
@@ -3349,6 +3369,7 @@ export default function Page() {
               <QuestionRenderer
                 question={currentQuestion}
                 questionType={currentQuestionType}
+                reveal={questionReveal}
               />
 
               <div className="mt-6 rounded-lg border border-white/[0.06] bg-black/10 px-3.5 py-3">
@@ -3359,7 +3380,11 @@ export default function Page() {
               </div>
 
               <InterviewControls
-                disabled={isTransitioning || isReconnecting}
+                disabled={
+                  isTransitioning ||
+                  isReconnecting ||
+                  questionReveal.mode !== "full"
+                }
                 skipDisabled={sessionTimeEnded}
                 explainDisabled={
                   sessionTimeEnded ||
@@ -3377,7 +3402,9 @@ export default function Page() {
                     ? "Time limit reached. Saving your response and continuing..."
                     : sessionTimeEnded
                       ? "Finish your current answer"
-                      : undefined
+                      : questionReveal.mode !== "full"
+                        ? "Please wait for Veris to finish the question."
+                        : undefined
                 }
                 onNext={() => void handleAutoNext()}
                 onSkip={() => void handleAutoNext({ allowPendingTranscription: true })}

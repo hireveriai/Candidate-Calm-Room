@@ -18,7 +18,10 @@ export type VideoPanelHandle = {
    * so recordings capture VERIS's voice directly instead of relying on it
    * leaking acoustically into the candidate's microphone.
    */
-  playVerisAudio: (bytes: ArrayBuffer) => Promise<void>;
+  playVerisAudio: (
+    bytes: ArrayBuffer,
+    onPlaybackStart?: (durationMs: number) => void
+  ) => Promise<void>;
 };
 
 type RecordingSignal = {
@@ -349,7 +352,10 @@ async function uploadBrowserRecording(params: {
 // Fallback path when VERIS speaks before the recording mixer exists yet
 // (e.g. very early in the session). The candidate still hears VERIS; this
 // utterance just isn't captured in the recording.
-function playViaPlainElement(bytes: ArrayBuffer): Promise<void> {
+function playViaPlainElement(
+  bytes: ArrayBuffer,
+  onPlaybackStart?: (durationMs: number) => void
+): Promise<void> {
   const blobUrl = URL.createObjectURL(new Blob([bytes], { type: "audio/mpeg" }));
   const el = new Audio(blobUrl);
 
@@ -360,6 +366,10 @@ function playViaPlainElement(bytes: ArrayBuffer): Promise<void> {
     };
     el.onended = cleanup;
     el.onerror = cleanup;
+    el.onplaying = () => {
+      el.onplaying = null;
+      onPlaybackStart?.(Number.isFinite(el.duration) ? el.duration * 1000 : 0);
+    };
     el.play().catch((error) => {
       console.warn("Plain VERIS audio playback failed.", error);
       cleanup();
@@ -416,11 +426,14 @@ const VideoPanel = forwardRef<VideoPanelHandle, Props>(function VideoPanel(
   const serverRecordingStartedRef = useRef(false);
 
   const playVerisAudio = useCallback(
-    async (bytes: ArrayBuffer): Promise<void> => {
+    async (
+      bytes: ArrayBuffer,
+      onPlaybackStart?: (durationMs: number) => void
+    ): Promise<void> => {
       const ctx = audioContextRef.current ?? sharedAudioContext ?? null;
 
       if (!ctx) {
-        await playViaPlainElement(bytes);
+        await playViaPlainElement(bytes, onPlaybackStart);
         return;
       }
 
@@ -441,7 +454,7 @@ const VideoPanel = forwardRef<VideoPanelHandle, Props>(function VideoPanel(
           "Unable to decode VERIS audio; falling back to plain playback.",
           error
         );
-        await playViaPlainElement(bytes);
+        await playViaPlainElement(bytes, onPlaybackStart);
         return;
       }
 
@@ -461,6 +474,7 @@ const VideoPanel = forwardRef<VideoPanelHandle, Props>(function VideoPanel(
         source.onended = () => resolve();
         try {
           source.start();
+          onPlaybackStart?.(audioBuffer.duration * 1000);
         } catch (error) {
           console.warn("Unable to start VERIS audio playback.", error);
           resolve();
